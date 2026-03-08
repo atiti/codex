@@ -1077,6 +1077,7 @@ fn interactive_into_remote_exec_cli(interactive: TuiCli) -> ExecCli {
         progress_cursor: false,
         json: false,
         remote_control: true,
+        register_remote_session: false,
         last_message_file: None,
         prompt: interactive.prompt,
     };

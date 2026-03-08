@@ -907,22 +907,25 @@ fn run_attach_command(session_id: &str) -> anyhow::Result<()> {
 
     #[cfg(unix)]
     {
-        use std::io::BufRead;
         use std::io::Write;
         use std::os::unix::net::UnixStream;
 
         let codex_home = find_codex_home()?;
         let socket_path = remote_session_socket_path(codex_home.as_path(), session_id);
-        let stream = UnixStream::connect(&socket_path)?;
-        let reader = std::io::BufReader::new(stream);
+        let mut stream = UnixStream::connect(&socket_path)?;
         let stdout = std::io::stdout();
         let mut lock = stdout.lock();
-        for line in reader.lines() {
-            writeln!(lock, "{}", line?)?;
-            lock.flush()?;
-        }
+        stream_remote_session(std::io::BufReader::new(&mut stream), &mut lock)?;
+        lock.flush()?;
         Ok(())
     }
+}
+
+fn stream_remote_session<R: std::io::Read, W: std::io::Write>(
+    mut reader: R,
+    writer: &mut W,
+) -> std::io::Result<u64> {
+    std::io::copy(&mut reader, writer)
 }
 
 fn display_home_relative_path(
@@ -1663,6 +1666,31 @@ mod tests {
             panic!("expected attach subcommand");
         };
         assert_eq!(session_id, "7bfa");
+    }
+
+    #[test]
+    fn attach_stream_preserves_large_payloads() {
+        let payload = format!(
+            "{{\"event\":\"tool_result\",\"output\":\"{}\"}}\n",
+            "x".repeat(256 * 1024)
+        );
+        let mut out = Vec::new();
+        let copied = stream_remote_session(std::io::Cursor::new(payload.as_bytes()), &mut out)
+            .expect("stream succeeds");
+
+        assert_eq!(copied, payload.len() as u64);
+        assert_eq!(out, payload.as_bytes());
+    }
+
+    #[test]
+    fn attach_stream_preserves_non_utf8_bytes() {
+        let payload = b"{\"event\":\"tool_result\",\"output\":\"prefix\"}\n\xff\xfe\n";
+        let mut out = Vec::new();
+        let copied = stream_remote_session(std::io::Cursor::new(payload.as_slice()), &mut out)
+            .expect("stream succeeds");
+
+        assert_eq!(copied, payload.len() as u64);
+        assert_eq!(out, payload);
     }
 
     #[test]

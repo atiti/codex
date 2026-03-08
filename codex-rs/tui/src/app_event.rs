@@ -21,6 +21,7 @@ use codex_utils_approval_presets::ApprovalPreset;
 use crate::bottom_pane::ApprovalRequest;
 use crate::bottom_pane::StatusLineItem;
 use crate::history_cell::HistoryCell;
+use crate::remote_sessions::RemoteSessionCommand;
 
 use codex_core::features::Feature;
 use codex_protocol::config_types::CollaborationModeMask;
@@ -113,6 +114,9 @@ pub(crate) enum AppEvent {
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_protocol::protocol::Op),
+
+    /// Command received from a remote session client attached over the local socket.
+    RemoteSessionCommand(RemoteSessionCommand),
 
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there

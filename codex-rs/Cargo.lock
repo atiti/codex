@@ -1636,6 +1636,7 @@ dependencies = [
  "codex-utils-cargo-bin",
  "codex-utils-cli",
  "codex-windows-sandbox",
+ "core_test_support",
  "libc",
  "owo-colors",
  "predicates",

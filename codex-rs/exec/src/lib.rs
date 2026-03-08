@@ -9,8 +9,11 @@ mod event_processor;
 mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
+mod remote_control;
+mod transport;
 
 pub use cli::Cli;
+pub use cli::Color;
 pub use cli::Command;
 pub use cli::ReviewArgs;
 use codex_arg0::Arg0DispatchPaths;
@@ -52,6 +55,8 @@ use codex_utils_oss::ensure_oss_provider_ready;
 use codex_utils_oss::get_default_model_for_oss_provider;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
+use remote_control::RemoteControlRunArgs;
+use remote_control::run_remote_control_session;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::io::IsTerminal;
@@ -146,6 +151,8 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         color,
         last_message_file,
         json: json_mode,
+        remote_control,
+        approval_policy: approval_policy_cli_arg,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
         output_schema: output_schema_path,
@@ -301,8 +308,18 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         model,
         review_model: None,
         config_profile,
-        // Default to never ask for approvals in headless mode. Feature flags can override.
-        approval_policy: Some(AskForApproval::Never),
+        approval_policy: if remote_control {
+            if full_auto {
+                Some(AskForApproval::OnRequest)
+            } else if dangerously_bypass_approvals_and_sandbox {
+                Some(AskForApproval::Never)
+            } else {
+                approval_policy_cli_arg.map(Into::into)
+            }
+        } else {
+            // Default to never ask for approvals in headless mode. Feature flags can override.
+            Some(AskForApproval::Never)
+        },
         sandbox_mode,
         cwd: resolved_cwd,
         model_provider: model_provider.clone(),
@@ -382,24 +399,55 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
     if let Some(context) = traceparent_context_from_env() {
         set_parent_from_context(&exec_span, context);
     }
-    run_exec_session(ExecRunArgs {
-        command,
-        config,
-        cursor_ansi,
-        dangerously_bypass_approvals_and_sandbox,
-        exec_span: exec_span.clone(),
-        images,
-        json_mode,
-        last_message_file,
-        model_provider,
-        oss,
-        output_schema_path,
-        prompt,
-        skip_git_repo_check,
-        stderr_with_ansi,
-    })
-    .instrument(exec_span)
-    .await
+    if remote_control {
+        if command.is_some() {
+            anyhow::bail!("--remote-control does not support exec subcommands");
+        }
+        if prompt.is_some() {
+            anyhow::bail!("--remote-control reads user messages from stdin JSON commands");
+        }
+        if !images.is_empty() {
+            anyhow::bail!("--remote-control does not accept --image");
+        }
+        if output_schema_path.is_some() {
+            anyhow::bail!("--remote-control does not support --output-schema");
+        }
+        if last_message_file.is_some() {
+            anyhow::bail!("--remote-control does not support --output-last-message");
+        }
+        if json_mode {
+            warn!("--json is ignored when --remote-control is enabled");
+        }
+
+        run_remote_control_session(RemoteControlRunArgs {
+            config,
+            dangerously_bypass_approvals_and_sandbox,
+            model_provider,
+            oss,
+            skip_git_repo_check,
+        })
+        .instrument(exec_span)
+        .await
+    } else {
+        run_exec_session(ExecRunArgs {
+            command,
+            config,
+            cursor_ansi,
+            dangerously_bypass_approvals_and_sandbox,
+            exec_span: exec_span.clone(),
+            images,
+            json_mode,
+            last_message_file,
+            model_provider,
+            oss,
+            output_schema_path,
+            prompt,
+            skip_git_repo_check,
+            stderr_with_ansi,
+        })
+        .instrument(exec_span)
+        .await
+    }
 }
 
 async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {

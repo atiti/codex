@@ -18,6 +18,7 @@ use codex_cli::login::run_login_with_device_code;
 use codex_cli::login::run_logout;
 use codex_cloud_tasks::Cli as CloudTasksCli;
 use codex_exec::Cli as ExecCli;
+use codex_exec::Color as ExecColor;
 use codex_exec::Command as ExecCommand;
 use codex_exec::ReviewArgs;
 use codex_execpolicy::ExecPolicyCheckCommand;
@@ -27,6 +28,8 @@ use codex_state::state_db_path;
 use codex_tui::AppExitInfo;
 use codex_tui::Cli as TuiCli;
 use codex_tui::ExitReason;
+use codex_tui::list_remote_sessions;
+use codex_tui::remote_session_socket_path;
 use codex_tui::update_action::UpdateAction;
 use codex_utils_cli::CliConfigOverrides;
 use owo_colors::OwoColorize;
@@ -76,6 +79,9 @@ struct MultitoolCli {
 
     #[clap(flatten)]
     interactive: TuiCli,
+
+    #[arg(long = "remote-control", default_value_t = false)]
+    remote_control: bool,
 
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
@@ -131,6 +137,12 @@ enum Subcommand {
 
     /// Fork a previous interactive session (picker by default; use --last to fork the most recent).
     Fork(ForkCommand),
+
+    /// List locally attachable Codex sessions.
+    Sessions(SessionsCommand),
+
+    /// Attach to a running local Codex session and stream remote events.
+    Attach(AttachCommand),
 
     /// [EXPERIMENTAL] Browse tasks from Codex Cloud and apply changes locally.
     #[clap(name = "cloud", alias = "cloud-tasks")]
@@ -225,6 +237,15 @@ struct ForkCommand {
 
     #[clap(flatten)]
     config_overrides: TuiCli,
+}
+
+#[derive(Debug, Parser)]
+struct SessionsCommand;
+
+#[derive(Debug, Parser)]
+struct AttachCommand {
+    #[arg(value_name = "SESSION_ID")]
+    session_id: String,
 }
 
 #[derive(Debug, Parser)]
@@ -562,6 +583,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
         config_overrides: mut root_config_overrides,
         feature_toggles,
         mut interactive,
+        remote_control,
         subcommand,
     } = MultitoolCli::parse();
 
@@ -571,12 +593,21 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
 
     match subcommand {
         None => {
-            prepend_config_flags(
-                &mut interactive.config_overrides,
-                root_config_overrides.clone(),
-            );
-            let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
-            handle_app_exit(exit_info)?;
+            if remote_control {
+                let mut exec_cli = interactive_into_remote_exec_cli(interactive);
+                prepend_config_flags(
+                    &mut exec_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                codex_exec::run_main(exec_cli, arg0_paths.clone()).await?;
+            } else {
+                prepend_config_flags(
+                    &mut interactive.config_overrides,
+                    root_config_overrides.clone(),
+                );
+                let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
+                handle_app_exit(exit_info)?;
+            }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(
@@ -669,6 +700,12 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             );
             let exit_info = run_interactive_tui(interactive, arg0_paths.clone()).await?;
             handle_app_exit(exit_info)?;
+        }
+        Some(Subcommand::Sessions(SessionsCommand)) => {
+            run_sessions_command()?;
+        }
+        Some(Subcommand::Attach(AttachCommand { session_id })) => {
+            run_attach_command(&session_id)?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
@@ -836,6 +873,73 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn run_sessions_command() -> anyhow::Result<()> {
+    let codex_home = find_codex_home()?;
+    let sessions = list_remote_sessions(codex_home.as_path())?;
+
+    println!("Active Codex Sessions");
+    if sessions.is_empty() {
+        println!("No remote sessions found.");
+        return Ok(());
+    }
+
+    let home_dir = std::env::var_os("HOME").map(PathBuf::from);
+    for (index, session) in sessions.iter().enumerate() {
+        let display_index = index + 1;
+        println!("{display_index}. {}", session.title);
+        println!(
+            "cwd: {}",
+            display_home_relative_path(session.cwd.as_path(), home_dir.as_deref())
+        );
+        println!("status: {}", session.status);
+        println!("id: {}", session.session_id);
+    }
+
+    Ok(())
+}
+
+fn run_attach_command(session_id: &str) -> anyhow::Result<()> {
+    #[cfg(not(unix))]
+    {
+        let _ = session_id;
+        anyhow::bail!("`codex attach` is only available on Unix platforms");
+    }
+
+    #[cfg(unix)]
+    {
+        use std::io::BufRead;
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+
+        let codex_home = find_codex_home()?;
+        let socket_path = remote_session_socket_path(codex_home.as_path(), session_id);
+        let stream = UnixStream::connect(&socket_path)?;
+        let reader = std::io::BufReader::new(stream);
+        let stdout = std::io::stdout();
+        let mut lock = stdout.lock();
+        for line in reader.lines() {
+            writeln!(lock, "{}", line?)?;
+            lock.flush()?;
+        }
+        Ok(())
+    }
+}
+
+fn display_home_relative_path(
+    path: &std::path::Path,
+    home_dir: Option<&std::path::Path>,
+) -> String {
+    if let Some(home_dir) = home_dir
+        && let Ok(stripped) = path.strip_prefix(home_dir)
+    {
+        if stripped.as_os_str().is_empty() {
+            return "~".to_string();
+        }
+        return format!("~/{}", stripped.display());
+    }
+    path.display().to_string()
+}
+
 async fn enable_feature_in_config(interactive: &TuiCli, feature: &str) -> anyhow::Result<()> {
     FeatureToggles::validate_feature(feature)?;
     let codex_home = find_codex_home()?;
@@ -947,6 +1051,44 @@ fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+fn interactive_into_remote_exec_cli(interactive: TuiCli) -> ExecCli {
+    let web_search = interactive.web_search;
+    let mut exec_cli = ExecCli {
+        command: None,
+        images: interactive.images,
+        model: interactive.model,
+        oss: interactive.oss,
+        oss_provider: interactive.oss_provider,
+        sandbox_mode: interactive.sandbox_mode,
+        approval_policy: interactive.approval_policy,
+        config_profile: interactive.config_profile,
+        full_auto: interactive.full_auto,
+        dangerously_bypass_approvals_and_sandbox: interactive
+            .dangerously_bypass_approvals_and_sandbox,
+        cwd: interactive.cwd,
+        skip_git_repo_check: false,
+        add_dir: interactive.add_dir,
+        ephemeral: false,
+        output_schema: None,
+        config_overrides: interactive.config_overrides,
+        color: ExecColor::Auto,
+        progress_cursor: false,
+        json: false,
+        remote_control: true,
+        last_message_file: None,
+        prompt: interactive.prompt,
+    };
+
+    if web_search {
+        exec_cli
+            .config_overrides
+            .raw_overrides
+            .push("web_search=\"live\"".to_string());
+    }
+
+    exec_cli
 }
 
 async fn run_interactive_tui(
@@ -1074,6 +1216,9 @@ fn merge_interactive_cli_flags(interactive: &mut TuiCli, subcommand_cli: TuiCli)
     if !subcommand_cli.images.is_empty() {
         interactive.images = subcommand_cli.images;
     }
+    if let Some(title) = subcommand_cli.title {
+        interactive.title = Some(title);
+    }
     if !subcommand_cli.add_dir.is_empty() {
         interactive.add_dir.extend(subcommand_cli.add_dir);
     }
@@ -1109,6 +1254,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            remote_control: _,
         } = cli;
 
         let Subcommand::Resume(ResumeCommand {
@@ -1138,6 +1284,7 @@ mod tests {
             config_overrides: root_overrides,
             subcommand,
             feature_toggles: _,
+            remote_control: _,
         } = cli;
 
         let Subcommand::Fork(ForkCommand {
@@ -1498,6 +1645,23 @@ mod tests {
             panic!("expected features disable");
         };
         assert_eq!(feature, "shell_tool");
+    }
+
+    #[test]
+    fn sessions_subcommand_parses() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "sessions"]).expect("parse should succeed");
+        assert!(matches!(cli.subcommand, Some(Subcommand::Sessions(_))));
+    }
+
+    #[test]
+    fn attach_subcommand_parses_session_id() {
+        let cli = MultitoolCli::try_parse_from(["codex", "attach", "7bfa"])
+            .expect("parse should succeed");
+        let Some(Subcommand::Attach(AttachCommand { session_id })) = cli.subcommand else {
+            panic!("expected attach subcommand");
+        };
+        assert_eq!(session_id, "7bfa");
     }
 
     #[test]

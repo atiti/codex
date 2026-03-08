@@ -20,6 +20,9 @@ use std::io;
 use std::path::Path;
 use std::path::PathBuf;
 
+const MAX_REMOTE_TEXT_BYTES: usize = 64 * 1024;
+const MAX_RECENT_ACTION_BYTES: usize = 256;
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RemoteSessionMetadata {
     pub session_id: String,
@@ -390,7 +393,7 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
             Some(encode_sequenced_event(
                 state,
                 "user_message",
-                json!({ "content": message }),
+                text_payload("content", message),
             ))
         }
         EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
@@ -398,31 +401,28 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
             Some(encode_sequenced_event(
                 state,
                 "assistant_message",
-                json!({ "content": message }),
+                text_payload("content", message),
             ))
         }
         EventMsg::ExecCommandBegin(ExecCommandBeginEvent { command, .. }) => {
             state.phase = "executing".to_string();
             let command = command.join(" ");
             push_recent_action(state, format!("run {command}"));
+            let mut payload = serde_json::Map::new();
+            payload.insert("tool".to_string(), json!("shell"));
+            insert_text_field(&mut payload, "command", &command);
             Some(encode_sequenced_event(
                 state,
                 "tool_call",
-                json!({ "tool": "shell", "command": command }),
+                serde_json::Value::Object(payload),
             ))
         }
-        EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            formatted_output, ..
-        }) => {
-            let output = if formatted_output.trim().is_empty() {
-                "(no output)".to_string()
-            } else {
-                formatted_output.clone()
-            };
+        EventMsg::ExecCommandEnd(payload) => {
+            let output = select_exec_output(payload);
             Some(encode_sequenced_event(
                 state,
                 "tool_result",
-                json!({ "output": output }),
+                text_payload("output", &output),
             ))
         }
         EventMsg::TurnComplete(TurnCompleteEvent { .. }) => {
@@ -441,7 +441,7 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
         EventMsg::StreamError(StreamErrorEvent { message, .. }) => Some(encode_sequenced_event(
             state,
             "error",
-            json!({ "message": message }),
+            text_payload("message", message),
         )),
         EventMsg::ShutdownComplete => Some(encode_sequenced_event(
             state,
@@ -457,7 +457,9 @@ fn push_recent_action(state: &mut SharedState, action: String) {
     if action.is_empty() {
         return;
     }
-    state.recent_actions.push_back(action.to_string());
+    state
+        .recent_actions
+        .push_back(truncate_text(action, MAX_RECENT_ACTION_BYTES).0.to_string());
     while state.recent_actions.len() > 8 {
         state.recent_actions.pop_front();
     }
@@ -496,6 +498,55 @@ fn encode_named_event(event_name: &str, payload: serde_json::Value) -> String {
         object.insert("event".to_string(), json!(event_name));
     }
     value.to_string()
+}
+
+fn text_payload(field_name: &str, text: &str) -> serde_json::Value {
+    let mut payload = serde_json::Map::new();
+    insert_text_field(&mut payload, field_name, text);
+    serde_json::Value::Object(payload)
+}
+
+fn insert_text_field(
+    payload: &mut serde_json::Map<String, serde_json::Value>,
+    field_name: &str,
+    text: &str,
+) {
+    let (truncated, original_bytes) = truncate_text(text, MAX_REMOTE_TEXT_BYTES);
+    payload.insert(field_name.to_string(), json!(truncated));
+    if original_bytes.is_some() {
+        payload.insert("truncated".to_string(), json!(true));
+        payload.insert("originalBytes".to_string(), json!(text.len()));
+    }
+}
+
+fn truncate_text(text: &str, max_bytes: usize) -> (&str, Option<usize>) {
+    if text.len() <= max_bytes {
+        return (text, None);
+    }
+
+    let mut end = max_bytes;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    (&text[..end], Some(text.len()))
+}
+
+fn select_exec_output(payload: &ExecCommandEndEvent) -> String {
+    if !payload.formatted_output.is_empty() {
+        payload.formatted_output.clone()
+    } else if !payload.aggregated_output.is_empty() {
+        payload.aggregated_output.clone()
+    } else {
+        match (
+            payload.stdout.trim().is_empty(),
+            payload.stderr.trim().is_empty(),
+        ) {
+            (false, false) => format!("{}\n{}", payload.stdout, payload.stderr),
+            (false, true) => payload.stdout.clone(),
+            (true, false) => payload.stderr.clone(),
+            (true, true) => "(no output)".to_string(),
+        }
+    }
 }
 
 fn write_metadata(path: &Path, metadata: &RemoteSessionMetadata) -> io::Result<()> {
@@ -571,10 +622,16 @@ fn process_exists(_pid: u32) -> bool {
 mod tests {
     use super::RemoteSessionMetadata;
     use super::list_remote_sessions;
+    use super::select_exec_output;
     use super::select_session_title;
+    use super::text_payload;
     use chrono::Utc;
+    use codex_protocol::protocol::ExecCommandEndEvent;
+    use codex_protocol::protocol::ExecCommandSource;
+    use codex_protocol::protocol::ExecCommandStatus;
     use pretty_assertions::assert_eq;
     use std::fs;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
     #[test]
@@ -614,5 +671,37 @@ mod tests {
         let sessions = list_remote_sessions(codex_home.path()).expect("list sessions");
         assert!(sessions.is_empty());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn text_payload_truncates_oversized_content() {
+        let content = "x".repeat(70 * 1024);
+        let payload = text_payload("output", &content);
+        assert_eq!(payload["truncated"], true);
+        assert_eq!(payload["originalBytes"], content.len() as u64);
+        assert!(payload["output"].as_str().expect("string output").len() < content.len());
+    }
+
+    #[test]
+    fn select_exec_output_falls_back_to_aggregated_output() {
+        let payload = ExecCommandEndEvent {
+            call_id: "call-1".to_string(),
+            process_id: None,
+            turn_id: "turn-1".to_string(),
+            command: vec!["printf".to_string(), "hello".to_string()],
+            cwd: PathBuf::from("/tmp"),
+            parsed_cmd: Vec::new(),
+            source: ExecCommandSource::Agent,
+            interaction_input: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: "hello from aggregate".to_string(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(1),
+            formatted_output: String::new(),
+            status: ExecCommandStatus::Completed,
+        };
+
+        assert_eq!(select_exec_output(&payload), "hello from aggregate");
     }
 }

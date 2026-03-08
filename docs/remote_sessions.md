@@ -127,6 +127,14 @@ After that, clients receive live NDJSON events such as:
 {"seq":44,"event":"task_complete"}
 ```
 
+Oversized text payloads are truncated before emission so a single very large
+assistant message or tool output does not tear down attached clients. Truncated
+events include:
+
+```json
+{"event":"tool_result","output":"...","truncated":true,"originalBytes":131072}
+```
+
 ## Commands
 
 Clients can send NDJSON commands to the same socket.

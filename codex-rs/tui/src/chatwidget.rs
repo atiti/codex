@@ -4426,7 +4426,7 @@ impl ChatWidget {
         }
     }
 
-    fn submit_user_message(&mut self, user_message: UserMessage) {
+    pub(crate) fn submit_user_message(&mut self, user_message: UserMessage) {
         if !self.is_session_configured() {
             tracing::warn!("cannot submit user message before session is configured; queueing");
             self.queued_user_messages.push_front(user_message);

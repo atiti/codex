@@ -98,6 +98,7 @@ pub mod onboarding;
 mod oss_selection;
 mod pager_overlay;
 pub mod public_widgets;
+mod remote_sessions;
 mod render;
 mod resume_picker;
 mod selection_list;
@@ -225,6 +226,9 @@ use codex_arg0::Arg0DispatchPaths;
 pub use markdown_render::render_markdown_text;
 pub use public_widgets::composer_input::ComposerAction;
 pub use public_widgets::composer_input::ComposerInput;
+pub use remote_sessions::RemoteSessionMetadata;
+pub use remote_sessions::list_remote_sessions;
+pub use remote_sessions::remote_session_socket_path;
 // (tests access modules directly within the crate)
 
 pub async fn run_main(mut cli: Cli, arg0_paths: Arg0DispatchPaths) -> std::io::Result<AppExitInfo> {
@@ -913,6 +917,7 @@ async fn run_ratatui_app(
     let Cli {
         prompt,
         images,
+        title,
         no_alt_screen,
         ..
     } = cli;
@@ -928,6 +933,7 @@ async fn run_ratatui_app(
         overrides.clone(),
         active_profile,
         prompt,
+        title,
         images,
         session_selection,
         feedback,

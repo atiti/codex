@@ -2,6 +2,7 @@ use clap::Args;
 use clap::FromArgMatches;
 use clap::Parser;
 use clap::ValueEnum;
+use codex_utils_cli::ApprovalModeCliArg;
 use codex_utils_cli::CliConfigOverrides;
 use std::path::PathBuf;
 
@@ -39,6 +40,10 @@ pub struct Cli {
     /// commands.
     #[arg(long = "sandbox", short = 's', value_enum)]
     pub sandbox_mode: Option<codex_utils_cli::SandboxModeCliArg>,
+
+    /// Configure when the model requires human approval before executing a command.
+    #[arg(long = "ask-for-approval", short = 'a', global = true)]
+    pub approval_policy: Option<ApprovalModeCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
@@ -98,6 +103,10 @@ pub struct Cli {
         global = true
     )]
     pub json: bool,
+
+    /// Control Codex programmatically via newline-delimited JSON over stdin/stdout.
+    #[arg(long = "remote-control", default_value_t = false, global = true)]
+    pub remote_control: bool,
 
     /// Specifies file where the last message from the agent should be written.
     #[arg(

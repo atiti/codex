@@ -14,6 +14,7 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ThreadInputState;
+use crate::chatwidget::UserMessage;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -31,6 +32,8 @@ use crate::multi_agents::agent_picker_status_dot_spans;
 use crate::multi_agents::format_agent_picker_item_name;
 use crate::multi_agents::sort_agent_picker_threads;
 use crate::pager_overlay::Overlay;
+use crate::remote_sessions::RemoteSessionCommand;
+use crate::remote_sessions::RemoteSessionController;
 use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
@@ -74,6 +77,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::FinalOutput;
 use codex_protocol::protocol::ListSkillsResponseEvent;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
@@ -703,6 +707,9 @@ pub(crate) struct App {
     primary_thread_id: Option<ThreadId>,
     primary_session_configured: Option<SessionConfiguredEvent>,
     pending_primary_events: VecDeque<Event>,
+    remote_session: Option<RemoteSessionController>,
+    remote_command_queue: VecDeque<RemoteSessionCommand>,
+    remote_command_active: bool,
 }
 
 #[derive(Default)]
@@ -1215,6 +1222,64 @@ impl App {
         }
     }
 
+    async fn note_remote_command_progress(&mut self, event: &Event, tui: &mut tui::Tui) {
+        match &event.msg {
+            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
+                self.remote_command_active = false;
+                if let Err(err) = self.dispatch_next_remote_command(tui).await {
+                    self.chat_widget.add_error_message(format!(
+                        "Failed to dispatch queued remote command: {err}"
+                    ));
+                }
+            }
+            EventMsg::ShutdownComplete => {
+                self.remote_command_active = false;
+            }
+            _ => {}
+        }
+    }
+
+    async fn dispatch_next_remote_command(&mut self, tui: &mut tui::Tui) -> Result<()> {
+        while !self.remote_command_active {
+            let Some(command) = self.remote_command_queue.pop_front() else {
+                return Ok(());
+            };
+
+            match command {
+                RemoteSessionCommand::UserMessage { content } => {
+                    self.chat_widget
+                        .submit_user_message(UserMessage::from(content));
+                    self.remote_command_active = true;
+                    tui.frame_requester().schedule_frame();
+                }
+                RemoteSessionCommand::Approve { id, kind, decision } => {
+                    let decision = decision.unwrap_or(ReviewDecision::Approved);
+                    let op = if kind.as_deref() == Some("patch") {
+                        Op::PatchApproval { id, decision }
+                    } else {
+                        Op::ExecApproval {
+                            id,
+                            turn_id: None,
+                            decision,
+                        }
+                    };
+                    self.app_event_tx.send(AppEvent::CodexOp(op));
+                    self.remote_command_active = true;
+                }
+                RemoteSessionCommand::Reset => {
+                    self.start_fresh_session_with_summary_hint(tui).await;
+                }
+                RemoteSessionCommand::Stop => {
+                    self.app_event_tx
+                        .send(AppEvent::Exit(ExitMode::ShutdownFirst));
+                    return Ok(());
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     async fn refresh_pending_thread_approvals(&mut self) {
         let channels: Vec<(ThreadId, Arc<Mutex<ThreadEventStore>>)> = self
             .thread_event_channels
@@ -1678,6 +1743,7 @@ impl App {
         harness_overrides: ConfigOverrides,
         active_profile: Option<String>,
         initial_prompt: Option<String>,
+        session_title: Option<String>,
         initial_images: Vec<PathBuf>,
         session_selection: SessionSelection,
         feedback: codex_feedback::CodexFeedback,
@@ -1915,7 +1981,17 @@ impl App {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            remote_session: None,
+            remote_command_queue: VecDeque::new(),
+            remote_command_active: false,
         };
+        app.remote_session = RemoteSessionController::start(
+            app.config.codex_home.as_path(),
+            app.config.cwd.as_path(),
+            session_title.as_deref(),
+            initial_prompt.as_deref(),
+            app.app_event_tx.clone(),
+        )?;
 
         // On startup, if Agent mode (workspace-write) or ReadOnly is active, warn about world-writable dirs on Windows.
         #[cfg(target_os = "windows")]
@@ -2025,6 +2101,9 @@ impl App {
                 AppRunControl::Exit(reason) => break reason,
             }
         };
+        if let Some(remote_session) = app.remote_session.as_ref() {
+            remote_session.close();
+        }
         tui.terminal.clear()?;
         Ok(AppExitInfo {
             token_usage: app.token_usage(),
@@ -2324,6 +2403,10 @@ impl App {
                 self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
+                if let Some(remote_session) = self.remote_session.as_ref() {
+                    remote_session.observe_event(&event);
+                }
+                self.note_remote_command_progress(&event, tui).await;
                 self.enqueue_primary_event(event).await?;
             }
             AppEvent::ThreadEvent { thread_id, event } => {
@@ -2343,6 +2426,10 @@ impl App {
                     self.note_active_thread_outbound_op(op).await;
                     self.refresh_pending_thread_approvals().await;
                 }
+            }
+            AppEvent::RemoteSessionCommand(command) => {
+                self.remote_command_queue.push_back(command);
+                self.dispatch_next_remote_command(tui).await?;
             }
             AppEvent::SubmitThreadOp { thread_id, op } => {
                 self.submit_op_to_thread(thread_id, op).await;
@@ -5515,6 +5602,9 @@ mod tests {
             primary_thread_id: None,
             primary_session_configured: None,
             pending_primary_events: VecDeque::new(),
+            remote_session: None,
+            remote_command_queue: VecDeque::new(),
+            remote_command_active: false,
         }
     }
 
@@ -5575,6 +5665,9 @@ mod tests {
                 primary_thread_id: None,
                 primary_session_configured: None,
                 pending_primary_events: VecDeque::new(),
+                remote_session: None,
+                remote_command_queue: VecDeque::new(),
+                remote_command_active: false,
             },
             rx,
             op_rx,

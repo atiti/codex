@@ -1,16 +1,12 @@
-use chrono::Utc;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
-use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
-use codex_protocol::protocol::UserMessageEvent;
-use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::json;
@@ -19,39 +15,20 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::Command as ProcessCommand;
+use std::process::Stdio;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct RemoteSessionMetadata {
-    pub session_id: String,
-    pub cwd: PathBuf,
-    pub title: String,
-    pub status: String,
-    pub pid: u32,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum RemoteSessionCommand {
-    UserMessage {
-        content: String,
-    },
-    Approve {
-        id: String,
-        #[serde(default)]
-        kind: Option<String>,
-        #[serde(default)]
-        decision: Option<ReviewDecision>,
-    },
-    Reset,
-    Stop,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TitleSource {
-    Explicit,
-    Prompt,
-    Fallback,
+struct RemoteSessionMetadata {
+    session_id: String,
+    cwd: PathBuf,
+    title: String,
+    status: String,
+    pid: u32,
+    created_at: String,
 }
 
 #[derive(Debug)]
@@ -63,33 +40,24 @@ struct SharedState {
     recent_actions: VecDeque<String>,
     next_seq: u64,
     clients: Vec<std::sync::mpsc::Sender<String>>,
-    title_source: TitleSource,
 }
 
-pub(crate) struct RemoteSessionController {
+pub(crate) struct ExecRemoteSession {
     #[cfg(unix)]
     shared: std::sync::Arc<std::sync::Mutex<SharedState>>,
     #[cfg(unix)]
     shutdown: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
-impl RemoteSessionController {
+impl ExecRemoteSession {
     pub(crate) fn start(
         codex_home: &Path,
         cwd: &Path,
-        title_override: Option<&str>,
-        initial_prompt: Option<&str>,
-        app_event_tx: crate::app_event_sender::AppEventSender,
+        title: Option<&str>,
     ) -> io::Result<Option<Self>> {
         #[cfg(not(unix))]
         {
-            let _ = (
-                codex_home,
-                cwd,
-                title_override,
-                initial_prompt,
-                app_event_tx,
-            );
+            let _ = (codex_home, cwd, title);
             Ok(None)
         }
 
@@ -109,14 +77,13 @@ impl RemoteSessionController {
             cleanup_remote_session_dir(codex_home)?;
             fs::create_dir_all(remote_session_dir(codex_home))?;
             let (session_id, metadata_path, socket_path) = allocate_session_paths(codex_home)?;
-            let (title, title_source) = select_session_title(cwd, title_override, initial_prompt);
             let metadata = RemoteSessionMetadata {
                 session_id,
                 cwd: cwd.to_path_buf(),
-                title,
+                title: select_session_title(cwd, title),
                 status: "running".to_string(),
                 pid: std::process::id(),
-                created_at: Utc::now().to_rfc3339(),
+                created_at: created_at_timestamp()?,
             };
             write_metadata(&metadata_path, &metadata)?;
 
@@ -131,7 +98,6 @@ impl RemoteSessionController {
                 recent_actions: VecDeque::new(),
                 next_seq: 0,
                 clients: Vec::new(),
-                title_source,
             }));
             let shutdown = Arc::new(AtomicBool::new(false));
 
@@ -154,9 +120,7 @@ impl RemoteSessionController {
 
                             let write_stream = match stream.try_clone() {
                                 Ok(stream) => stream,
-                                Err(_) => {
-                                    continue;
-                                }
+                                Err(_) => continue,
                             };
                             thread::spawn(move || {
                                 let mut write_stream = write_stream;
@@ -170,35 +134,22 @@ impl RemoteSessionController {
                                 }
                             });
 
-                            let app_event_tx = app_event_tx.clone();
                             thread::spawn(move || {
                                 let mut stream = stream;
                                 let reader = BufReader::new(&mut stream);
                                 for line in reader.lines() {
-                                    let line = match line {
-                                        Ok(line) => line,
-                                        Err(_) => break,
+                                    let Ok(line) = line else {
+                                        break;
                                     };
-                                    let trimmed = line.trim();
-                                    if trimmed.is_empty() {
+                                    if line.trim().is_empty() {
                                         continue;
                                     }
-                                    match serde_json::from_str::<RemoteSessionCommand>(trimmed) {
-                                        Ok(command) => {
-                                            app_event_tx.send(
-                                                crate::app_event::AppEvent::RemoteSessionCommand(
-                                                    command,
-                                                ),
-                                            );
-                                        }
-                                        Err(err) => {
-                                            let message = encode_named_event(
-                                                "error",
-                                                json!({ "message": format!("invalid command: {err}") }),
-                                            );
-                                            let _ = tx.send(message);
-                                        }
-                                    }
+                                    let _ = tx.send(encode_named_event(
+                                        "error",
+                                        json!({
+                                            "message": "remote commands are not supported for codex exec sessions"
+                                        }),
+                                    ));
                                 }
                             });
                         }
@@ -220,19 +171,13 @@ impl RemoteSessionController {
             let Ok(mut state) = self.shared.lock() else {
                 return;
             };
-            if let Some(title) = title_from_event(event, state.title_source) {
-                state.metadata.title = title;
-                state.title_source = TitleSource::Prompt;
-                let _ = write_metadata(&state.metadata_path, &state.metadata);
-            }
             if let EventMsg::ThreadNameUpdated(ThreadNameUpdatedEvent {
                 thread_name: Some(thread_name),
                 ..
             }) = &event.msg
-                && !thread_name.trim().is_empty()
+                && let Some(title) = normalized_title(Some(thread_name))
             {
-                state.metadata.title = thread_name.trim().to_string();
-                state.title_source = TitleSource::Explicit;
+                state.metadata.title = title;
                 let _ = write_metadata(&state.metadata_path, &state.metadata);
             }
 
@@ -261,78 +206,24 @@ impl RemoteSessionController {
     }
 }
 
-impl Drop for RemoteSessionController {
+impl Drop for ExecRemoteSession {
     fn drop(&mut self) {
         self.close();
     }
 }
 
-pub fn list_remote_sessions(codex_home: &Path) -> io::Result<Vec<RemoteSessionMetadata>> {
-    let mut sessions = Vec::new();
-    cleanup_remote_session_dir(codex_home)?;
-    let dir = remote_session_dir(codex_home);
-    if !dir.exists() {
-        return Ok(sessions);
-    }
-
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-            continue;
-        }
-        let Ok(contents) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(metadata) = serde_json::from_str::<RemoteSessionMetadata>(&contents) else {
-            continue;
-        };
-        sessions.push(metadata);
-    }
-
-    sessions.sort_by(|left, right| right.created_at.cmp(&left.created_at));
-    Ok(sessions)
-}
-
-pub fn remote_session_dir(codex_home: &Path) -> PathBuf {
-    codex_home.join("remote")
-}
-
-pub fn remote_session_socket_path(codex_home: &Path, session_id: &str) -> PathBuf {
-    remote_session_dir(codex_home).join(format!("{session_id}.sock"))
-}
-
-fn allocate_session_paths(codex_home: &Path) -> io::Result<(String, PathBuf, PathBuf)> {
-    let mut rng = rand::rng();
-    loop {
-        let session_id = format!("{:04x}", rng.random::<u16>());
-        let metadata_path = remote_session_dir(codex_home).join(format!("{session_id}.json"));
-        let socket_path = remote_session_socket_path(codex_home, &session_id);
-        if !metadata_path.exists() && !socket_path.exists() {
-            return Ok((session_id, metadata_path, socket_path));
-        }
-    }
-}
-
-fn select_session_title(
-    cwd: &Path,
-    title_override: Option<&str>,
-    prompt: Option<&str>,
-) -> (String, TitleSource) {
-    if let Some(title) = normalized_title(title_override) {
-        return (title, TitleSource::Explicit);
-    }
-    if let Some(title) = normalized_title(prompt) {
-        return (title, TitleSource::Prompt);
+fn select_session_title(cwd: &Path, title: Option<&str>) -> String {
+    if let Some(title) = normalized_title(title) {
+        return title;
     }
     if let Some(title) = cwd
         .file_name()
         .and_then(|name| name.to_str())
         .and_then(|name| normalized_title(Some(name)))
     {
-        return (title, TitleSource::Fallback);
+        return title;
     }
-    ("codex-session".to_string(), TitleSource::Fallback)
+    "codex-session".to_string()
 }
 
 fn normalized_title(value: Option<&str>) -> Option<String> {
@@ -342,16 +233,6 @@ fn normalized_title(value: Option<&str>) -> Option<String> {
         return None;
     }
     Some(line.chars().take(80).collect())
-}
-
-fn title_from_event(event: &Event, title_source: TitleSource) -> Option<String> {
-    if title_source != TitleSource::Fallback {
-        return None;
-    }
-    match &event.msg {
-        EventMsg::UserMessage(UserMessageEvent { message, .. }) => normalized_title(Some(message)),
-        _ => None,
-    }
 }
 
 fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<String> {
@@ -383,14 +264,6 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
                 state,
                 "phase_change",
                 json!({ "phase": state.phase }),
-            ))
-        }
-        EventMsg::UserMessage(UserMessageEvent { message, .. }) => {
-            push_recent_action(state, format!("user: {}", message.trim()));
-            Some(encode_sequenced_event(
-                state,
-                "user_message",
-                json!({ "content": message }),
             ))
         }
         EventMsg::AgentMessage(AgentMessageEvent { message, .. }) => {
@@ -553,13 +426,34 @@ fn cleanup_remote_session_dir(codex_home: &Path) -> io::Result<()> {
     Ok(())
 }
 
+fn remote_session_dir(codex_home: &Path) -> PathBuf {
+    codex_home.join("remote")
+}
+
+fn remote_session_socket_path(codex_home: &Path, session_id: &str) -> PathBuf {
+    remote_session_dir(codex_home).join(format!("{session_id}.sock"))
+}
+
+fn allocate_session_paths(codex_home: &Path) -> io::Result<(String, PathBuf, PathBuf)> {
+    loop {
+        let session_id = Uuid::new_v4().simple().to_string()[..4].to_string();
+        let metadata_path = remote_session_dir(codex_home).join(format!("{session_id}.json"));
+        let socket_path = remote_session_socket_path(codex_home, &session_id);
+        if !metadata_path.exists() && !socket_path.exists() {
+            return Ok((session_id, metadata_path, socket_path));
+        }
+    }
+}
+
 #[cfg(unix)]
 fn process_exists(pid: u32) -> bool {
-    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if result == 0 {
-        return true;
-    }
-    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+    ProcessCommand::new("kill")
+        .arg("-0")
+        .arg(pid.to_string())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 #[cfg(not(unix))]
@@ -567,52 +461,69 @@ fn process_exists(_pid: u32) -> bool {
     true
 }
 
+fn created_at_timestamp() -> io::Result<String> {
+    let seconds = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| io::Error::other(format!("timestamp: {err}")))?
+        .as_secs();
+    Ok(seconds.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::RemoteSessionMetadata;
-    use super::list_remote_sessions;
-    use super::select_session_title;
-    use chrono::Utc;
+    use super::ExecRemoteSession;
+    use super::encode_snapshot;
     use pretty_assertions::assert_eq;
+    use serde_json::Value;
     use std::fs;
     use tempfile::TempDir;
 
+    #[cfg(unix)]
     #[test]
-    fn prefers_explicit_title_then_prompt_then_directory_name() {
-        let cwd = std::path::Path::new("/tmp/example-project");
-        assert_eq!(
-            select_session_title(cwd, Some("Manual Title"), Some("Prompt title")).0,
-            "Manual Title"
-        );
-        assert_eq!(
-            select_session_title(cwd, None, Some("Prompt title")).0,
-            "Prompt title"
-        );
-        assert_eq!(select_session_title(cwd, None, None).0, "example-project");
-    }
-
-    #[test]
-    fn stale_running_sessions_are_pruned() {
+    fn startup_prunes_stale_metadata() {
         let codex_home = TempDir::new().expect("tempdir");
         let remote_dir = codex_home.path().join("remote");
         fs::create_dir_all(&remote_dir).expect("create remote dir");
         let path = remote_dir.join("dead.json");
-        let metadata = RemoteSessionMetadata {
-            session_id: "dead".to_string(),
-            cwd: std::path::PathBuf::from("/tmp/project"),
-            title: "test".to_string(),
-            status: "running".to_string(),
-            pid: 999_999,
-            created_at: Utc::now().to_rfc3339(),
-        };
         fs::write(
             &path,
-            serde_json::to_string(&metadata).expect("serialize metadata"),
+            serde_json::json!({
+                "session_id": "dead",
+                "cwd": "/tmp/project",
+                "title": "test",
+                "status": "running",
+                "pid": 999_999,
+                "created_at": "0",
+            })
+            .to_string(),
         )
         .expect("write metadata");
 
-        let sessions = list_remote_sessions(codex_home.path()).expect("list sessions");
-        assert!(sessions.is_empty());
+        let session = ExecRemoteSession::start(
+            codex_home.path(),
+            std::path::Path::new("/tmp/project"),
+            None,
+        )
+        .expect("start remote session");
+        drop(session);
+
         assert!(!path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn snapshot_uses_explicit_title() {
+        let codex_home = TempDir::new().expect("tempdir");
+        let session = ExecRemoteSession::start(
+            codex_home.path(),
+            std::path::Path::new("/tmp/project"),
+            Some("exec smoke test"),
+        )
+        .expect("start remote session")
+        .expect("unix remote session");
+        let shared = session.shared.lock().expect("lock shared state");
+        let snapshot: Value =
+            serde_json::from_str(&encode_snapshot(&shared)).expect("parse snapshot");
+        assert_eq!(snapshot["title"], "exec smoke test");
     }
 }

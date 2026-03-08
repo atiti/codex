@@ -108,6 +108,14 @@ pub struct Cli {
     #[arg(long = "remote-control", default_value_t = false, global = true)]
     pub remote_control: bool,
 
+    /// Register this exec run as a local remote session under ~/.codex/remote/.
+    #[arg(
+        long = "register-remote-session",
+        default_value_t = false,
+        global = true
+    )]
+    pub register_remote_session: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(
         long = "output-last-message",
@@ -323,5 +331,13 @@ mod tests {
         };
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some(PROMPT));
+    }
+
+    #[test]
+    fn parses_register_remote_session_flag() {
+        let cli = Cli::parse_from(["codex-exec", "--register-remote-session", "echo hello"]);
+
+        assert!(cli.register_remote_session);
+        assert_eq!(cli.prompt.as_deref(), Some("echo hello"));
     }
 }

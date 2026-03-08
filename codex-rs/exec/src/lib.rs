@@ -10,6 +10,7 @@ mod event_processor_with_human_output;
 pub mod event_processor_with_jsonl_output;
 pub mod exec_events;
 mod remote_control;
+mod remote_session;
 mod transport;
 
 pub use cli::Cli;
@@ -81,6 +82,7 @@ use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_jsonl_output::EventProcessorWithJsonOutput;
 use remote_control::RemoteControlRunArgs;
 use remote_control::run_remote_control_session;
+use remote_session::ExecRemoteSession;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -149,6 +151,7 @@ struct ExecRunArgs {
     oss: bool,
     output_schema_path: Option<PathBuf>,
     prompt: Option<String>,
+    register_remote_session: bool,
     skip_git_repo_check: bool,
     stderr_with_ansi: bool,
 }
@@ -184,6 +187,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         last_message_file,
         json: json_mode,
         remote_control,
+        register_remote_session,
         approval_policy: approval_policy_cli_arg,
         sandbox_mode: sandbox_mode_cli_arg,
         prompt,
@@ -479,6 +483,9 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         if json_mode {
             warn!("--json is ignored when --remote-control is enabled");
         }
+        if register_remote_session {
+            warn!("--register-remote-session is ignored when --remote-control is enabled");
+        }
 
         run_remote_control_session(RemoteControlRunArgs {
             config,
@@ -503,6 +510,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
             oss,
             output_schema_path,
             prompt,
+            register_remote_session,
             skip_git_repo_check,
             stderr_with_ansi,
         })
@@ -526,6 +534,7 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         oss,
         output_schema_path,
         prompt,
+        register_remote_session,
         skip_git_repo_check,
         stderr_with_ansi,
     } = args;
@@ -708,6 +717,15 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
     // Print the effective configuration and initial request so users can see what Codex
     // is using.
     event_processor.print_config_summary(&config, &prompt_summary, &session_configured);
+    let remote_session = if register_remote_session {
+        ExecRemoteSession::start(
+            config.codex_home.as_path(),
+            config.cwd.as_path(),
+            Some(prompt_summary.as_str()),
+        )?
+    } else {
+        None
+    };
 
     info!("Codex initialized with event: {session_configured:?}");
 
@@ -894,6 +912,10 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
                     _ => {}
                 }
 
+                if let Some(remote_session) = remote_session.as_ref() {
+                    remote_session.observe_event(&event);
+                }
+
                 match event_processor.process_event(event) {
                     CodexStatus::Running => {}
                     CodexStatus::InitiateShutdown => {
@@ -930,6 +952,9 @@ async fn run_exec_session(args: ExecRunArgs) -> anyhow::Result<()> {
         warn!("in-process app-server shutdown failed: {err}");
     }
     event_processor.print_final_output();
+    if let Some(remote_session) = remote_session.as_ref() {
+        remote_session.close();
+    }
     if error_seen {
         std::process::exit(1);
     }

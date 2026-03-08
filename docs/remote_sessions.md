@@ -1,6 +1,12 @@
 # Remote Sessions
 
-Codex now exposes a local remote session endpoint for interactive CLI sessions.
+Codex exposes a local remote session endpoint for interactive CLI sessions.
+
+`codex exec` can also register itself as an attachable local session when you opt in with:
+
+```bash
+codex exec --register-remote-session "explain this repo"
+```
 
 Every running session creates metadata and a Unix domain socket under:
 
@@ -48,13 +54,13 @@ Each running session writes a JSON file:
 }
 ```
 
-Possible status values:
+Active metadata files use `status: "running"`.
 
-- `running`
-- `closed`
-- `dead`
+Cleanup behavior:
 
-`codex sessions` marks stale `running` sessions as `dead` when their PID no longer exists.
+- clean shutdown removes both the `.json` and `.sock` files
+- `codex sessions` prunes stale entries whose PID no longer exists
+- orphaned sockets without matching metadata are also removed during cleanup
 
 ## CLI Commands
 
@@ -88,6 +94,8 @@ Title priority is:
 2. first prompt
 3. working directory name
 4. `codex-session`
+
+For `codex exec --register-remote-session`, the title is derived from the initial prompt and falls back to the working directory name.
 
 ## Socket Protocol
 
@@ -146,3 +154,4 @@ Notes:
 - Use `"kind":"patch"` for patch approvals.
 - Multiple clients may attach at the same time.
 - Remote commands are queued and dispatched one at a time.
+- `codex exec --register-remote-session` sessions are observe-only; attached clients receive an error event if they try to send commands.

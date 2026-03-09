@@ -159,6 +159,18 @@ pub(crate) enum AppRunControl {
     Exit(ExitReason),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RemoteCommandAction {
+    UserMessage(String),
+    Approve {
+        id: String,
+        kind: Option<String>,
+        decision: Option<ReviewDecision>,
+    },
+    Reset,
+    Stop,
+}
+
 #[derive(Debug, Clone)]
 pub enum ExitReason {
     UserRequested,
@@ -1223,36 +1235,45 @@ impl App {
     }
 
     async fn note_remote_command_progress(&mut self, event: &Event, tui: &mut tui::Tui) {
-        match &event.msg {
+        let dispatch_result = match &event.msg {
+            EventMsg::SessionConfigured(_) => self.dispatch_next_remote_command(tui).await,
             EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {
                 self.remote_command_active = false;
-                if let Err(err) = self.dispatch_next_remote_command(tui).await {
-                    self.chat_widget.add_error_message(format!(
-                        "Failed to dispatch queued remote command: {err}"
-                    ));
-                }
+                self.dispatch_next_remote_command(tui).await
             }
             EventMsg::ShutdownComplete => {
                 self.remote_command_active = false;
+                Ok(false)
             }
-            _ => {}
+            _ => Ok(false),
+        };
+
+        match dispatch_result {
+            Ok(true) => tui.frame_requester().schedule_frame(),
+            Ok(false) => {}
+            Err(err) => {
+                self.chat_widget
+                    .add_error_message(format!("Failed to dispatch queued remote command: {err}"));
+            }
         }
     }
 
-    async fn dispatch_next_remote_command(&mut self, tui: &mut tui::Tui) -> Result<()> {
+    async fn dispatch_next_remote_command(&mut self, tui: &mut tui::Tui) -> Result<bool> {
         while !self.remote_command_active {
-            let Some(command) = self.remote_command_queue.pop_front() else {
-                return Ok(());
+            let Some(command) = self.next_remote_command_action() else {
+                return Ok(false);
             };
 
             match command {
-                RemoteSessionCommand::UserMessage { content } => {
+                RemoteCommandAction::UserMessage(content) => {
+                    let _ = self.remote_command_queue.pop_front();
                     self.chat_widget
                         .submit_user_message(UserMessage::from(content));
                     self.remote_command_active = true;
-                    tui.frame_requester().schedule_frame();
+                    return Ok(true);
                 }
-                RemoteSessionCommand::Approve { id, kind, decision } => {
+                RemoteCommandAction::Approve { id, kind, decision } => {
+                    let _ = self.remote_command_queue.pop_front();
                     let decision = decision.unwrap_or(ReviewDecision::Approved);
                     let op = if kind.as_deref() == Some("patch") {
                         Op::PatchApproval { id, decision }
@@ -1266,18 +1287,39 @@ impl App {
                     self.app_event_tx.send(AppEvent::CodexOp(op));
                     self.remote_command_active = true;
                 }
-                RemoteSessionCommand::Reset => {
+                RemoteCommandAction::Reset => {
+                    let _ = self.remote_command_queue.pop_front();
                     self.start_fresh_session_with_summary_hint(tui).await;
                 }
-                RemoteSessionCommand::Stop => {
+                RemoteCommandAction::Stop => {
+                    let _ = self.remote_command_queue.pop_front();
                     self.app_event_tx
                         .send(AppEvent::Exit(ExitMode::ShutdownFirst));
-                    return Ok(());
+                    return Ok(false);
                 }
             }
         }
 
-        Ok(())
+        Ok(false)
+    }
+
+    fn next_remote_command_action(&self) -> Option<RemoteCommandAction> {
+        let command = self.remote_command_queue.front()?;
+        match command {
+            RemoteSessionCommand::UserMessage { content } => self
+                .chat_widget
+                .can_submit_user_message_now()
+                .then(|| RemoteCommandAction::UserMessage(content.clone())),
+            RemoteSessionCommand::Approve { id, kind, decision } => {
+                Some(RemoteCommandAction::Approve {
+                    id: id.clone(),
+                    kind: kind.clone(),
+                    decision: decision.clone(),
+                })
+            }
+            RemoteSessionCommand::Reset => Some(RemoteCommandAction::Reset),
+            RemoteSessionCommand::Stop => Some(RemoteCommandAction::Stop),
+        }
     }
 
     async fn refresh_pending_thread_approvals(&mut self) {
@@ -4021,6 +4063,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn remote_user_message_waits_until_session_is_configured() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.remote_command_queue
+            .push_back(RemoteSessionCommand::UserMessage {
+                content: "queued from remote".to_string(),
+            });
+
+        assert_eq!(app.next_remote_command_action(), None);
+        assert_eq!(app.remote_command_queue.len(), 1);
+        assert!(!app.remote_command_active);
+    }
+
+    #[tokio::test]
+    async fn remote_user_message_becomes_dispatchable_after_session_configured() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.remote_command_queue
+            .push_back(RemoteSessionCommand::UserMessage {
+                content: "queued from remote".to_string(),
+            });
+
+        app.chat_widget
+            .handle_codex_event(session_configured_event(thread_id));
+
+        assert_eq!(
+            app.next_remote_command_action(),
+            Some(RemoteCommandAction::UserMessage(
+                "queued from remote".to_string()
+            ))
+        );
+    }
+
+    #[tokio::test]
     async fn enqueue_primary_event_delivers_session_configured_before_buffered_approval()
     -> Result<()> {
         let (mut app, mut app_event_rx, _op_rx) = make_test_app_with_channels().await;
@@ -5683,6 +5758,30 @@ mod tests {
             seen.push(format!("{op:?}"));
         }
         panic!("expected UserTurn op, saw: {seen:?}");
+    }
+
+    fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
+    fn session_configured_event(thread_id: ThreadId) -> Event {
+        Event {
+            id: "session-configured".to_string(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: thread_id,
+                forked_from_id: None,
+                thread_name: None,
+                model: "gpt-test".to_string(),
+                model_provider_id: "test-provider".to_string(),
+                service_tier: None,
+                approval_policy: AskForApproval::Never,
+                sandbox_policy: SandboxPolicy::new_read_only_policy(),
+                cwd: PathBuf::from("/tmp/project"),
+                reasoning_effort: None,
+                history_log_id: 0,
+                history_entry_count: 0,
+                initial_messages: None,
+                network_proxy: None,
+                rollout_path: Some(PathBuf::new()),
+            }),
+        }
     }
 
     fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {

@@ -8183,6 +8183,10 @@ impl ChatWidget {
         self.bottom_pane.has_active_view()
     }
 
+    pub(crate) fn can_submit_user_message_now(&self) -> bool {
+        self.is_session_configured() && !self.bottom_pane.is_task_running() && !self.is_review_mode
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();
     }

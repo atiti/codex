@@ -110,6 +110,9 @@ impl ExecRemoteSession {
                 while !shutdown_for_accept.load(Ordering::Relaxed) {
                     match listener.accept() {
                         Ok((stream, _)) => {
+                            if configure_client_stream(&stream).is_err() {
+                                continue;
+                            }
                             let (tx, rx) = std::sync::mpsc::channel::<String>();
                             let snapshot = {
                                 let Ok(mut state) = shared_for_accept.lock() else {
@@ -428,6 +431,11 @@ fn write_metadata(path: &Path, metadata: &RemoteSessionMetadata) -> io::Result<(
     fs::write(path, contents)
 }
 
+#[cfg(unix)]
+fn configure_client_stream(stream: &std::os::unix::net::UnixStream) -> io::Result<()> {
+    stream.set_nonblocking(false)
+}
+
 fn cleanup_remote_session_dir(codex_home: &Path) -> io::Result<()> {
     let dir = remote_session_dir(codex_home);
     if !dir.exists() {
@@ -523,6 +531,7 @@ fn created_at_timestamp() -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::ExecRemoteSession;
+    use super::configure_client_stream;
     use super::encode_snapshot;
     use super::select_exec_output;
     use super::text_payload;
@@ -532,6 +541,7 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::Value;
     use std::fs;
+    use std::os::fd::AsRawFd;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -614,5 +624,25 @@ mod tests {
         };
 
         assert_eq!(select_exec_output(&payload), "hello from aggregate");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn accepted_client_streams_are_forced_back_to_blocking_mode() {
+        let (client, peer) = std::os::unix::net::UnixStream::pair().expect("create unix pair");
+        client.set_nonblocking(true).expect("set nonblocking");
+        assert!(stream_is_nonblocking(&client));
+
+        configure_client_stream(&client).expect("restore blocking mode");
+
+        assert!(!stream_is_nonblocking(&client));
+        assert!(!stream_is_nonblocking(&peer));
+    }
+
+    #[cfg(unix)]
+    fn stream_is_nonblocking(stream: &std::os::unix::net::UnixStream) -> bool {
+        let flags = unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_GETFL) };
+        assert_ne!(flags, -1, "fcntl(F_GETFL) should succeed");
+        flags & libc::O_NONBLOCK != 0
     }
 }

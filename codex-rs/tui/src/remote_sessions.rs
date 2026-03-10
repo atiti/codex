@@ -1,16 +1,22 @@
 use chrono::Utc;
+use codex_protocol::approvals::NetworkApprovalContext;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::ApplyPatchApprovalRequestEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ExecApprovalRequestEvent;
 use codex_protocol::protocol::ExecCommandBeginEvent;
 use codex_protocol::protocol::ExecCommandEndEvent;
+use codex_protocol::protocol::PatchApplyBeginEvent;
 use codex_protocol::protocol::ReviewDecision;
 use codex_protocol::protocol::StreamErrorEvent;
 use codex_protocol::protocol::ThreadNameUpdatedEvent;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
 use codex_protocol::protocol::UserMessageEvent;
+use codex_protocol::request_permissions::RequestPermissionsEvent;
 use rand::Rng;
 use serde::Deserialize;
 use serde::Serialize;
@@ -47,6 +53,8 @@ pub(crate) enum RemoteSessionCommand {
         kind: Option<String>,
         #[serde(default)]
         decision: Option<ReviewDecision>,
+        #[serde(default)]
+        permissions: Option<PermissionProfile>,
     },
     ListModels,
     SetModel {
@@ -65,6 +73,20 @@ enum TitleSource {
     Fallback,
 }
 
+#[derive(Debug, Clone)]
+struct PendingRemoteApproval {
+    kind: &'static str,
+    id: String,
+    turn_id: Option<String>,
+    reason: Option<String>,
+    command: Option<Vec<String>>,
+    available_decisions: Option<Vec<ReviewDecision>>,
+    network_approval_context: Option<NetworkApprovalContext>,
+    additional_permissions: Option<PermissionProfile>,
+    permissions: Option<PermissionProfile>,
+    files: Option<Vec<String>>,
+}
+
 #[derive(Debug)]
 struct SharedState {
     metadata: RemoteSessionMetadata,
@@ -74,6 +96,7 @@ struct SharedState {
     recent_actions: VecDeque<String>,
     current_model: Option<String>,
     current_reasoning_effort: Option<ReasoningEffort>,
+    pending_approvals: Vec<PendingRemoteApproval>,
     next_seq: u64,
     clients: Vec<std::sync::mpsc::Sender<String>>,
     title_source: TitleSource,
@@ -144,6 +167,7 @@ impl RemoteSessionController {
                 recent_actions: VecDeque::new(),
                 current_model: None,
                 current_reasoning_effort: None,
+                pending_approvals: Vec::new(),
                 next_seq: 0,
                 clients: Vec::new(),
                 title_source,
@@ -288,6 +312,16 @@ impl RemoteSessionController {
             };
             state.current_model = Some(model.to_string());
             state.current_reasoning_effort = reasoning_effort;
+        }
+    }
+
+    pub(crate) fn resolve_approval(&self, kind: &str, id: &str) {
+        #[cfg(unix)]
+        {
+            let Ok(mut state) = self.shared.lock() else {
+                return;
+            };
+            remove_pending_approval(&mut state, kind, id);
         }
     }
 
@@ -451,9 +485,12 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
                 text_payload("content", message),
             ))
         }
-        EventMsg::ExecCommandBegin(ExecCommandBeginEvent { command, .. }) => {
+        EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id, command, ..
+        }) => {
             state.phase = "executing".to_string();
             let command = command.join(" ");
+            remove_pending_approval(state, "exec", call_id);
             push_recent_action(state, format!("run {command}"));
             let mut payload = serde_json::Map::new();
             payload.insert("tool".to_string(), json!("shell"));
@@ -463,6 +500,37 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
                 "tool_call",
                 serde_json::Value::Object(payload),
             ))
+        }
+        EventMsg::ExecApprovalRequest(ev) => {
+            let approval = pending_exec_approval(ev);
+            upsert_pending_approval(state, approval.clone());
+            Some(encode_sequenced_event(
+                state,
+                "approval_request",
+                approval_payload(&approval),
+            ))
+        }
+        EventMsg::ApplyPatchApprovalRequest(ev) => {
+            let approval = pending_patch_approval(ev);
+            upsert_pending_approval(state, approval.clone());
+            Some(encode_sequenced_event(
+                state,
+                "approval_request",
+                approval_payload(&approval),
+            ))
+        }
+        EventMsg::RequestPermissions(ev) => {
+            let approval = pending_permissions_approval(ev);
+            upsert_pending_approval(state, approval.clone());
+            Some(encode_sequenced_event(
+                state,
+                "approval_request",
+                approval_payload(&approval),
+            ))
+        }
+        EventMsg::PatchApplyBegin(PatchApplyBeginEvent { call_id, .. }) => {
+            remove_pending_approval(state, "patch", call_id);
+            None
         }
         EventMsg::ExecCommandEnd(payload) => {
             let output = select_exec_output(payload);
@@ -474,11 +542,13 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
         }
         EventMsg::TurnComplete(TurnCompleteEvent { .. }) => {
             state.phase = "idle".to_string();
+            state.pending_approvals.clear();
             push_recent_action(state, "turn complete".to_string());
             Some(encode_sequenced_event(state, "task_complete", json!({})))
         }
         EventMsg::TurnAborted(_) => {
             state.phase = "idle".to_string();
+            state.pending_approvals.clear();
             Some(encode_sequenced_event(
                 state,
                 "phase_change",
@@ -490,11 +560,14 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
             "error",
             text_payload("message", message),
         )),
-        EventMsg::ShutdownComplete => Some(encode_sequenced_event(
-            state,
-            "phase_change",
-            json!({ "phase": "closed" }),
-        )),
+        EventMsg::ShutdownComplete => {
+            state.pending_approvals.clear();
+            Some(encode_sequenced_event(
+                state,
+                "phase_change",
+                json!({ "phase": "closed" }),
+            ))
+        }
         _ => None,
     }
 }
@@ -521,6 +594,11 @@ fn encode_snapshot(state: &SharedState) -> String {
             "status": state.metadata.status,
             "phase": state.phase,
             "recent_actions": state.recent_actions,
+            "pendingApprovals": state
+                .pending_approvals
+                .iter()
+                .map(approval_payload)
+                .collect::<Vec<_>>(),
             "currentModel": state.current_model,
             "currentReasoningEffort": state.current_reasoning_effort,
         }),
@@ -596,6 +674,117 @@ fn select_exec_output(payload: &ExecCommandEndEvent) -> String {
             (true, true) => "(no output)".to_string(),
         }
     }
+}
+
+fn pending_exec_approval(ev: &ExecApprovalRequestEvent) -> PendingRemoteApproval {
+    PendingRemoteApproval {
+        kind: "exec",
+        id: ev.effective_approval_id(),
+        turn_id: Some(ev.turn_id.clone()),
+        reason: ev.reason.clone(),
+        command: Some(ev.command.clone()),
+        available_decisions: Some(ev.effective_available_decisions()),
+        network_approval_context: ev.network_approval_context.clone(),
+        additional_permissions: ev.additional_permissions.clone(),
+        permissions: None,
+        files: None,
+    }
+}
+
+fn pending_patch_approval(ev: &ApplyPatchApprovalRequestEvent) -> PendingRemoteApproval {
+    PendingRemoteApproval {
+        kind: "patch",
+        id: ev.call_id.clone(),
+        turn_id: Some(ev.turn_id.clone()),
+        reason: ev.reason.clone(),
+        command: None,
+        available_decisions: Some(vec![ReviewDecision::Approved, ReviewDecision::Abort]),
+        network_approval_context: None,
+        additional_permissions: None,
+        permissions: None,
+        files: Some(
+            ev.changes
+                .keys()
+                .map(|path: &PathBuf| path.display().to_string())
+                .collect(),
+        ),
+    }
+}
+
+fn pending_permissions_approval(ev: &RequestPermissionsEvent) -> PendingRemoteApproval {
+    PendingRemoteApproval {
+        kind: "permissions",
+        id: ev.call_id.clone(),
+        turn_id: Some(ev.turn_id.clone()),
+        reason: ev.reason.clone(),
+        command: None,
+        available_decisions: Some(vec![
+            ReviewDecision::Approved,
+            ReviewDecision::ApprovedForSession,
+            ReviewDecision::Abort,
+        ]),
+        network_approval_context: None,
+        additional_permissions: None,
+        permissions: Some(ev.permissions.clone()),
+        files: None,
+    }
+}
+
+fn upsert_pending_approval(state: &mut SharedState, approval: PendingRemoteApproval) {
+    if let Some(existing) = state
+        .pending_approvals
+        .iter_mut()
+        .find(|existing| existing.kind == approval.kind && existing.id == approval.id)
+    {
+        *existing = approval;
+        return;
+    }
+    state.pending_approvals.push(approval);
+}
+
+fn remove_pending_approval(state: &mut SharedState, kind: &str, id: &str) {
+    state
+        .pending_approvals
+        .retain(|approval| !(approval.kind == kind && approval.id == id));
+}
+
+fn approval_payload(approval: &PendingRemoteApproval) -> serde_json::Value {
+    let mut payload = serde_json::Map::new();
+    payload.insert("kind".to_string(), json!(approval.kind));
+    payload.insert("id".to_string(), json!(approval.id));
+    if let Some(turn_id) = &approval.turn_id {
+        payload.insert("turnId".to_string(), json!(turn_id));
+    }
+    if let Some(reason) = &approval.reason {
+        insert_text_field(&mut payload, "reason", reason);
+    }
+    if let Some(command) = &approval.command {
+        payload.insert("command".to_string(), json!(command));
+        insert_text_field(&mut payload, "commandDisplay", &command.join(" "));
+    }
+    if let Some(available_decisions) = &approval.available_decisions {
+        payload.insert("availableDecisions".to_string(), json!(available_decisions));
+    }
+    if let Some(network_approval_context) = &approval.network_approval_context {
+        payload.insert(
+            "networkApprovalContext".to_string(),
+            json!(network_approval_context),
+        );
+    }
+    if let Some(additional_permissions) = &approval.additional_permissions {
+        payload.insert(
+            "additionalPermissions".to_string(),
+            json!(additional_permissions),
+        );
+    }
+    if let Some(permissions) = &approval.permissions {
+        payload.insert("permissions".to_string(), json!(permissions));
+    }
+    if let Some(files) = &approval.files {
+        payload.insert("files".to_string(), json!(files));
+        payload.insert("fileCount".to_string(), json!(files.len()));
+    }
+    serde_json::Value::Object(payload)
 }
 
 fn write_metadata(path: &Path, metadata: &RemoteSessionMetadata) -> io::Result<()> {
@@ -678,16 +867,21 @@ mod tests {
     use super::SharedState;
     use super::TitleSource;
     use super::configure_client_stream;
+    use super::encode_protocol_event;
     use super::encode_snapshot;
     use super::list_remote_sessions;
     use super::select_exec_output;
     use super::select_session_title;
     use super::text_payload;
     use chrono::Utc;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::Event;
+    use codex_protocol::protocol::EventMsg;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
     use codex_protocol::protocol::ExecCommandStatus;
+    use codex_protocol::request_permissions::RequestPermissionsEvent;
     use pretty_assertions::assert_eq;
     use std::collections::VecDeque;
     use std::fs;
@@ -784,6 +978,7 @@ mod tests {
             recent_actions: VecDeque::new(),
             current_model: Some("gpt-5.2-codex".to_string()),
             current_reasoning_effort: Some(ReasoningEffort::Medium),
+            pending_approvals: Vec::new(),
             next_seq: 0,
             clients: Vec::new(),
             title_source: TitleSource::Fallback,
@@ -811,6 +1006,60 @@ mod tests {
                 effort: Some(ReasoningEffort::Medium),
             }
         );
+    }
+
+    #[test]
+    fn request_permissions_events_are_streamed_and_snapshotted() {
+        let metadata = RemoteSessionMetadata {
+            session_id: "dead".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            title: "test".to_string(),
+            status: "running".to_string(),
+            pid: 123,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        let mut state = SharedState {
+            metadata,
+            metadata_path: PathBuf::from("/tmp/project.json"),
+            socket_path: PathBuf::from("/tmp/project.sock"),
+            phase: "idle".to_string(),
+            recent_actions: VecDeque::new(),
+            current_model: None,
+            current_reasoning_effort: None,
+            pending_approvals: Vec::new(),
+            next_seq: 0,
+            clients: Vec::new(),
+            title_source: TitleSource::Fallback,
+        };
+        let permissions = PermissionProfile::default();
+        let event = Event {
+            id: "request-permissions".to_string(),
+            msg: EventMsg::RequestPermissions(RequestPermissionsEvent {
+                call_id: "perm-1".to_string(),
+                turn_id: "turn-1".to_string(),
+                reason: Some("Need broader access".to_string()),
+                permissions: permissions.clone(),
+            }),
+        };
+
+        let encoded = encode_protocol_event(&mut state, &event).expect("approval event");
+        let payload: serde_json::Value = serde_json::from_str(&encoded).expect("parse event");
+        assert_eq!(payload["event"], "approval_request");
+        assert_eq!(payload["kind"], "permissions");
+        assert_eq!(payload["id"], "perm-1");
+        assert_eq!(
+            payload["permissions"],
+            serde_json::to_value(&permissions).expect("serialize permissions")
+        );
+
+        let snapshot: serde_json::Value =
+            serde_json::from_str(&encode_snapshot(&state)).expect("parse snapshot");
+        assert_eq!(
+            snapshot["pendingApprovals"].as_array().map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(snapshot["pendingApprovals"][0]["kind"], "permissions");
+        assert_eq!(snapshot["pendingApprovals"][0]["id"], "perm-1");
     }
 
     #[cfg(unix)]

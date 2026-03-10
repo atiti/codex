@@ -67,6 +67,7 @@ use codex_protocol::config_types::Personality;
 #[cfg(target_os = "windows")]
 use codex_protocol::config_types::WindowsSandboxLevel;
 use codex_protocol::items::TurnItem;
+use codex_protocol::models::PermissionProfile;
 use codex_protocol::openai_models::ModelAvailabilityNux;
 use codex_protocol::openai_models::ModelPreset;
 use codex_protocol::openai_models::ModelUpgrade;
@@ -83,6 +84,7 @@ use codex_protocol::protocol::SessionConfiguredEvent;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SkillErrorInfo;
 use codex_protocol::protocol::TokenUsage;
+use codex_protocol::request_permissions::RequestPermissionsResponse;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -168,6 +170,7 @@ enum RemoteCommandAction {
         id: String,
         kind: Option<String>,
         decision: Option<ReviewDecision>,
+        permissions: Option<PermissionProfile>,
     },
     ListModels,
     SetModel {
@@ -729,6 +732,7 @@ pub(crate) struct App {
     remote_session: Option<RemoteSessionController>,
     remote_command_queue: VecDeque<RemoteSessionCommand>,
     remote_command_active: bool,
+    remote_permission_requests: HashMap<String, PermissionProfile>,
 }
 
 #[derive(Default)]
@@ -1296,20 +1300,37 @@ impl App {
                         );
                     }
                 }
-                RemoteCommandAction::Approve { id, kind, decision } => {
+                RemoteCommandAction::Approve {
+                    id,
+                    kind,
+                    decision,
+                    permissions,
+                } => {
                     let _ = self.remote_command_queue.pop_front();
                     let decision = decision.unwrap_or(ReviewDecision::Approved);
-                    let op = if kind.as_deref() == Some("patch") {
-                        Op::PatchApproval { id, decision }
-                    } else {
-                        Op::ExecApproval {
-                            id,
-                            turn_id: None,
-                            decision,
-                        }
-                    };
+                    let op = Self::remote_approval_op(
+                        id.clone(),
+                        kind.as_deref(),
+                        decision.clone(),
+                        permissions,
+                        self.remote_permission_requests.get(&id),
+                    );
+                    if kind.as_deref() == Some("permissions") {
+                        self.remote_permission_requests.remove(&id);
+                    }
                     self.app_event_tx.send(AppEvent::CodexOp(op));
                     self.remote_command_active = true;
+                    if let Some(remote_session) = &self.remote_session {
+                        remote_session.resolve_approval(kind.as_deref().unwrap_or("exec"), &id);
+                        remote_session.emit_named_event(
+                            "approval_submitted",
+                            json!({
+                                "id": id,
+                                "kind": kind.unwrap_or_else(|| "exec".to_string()),
+                                "decision": decision,
+                            }),
+                        );
+                    }
                 }
                 RemoteCommandAction::ListModels => {
                     let _ = self.remote_command_queue.pop_front();
@@ -1455,13 +1476,17 @@ impl App {
                 .can_submit_user_message_now()
                 .then(|| RemoteCommandAction::UserMessage(content.clone())),
             RemoteSessionCommand::Interrupt => Some(RemoteCommandAction::Interrupt),
-            RemoteSessionCommand::Approve { id, kind, decision } => {
-                Some(RemoteCommandAction::Approve {
-                    id: id.clone(),
-                    kind: kind.clone(),
-                    decision: decision.clone(),
-                })
-            }
+            RemoteSessionCommand::Approve {
+                id,
+                kind,
+                decision,
+                permissions,
+            } => Some(RemoteCommandAction::Approve {
+                id: id.clone(),
+                kind: kind.clone(),
+                decision: decision.clone(),
+                permissions: permissions.clone(),
+            }),
             RemoteSessionCommand::ListModels => Some(RemoteCommandAction::ListModels),
             RemoteSessionCommand::SetModel { model, effort } => self
                 .chat_widget
@@ -1472,6 +1497,38 @@ impl App {
                 }),
             RemoteSessionCommand::Reset => Some(RemoteCommandAction::Reset),
             RemoteSessionCommand::Stop => Some(RemoteCommandAction::Stop),
+        }
+    }
+
+    fn remote_approval_op(
+        id: String,
+        kind: Option<&str>,
+        decision: ReviewDecision,
+        permissions: Option<PermissionProfile>,
+        requested_permissions: Option<&PermissionProfile>,
+    ) -> Op {
+        match kind {
+            Some("patch") => Op::PatchApproval { id, decision },
+            Some("permissions") => {
+                let permissions = match decision {
+                    ReviewDecision::Approved | ReviewDecision::ApprovedForSession => permissions
+                        .or_else(|| requested_permissions.cloned())
+                        .unwrap_or_default(),
+                    ReviewDecision::Denied
+                    | ReviewDecision::Abort
+                    | ReviewDecision::ApprovedExecpolicyAmendment { .. }
+                    | ReviewDecision::NetworkPolicyAmendment { .. } => PermissionProfile::default(),
+                };
+                Op::RequestPermissionsResponse {
+                    id,
+                    response: RequestPermissionsResponse { permissions },
+                }
+            }
+            Some("exec") | None | Some(_) => Op::ExecApproval {
+                id,
+                turn_id: None,
+                decision,
+            },
         }
     }
 
@@ -2179,6 +2236,7 @@ impl App {
             remote_session: None,
             remote_command_queue: VecDeque::new(),
             remote_command_active: false,
+            remote_permission_requests: HashMap::new(),
         };
         app.remote_session = RemoteSessionController::start(
             app.config.codex_home.as_path(),
@@ -2618,6 +2676,23 @@ impl App {
                     ThreadEventStore::op_can_change_pending_replay_state(&op).then(|| op.clone());
                 let submitted = self.chat_widget.submit_op(op);
                 if submitted && let Some(op) = replay_state_op.as_ref() {
+                    if let Op::RequestPermissionsResponse { id, .. } = op {
+                        self.remote_permission_requests.remove(id);
+                    }
+                    if let Some(remote_session) = self.remote_session.as_ref() {
+                        match op {
+                            Op::ExecApproval { id, .. } => {
+                                remote_session.resolve_approval("exec", id)
+                            }
+                            Op::PatchApproval { id, .. } => {
+                                remote_session.resolve_approval("patch", id);
+                            }
+                            Op::RequestPermissionsResponse { id, .. } => {
+                                remote_session.resolve_approval("permissions", id);
+                            }
+                            _ => {}
+                        }
+                    }
                     self.note_active_thread_outbound_op(op).await;
                     self.refresh_pending_thread_approvals().await;
                 }
@@ -3686,6 +3761,16 @@ impl App {
             let errors = errors_for_cwd(&cwd, response);
             emit_skill_load_warnings(&self.app_event_tx, &errors);
         }
+        match &event.msg {
+            EventMsg::RequestPermissions(ev) => {
+                self.remote_permission_requests
+                    .insert(ev.call_id.clone(), ev.permissions.clone());
+            }
+            EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) | EventMsg::ShutdownComplete => {
+                self.remote_permission_requests.clear();
+            }
+            _ => {}
+        }
         self.handle_backtrack_event(&event.msg);
         self.chat_widget.handle_codex_event(event);
 
@@ -4088,6 +4173,8 @@ mod tests {
     use codex_protocol::config_types::CollaborationModeMask;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
+    use codex_protocol::models::NetworkPermissions;
+    use codex_protocol::models::PermissionProfile;
     use codex_protocol::openai_models::ModelAvailabilityNux;
     use codex_protocol::protocol::AgentMessageDeltaEvent;
     use codex_protocol::protocol::AskForApproval;
@@ -4102,6 +4189,7 @@ mod tests {
     use codex_protocol::protocol::TurnCompleteEvent;
     use codex_protocol::protocol::TurnStartedEvent;
     use codex_protocol::protocol::UserMessageEvent;
+    use codex_protocol::request_permissions::RequestPermissionsResponse;
     use codex_protocol::user_input::TextElement;
     use codex_protocol::user_input::UserInput;
     use crossterm::event::KeyModifiers;
@@ -4320,6 +4408,60 @@ mod tests {
         assert_eq!(
             app.next_remote_command_action(),
             Some(RemoteCommandAction::ListModels)
+        );
+    }
+
+    #[test]
+    fn remote_permissions_approval_uses_requested_permissions_by_default() {
+        let permissions = PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            ..PermissionProfile::default()
+        };
+
+        let op = App::remote_approval_op(
+            "perm-1".to_string(),
+            Some("permissions"),
+            ReviewDecision::Approved,
+            None,
+            Some(&permissions),
+        );
+
+        assert_eq!(
+            op,
+            Op::RequestPermissionsResponse {
+                id: "perm-1".to_string(),
+                response: RequestPermissionsResponse { permissions },
+            }
+        );
+    }
+
+    #[test]
+    fn remote_permissions_denial_clears_requested_permissions() {
+        let permissions = PermissionProfile {
+            network: Some(NetworkPermissions {
+                enabled: Some(true),
+            }),
+            ..PermissionProfile::default()
+        };
+
+        let op = App::remote_approval_op(
+            "perm-1".to_string(),
+            Some("permissions"),
+            ReviewDecision::Abort,
+            None,
+            Some(&permissions),
+        );
+
+        assert_eq!(
+            op,
+            Op::RequestPermissionsResponse {
+                id: "perm-1".to_string(),
+                response: RequestPermissionsResponse {
+                    permissions: PermissionProfile::default(),
+                },
+            }
         );
     }
 
@@ -5908,6 +6050,7 @@ mod tests {
             remote_session: None,
             remote_command_queue: VecDeque::new(),
             remote_command_active: false,
+            remote_permission_requests: HashMap::new(),
         }
     }
 
@@ -5971,6 +6114,7 @@ mod tests {
                 remote_session: None,
                 remote_command_queue: VecDeque::new(),
                 remote_command_active: false,
+                remote_permission_requests: HashMap::new(),
             },
             rx,
             op_rx,
@@ -5988,7 +6132,6 @@ mod tests {
         panic!("expected UserTurn op, saw: {seen:?}");
     }
 
-    fn test_session_telemetry(config: &Config, model: &str) -> SessionTelemetry {
     fn session_configured_event(thread_id: ThreadId) -> Event {
         Event {
             id: "session-configured".to_string(),

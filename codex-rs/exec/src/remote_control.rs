@@ -1,9 +1,8 @@
-use crate::ThreadEventEnvelope;
-use crate::spawn_thread_listener;
 use crate::transport::AgentEvent;
 use crate::transport::JsonTransport;
 use crate::transport::Transport;
 use codex_core::AuthManager;
+use codex_core::CodexThread;
 use codex_core::NewThread;
 use codex_core::ThreadManager;
 use codex_core::config::Config;
@@ -50,6 +49,11 @@ struct SessionState {
     thread: Arc<codex_core::CodexThread>,
     pending_approvals: HashMap<String, PendingApproval>,
     turn_active: bool,
+}
+
+struct ThreadEventEnvelope {
+    thread_id: codex_protocol::ThreadId,
+    event: codex_protocol::protocol::Event,
 }
 
 enum PendingApproval {
@@ -405,6 +409,33 @@ fn spawn_command_reader(tx: mpsc::UnboundedSender<CommandEnvelope>) {
                 Err(err) => CommandEnvelope::Invalid(format!("failed to read stdin: {err}")),
             };
             if tx.send(envelope).is_err() {
+                break;
+            }
+        }
+    });
+}
+
+fn spawn_thread_listener(
+    thread_id: codex_protocol::ThreadId,
+    thread: Arc<CodexThread>,
+    tx: mpsc::UnboundedSender<ThreadEventEnvelope>,
+    emit_session_configured: bool,
+) {
+    tokio::spawn(async move {
+        loop {
+            let event = match thread.next_event().await {
+                Ok(event) => event,
+                Err(err) => {
+                    warn!("remote-control thread listener stopped: {err}");
+                    break;
+                }
+            };
+
+            if !emit_session_configured && matches!(event.msg, EventMsg::SessionConfigured(_)) {
+                continue;
+            }
+
+            if tx.send(ThreadEventEnvelope { thread_id, event }).is_err() {
                 break;
             }
         }

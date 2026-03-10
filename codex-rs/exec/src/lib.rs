@@ -498,6 +498,7 @@ pub async fn run_main(cli: Cli, arg0_paths: Arg0DispatchPaths) -> anyhow::Result
         .await
     } else {
         run_exec_session(ExecRunArgs {
+            in_process_start_args,
             command,
             config,
             cursor_ansi,

@@ -115,6 +115,15 @@ New clients first receive a snapshot:
   "status": "running",
   "phase": "executing",
   "recent_actions": ["user: add tests", "run cargo test"],
+  "pendingApprovals": [
+    {
+      "kind": "permissions",
+      "id": "call_perm_123",
+      "turnId": "turn_123",
+      "reason": "Need broader filesystem access",
+      "permissions": {"file_system": {"write": ["/tmp"]}}
+    }
+  ],
   "currentModel": "gpt-5.2-codex",
   "currentReasoningEffort": "medium"
 }
@@ -128,6 +137,8 @@ After that, clients receive live NDJSON events such as:
 {"seq":43,"event":"tool_result","output":"tests passed"}
 {"seq":44,"event":"task_complete"}
 {"seq":45,"event":"model_changed","model":"gpt-5.2-codex","reasoningEffort":"medium"}
+{"seq":46,"event":"approval_request","kind":"permissions","id":"call_perm_123","turnId":"turn_123","reason":"Need broader filesystem access","permissions":{"file_system":{"write":["/tmp"]}}}
+{"seq":47,"event":"approval_submitted","id":"call_perm_123","kind":"permissions","decision":"approved"}
 ```
 
 Oversized text payloads are truncated before emission so a single very large
@@ -159,6 +170,8 @@ Examples:
 {"type":"interrupt"}
 {"type":"approve","id":"approval_123","decision":"approved"}
 {"type":"approve","id":"patch_123","kind":"patch","decision":"approved"}
+{"type":"approve","id":"call_perm_123","kind":"permissions","decision":"approved"}
+{"type":"approve","id":"call_perm_123","kind":"permissions","decision":"approved","permissions":{"file_system":{"write":["/tmp"]}}}
 {"type":"list_models"}
 {"type":"set_model","model":"gpt-5.2-codex","effort":"medium"}
 {"type":"reset"}
@@ -171,6 +184,8 @@ Notes:
 - `interrupt` is a no-op when there is no cancellable work; clients receive `interrupt_ignored`.
 - `approve` defaults to exec approvals.
 - Use `"kind":"patch"` for patch approvals.
+- Use `"kind":"permissions"` for `request_permissions` prompts. If `permissions` is omitted, the session grants exactly the permissions requested in the corresponding `approval_request` event.
+- Approval prompts are streamed as `approval_request` events and are also included in `session_snapshot.pendingApprovals`, so newly attached clients can still resolve an already-blocked turn.
 - `list_models` emits a `model_list` event with the current model, current reasoning effort, and the currently available model presets.
 - `set_model` validates the requested model and optional reasoning effort against the live model catalog before switching the session.
 - Multiple clients may attach at the same time.

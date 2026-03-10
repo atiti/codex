@@ -7530,6 +7530,18 @@ impl ChatWidget {
         self.effective_reasoning_effort()
     }
 
+    pub(crate) fn available_model_presets(&self) -> std::result::Result<Vec<ModelPreset>, ()> {
+        self.models_manager.try_list_models().map_err(|_| ())
+    }
+
+    pub(crate) fn can_switch_model_now(&self) -> bool {
+        self.is_session_configured() && !self.is_cancellable_work_active()
+    }
+
+    pub(crate) fn can_interrupt_now(&self) -> bool {
+        self.is_cancellable_work_active()
+    }
+
     #[cfg(test)]
     pub(crate) fn active_collaboration_mode_kind(&self) -> ModeKind {
         self.active_mode_kind()

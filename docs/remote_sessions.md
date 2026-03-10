@@ -114,7 +114,9 @@ New clients first receive a snapshot:
   "cwd": "/Users/example/projects/calendar",
   "status": "running",
   "phase": "executing",
-  "recent_actions": ["user: add tests", "run cargo test"]
+  "recent_actions": ["user: add tests", "run cargo test"],
+  "currentModel": "gpt-5.2-codex",
+  "currentReasoningEffort": "medium"
 }
 ```
 
@@ -125,6 +127,7 @@ After that, clients receive live NDJSON events such as:
 {"seq":42,"event":"tool_call","tool":"shell","command":"cargo test"}
 {"seq":43,"event":"tool_result","output":"tests passed"}
 {"seq":44,"event":"task_complete"}
+{"seq":45,"event":"model_changed","model":"gpt-5.2-codex","reasoningEffort":"medium"}
 ```
 
 Oversized text payloads are truncated before emission so a single very large
@@ -142,7 +145,10 @@ Clients can send NDJSON commands to the same socket.
 Supported commands:
 
 - `user_message`
+- `interrupt`
 - `approve`
+- `list_models`
+- `set_model`
 - `reset`
 - `stop`
 
@@ -150,16 +156,23 @@ Examples:
 
 ```json
 {"type":"user_message","content":"Add tests for calendar.py"}
+{"type":"interrupt"}
 {"type":"approve","id":"approval_123","decision":"approved"}
 {"type":"approve","id":"patch_123","kind":"patch","decision":"approved"}
+{"type":"list_models"}
+{"type":"set_model","model":"gpt-5.2-codex","effort":"medium"}
 {"type":"reset"}
 {"type":"stop"}
 ```
 
 Notes:
 
+- `interrupt` maps to the same in-session turn interrupt as pressing `Esc` locally.
+- `interrupt` is a no-op when there is no cancellable work; clients receive `interrupt_ignored`.
 - `approve` defaults to exec approvals.
 - Use `"kind":"patch"` for patch approvals.
+- `list_models` emits a `model_list` event with the current model, current reasoning effort, and the currently available model presets.
+- `set_model` validates the requested model and optional reasoning effort against the live model catalog before switching the session.
 - Multiple clients may attach at the same time.
 - Remote commands are queued and dispatched one at a time.
 - `codex exec --register-remote-session` sessions are observe-only; attached clients receive an error event if they try to send commands.

@@ -93,6 +93,7 @@ use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Wrap;
+use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -162,10 +163,16 @@ pub(crate) enum AppRunControl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RemoteCommandAction {
     UserMessage(String),
+    Interrupt,
     Approve {
         id: String,
         kind: Option<String>,
         decision: Option<ReviewDecision>,
+    },
+    ListModels,
+    SetModel {
+        model: String,
+        effort: Option<ReasoningEffortConfig>,
     },
     Reset,
     Stop,
@@ -1272,6 +1279,23 @@ impl App {
                     self.remote_command_active = true;
                     return Ok(true);
                 }
+                RemoteCommandAction::Interrupt => {
+                    let _ = self.remote_command_queue.pop_front();
+                    if self.chat_widget.can_interrupt_now() {
+                        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+                        self.remote_command_active = true;
+                        if let Some(remote_session) = &self.remote_session {
+                            remote_session.emit_named_event("interrupt_requested", json!({}));
+                        }
+                        return Ok(true);
+                    }
+                    if let Some(remote_session) = &self.remote_session {
+                        remote_session.emit_named_event(
+                            "interrupt_ignored",
+                            json!({ "reason": "no_cancellable_work" }),
+                        );
+                    }
+                }
                 RemoteCommandAction::Approve { id, kind, decision } => {
                     let _ = self.remote_command_queue.pop_front();
                     let decision = decision.unwrap_or(ReviewDecision::Approved);
@@ -1286,6 +1310,126 @@ impl App {
                     };
                     self.app_event_tx.send(AppEvent::CodexOp(op));
                     self.remote_command_active = true;
+                }
+                RemoteCommandAction::ListModels => {
+                    let _ = self.remote_command_queue.pop_front();
+                    match self.chat_widget.available_model_presets() {
+                        Ok(models) => {
+                            if let Some(remote_session) = &self.remote_session {
+                                let current_model = self.chat_widget.current_model();
+                                let current_reasoning_effort =
+                                    self.chat_widget.current_reasoning_effort();
+                                let models = models
+                                    .into_iter()
+                                    .map(|preset| {
+                                        let supported_reasoning_efforts = preset
+                                            .supported_reasoning_efforts
+                                            .into_iter()
+                                            .map(|option| {
+                                                json!({
+                                                    "effort": option.effort,
+                                                    "description": option.description,
+                                                })
+                                            })
+                                            .collect::<Vec<_>>();
+                                        json!({
+                                            "id": preset.id,
+                                            "model": preset.model,
+                                            "displayName": preset.display_name,
+                                            "description": preset.description,
+                                            "defaultReasoningEffort": preset.default_reasoning_effort,
+                                            "supportedReasoningEfforts": supported_reasoning_efforts,
+                                            "supportsPersonality": preset.supports_personality,
+                                            "isDefault": preset.is_default,
+                                            "showInPicker": preset.show_in_picker,
+                                            "current": preset.model == current_model,
+                                        })
+                                    })
+                                    .collect::<Vec<_>>();
+                                remote_session.emit_named_event(
+                                    "model_list",
+                                    json!({
+                                        "currentModel": current_model,
+                                        "currentReasoningEffort": current_reasoning_effort,
+                                        "models": models,
+                                    }),
+                                );
+                            }
+                        }
+                        Err(()) => {
+                            if let Some(remote_session) = &self.remote_session {
+                                remote_session.emit_named_event(
+                                    "error",
+                                    json!({
+                                        "message": "models are being updated; try list_models again in a moment",
+                                    }),
+                                );
+                            }
+                        }
+                    }
+                }
+                RemoteCommandAction::SetModel { model, effort } => {
+                    let _ = self.remote_command_queue.pop_front();
+                    let Ok(models) = self.chat_widget.available_model_presets() else {
+                        if let Some(remote_session) = &self.remote_session {
+                            remote_session.emit_named_event(
+                                "error",
+                                json!({
+                                    "message": "models are being updated; try set_model again in a moment",
+                                }),
+                            );
+                        }
+                        continue;
+                    };
+                    let Some(preset) = models.into_iter().find(|preset| preset.model == model)
+                    else {
+                        if let Some(remote_session) = &self.remote_session {
+                            remote_session.emit_named_event(
+                                "error",
+                                json!({
+                                    "message": format!("unknown model: {model}"),
+                                }),
+                            );
+                        }
+                        continue;
+                    };
+                    if let Some(effort) = effort
+                        && !preset
+                            .supported_reasoning_efforts
+                            .iter()
+                            .any(|option| option.effort == effort)
+                    {
+                        if let Some(remote_session) = &self.remote_session {
+                            remote_session.emit_named_event(
+                                "error",
+                                json!({
+                                    "message": format!(
+                                        "model {model} does not support reasoning effort {}",
+                                        Self::reasoning_label(Some(effort))
+                                    ),
+                                }),
+                            );
+                        }
+                        continue;
+                    }
+                    self.app_event_tx.send(AppEvent::UpdateModel(model.clone()));
+                    self.app_event_tx
+                        .send(AppEvent::UpdateReasoningEffort(effort));
+                    self.app_event_tx.send(AppEvent::PersistModelSelection {
+                        model: model.clone(),
+                        effort,
+                    });
+                    if let Some(remote_session) = &self.remote_session {
+                        remote_session.update_model_selection(&model, effort);
+                        remote_session.emit_named_event(
+                            "model_changed",
+                            json!({
+                                "model": model,
+                                "reasoningEffort": effort,
+                            }),
+                        );
+                    }
+                    return Ok(true);
                 }
                 RemoteCommandAction::Reset => {
                     let _ = self.remote_command_queue.pop_front();
@@ -1310,6 +1454,7 @@ impl App {
                 .chat_widget
                 .can_submit_user_message_now()
                 .then(|| RemoteCommandAction::UserMessage(content.clone())),
+            RemoteSessionCommand::Interrupt => Some(RemoteCommandAction::Interrupt),
             RemoteSessionCommand::Approve { id, kind, decision } => {
                 Some(RemoteCommandAction::Approve {
                     id: id.clone(),
@@ -1317,6 +1462,14 @@ impl App {
                     decision: decision.clone(),
                 })
             }
+            RemoteSessionCommand::ListModels => Some(RemoteCommandAction::ListModels),
+            RemoteSessionCommand::SetModel { model, effort } => self
+                .chat_widget
+                .can_switch_model_now()
+                .then(|| RemoteCommandAction::SetModel {
+                    model: model.clone(),
+                    effort: *effort,
+                }),
             RemoteSessionCommand::Reset => Some(RemoteCommandAction::Reset),
             RemoteSessionCommand::Stop => Some(RemoteCommandAction::Stop),
         }
@@ -4092,6 +4245,81 @@ mod tests {
             Some(RemoteCommandAction::UserMessage(
                 "queued from remote".to_string()
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_interrupt_becomes_dispatchable_when_turn_is_running() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.remote_command_queue
+            .push_back(RemoteSessionCommand::Interrupt);
+
+        app.chat_widget
+            .handle_codex_event(session_configured_event(thread_id));
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        });
+
+        assert_eq!(
+            app.next_remote_command_action(),
+            Some(RemoteCommandAction::Interrupt)
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_set_model_waits_until_session_is_idle() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        let thread_id = ThreadId::new();
+        app.remote_command_queue
+            .push_back(RemoteSessionCommand::SetModel {
+                model: "gpt-5".to_string(),
+                effort: Some(ReasoningEffortConfig::Medium),
+            });
+
+        app.chat_widget
+            .handle_codex_event(session_configured_event(thread_id));
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-started".to_string(),
+            msg: EventMsg::TurnStarted(TurnStartedEvent {
+                turn_id: "turn-1".to_string(),
+                model_context_window: None,
+                collaboration_mode_kind: ModeKind::Default,
+            }),
+        });
+        assert_eq!(app.next_remote_command_action(), None);
+
+        app.chat_widget.handle_codex_event(Event {
+            id: "turn-complete".to_string(),
+            msg: EventMsg::TurnComplete(TurnCompleteEvent {
+                turn_id: "turn-1".to_string(),
+                last_agent_message: None,
+            }),
+        });
+
+        assert_eq!(
+            app.next_remote_command_action(),
+            Some(RemoteCommandAction::SetModel {
+                model: "gpt-5".to_string(),
+                effort: Some(ReasoningEffortConfig::Medium),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_list_models_is_immediately_dispatchable() {
+        let (mut app, _app_event_rx, _op_rx) = make_test_app_with_channels().await;
+        app.remote_command_queue
+            .push_back(RemoteSessionCommand::ListModels);
+
+        assert_eq!(
+            app.next_remote_command_action(),
+            Some(RemoteCommandAction::ListModels)
         );
     }
 

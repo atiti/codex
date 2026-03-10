@@ -1,4 +1,5 @@
 use chrono::Utc;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -33,18 +34,25 @@ pub struct RemoteSessionMetadata {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum RemoteSessionCommand {
     UserMessage {
         content: String,
     },
+    Interrupt,
     Approve {
         id: String,
         #[serde(default)]
         kind: Option<String>,
         #[serde(default)]
         decision: Option<ReviewDecision>,
+    },
+    ListModels,
+    SetModel {
+        model: String,
+        #[serde(default)]
+        effort: Option<ReasoningEffort>,
     },
     Reset,
     Stop,
@@ -64,6 +72,8 @@ struct SharedState {
     socket_path: PathBuf,
     phase: String,
     recent_actions: VecDeque<String>,
+    current_model: Option<String>,
+    current_reasoning_effort: Option<ReasoningEffort>,
     next_seq: u64,
     clients: Vec<std::sync::mpsc::Sender<String>>,
     title_source: TitleSource,
@@ -132,6 +142,8 @@ impl RemoteSessionController {
                 socket_path,
                 phase: "idle".to_string(),
                 recent_actions: VecDeque::new(),
+                current_model: None,
+                current_reasoning_effort: None,
                 next_seq: 0,
                 clients: Vec::new(),
                 title_source,
@@ -251,6 +263,34 @@ impl RemoteSessionController {
         }
     }
 
+    pub(crate) fn emit_named_event(&self, event_name: &str, payload: serde_json::Value) {
+        #[cfg(unix)]
+        {
+            let Ok(mut state) = self.shared.lock() else {
+                return;
+            };
+            let line = encode_sequenced_event(&mut state, event_name, payload);
+            state
+                .clients
+                .retain(|client| client.send(line.clone()).is_ok());
+        }
+    }
+
+    pub(crate) fn update_model_selection(
+        &self,
+        model: &str,
+        reasoning_effort: Option<ReasoningEffort>,
+    ) {
+        #[cfg(unix)]
+        {
+            let Ok(mut state) = self.shared.lock() else {
+                return;
+            };
+            state.current_model = Some(model.to_string());
+            state.current_reasoning_effort = reasoning_effort;
+        }
+    }
+
     pub(crate) fn close(&self) {
         #[cfg(unix)]
         {
@@ -364,6 +404,8 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
     match &event.msg {
         EventMsg::SessionConfigured(session) => {
             state.metadata.cwd = session.cwd.clone();
+            state.current_model = Some(session.model.clone());
+            state.current_reasoning_effort = session.reasoning_effort;
             if let Some(name) = session
                 .thread_name
                 .as_deref()
@@ -380,6 +422,8 @@ fn encode_protocol_event(state: &mut SharedState, event: &Event) -> Option<Strin
                     "cwd": session.cwd,
                     "title": state.metadata.title,
                     "status": state.metadata.status,
+                    "currentModel": state.current_model,
+                    "currentReasoningEffort": state.current_reasoning_effort,
                 }),
             ))
         }
@@ -477,6 +521,8 @@ fn encode_snapshot(state: &SharedState) -> String {
             "status": state.metadata.status,
             "phase": state.phase,
             "recent_actions": state.recent_actions,
+            "currentModel": state.current_model,
+            "currentReasoningEffort": state.current_reasoning_effort,
         }),
     )
 }
@@ -629,16 +675,21 @@ fn process_exists(_pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::RemoteSessionMetadata;
+    use super::SharedState;
+    use super::TitleSource;
     use super::configure_client_stream;
+    use super::encode_snapshot;
     use super::list_remote_sessions;
     use super::select_exec_output;
     use super::select_session_title;
     use super::text_payload;
     use chrono::Utc;
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::ExecCommandEndEvent;
     use codex_protocol::protocol::ExecCommandSource;
     use codex_protocol::protocol::ExecCommandStatus;
     use pretty_assertions::assert_eq;
+    use std::collections::VecDeque;
     use std::fs;
     use std::os::fd::AsRawFd;
     use std::path::PathBuf;
@@ -713,6 +764,53 @@ mod tests {
         };
 
         assert_eq!(select_exec_output(&payload), "hello from aggregate");
+    }
+
+    #[test]
+    fn snapshot_includes_current_model_state() {
+        let metadata = RemoteSessionMetadata {
+            session_id: "dead".to_string(),
+            cwd: PathBuf::from("/tmp/project"),
+            title: "test".to_string(),
+            status: "running".to_string(),
+            pid: 123,
+            created_at: Utc::now().to_rfc3339(),
+        };
+        let snapshot = encode_snapshot(&SharedState {
+            metadata,
+            metadata_path: PathBuf::from("/tmp/project.json"),
+            socket_path: PathBuf::from("/tmp/project.sock"),
+            phase: "idle".to_string(),
+            recent_actions: VecDeque::new(),
+            current_model: Some("gpt-5.2-codex".to_string()),
+            current_reasoning_effort: Some(ReasoningEffort::Medium),
+            next_seq: 0,
+            clients: Vec::new(),
+            title_source: TitleSource::Fallback,
+        });
+
+        let payload: serde_json::Value = serde_json::from_str(&snapshot).expect("parse snapshot");
+        assert_eq!(payload["currentModel"], "gpt-5.2-codex");
+        assert_eq!(payload["currentReasoningEffort"], "medium");
+    }
+
+    #[test]
+    fn remote_command_deserializes_interrupt_and_set_model() {
+        let interrupt: super::RemoteSessionCommand =
+            serde_json::from_str(r#"{"type":"interrupt"}"#).expect("interrupt command");
+        assert_eq!(interrupt, super::RemoteSessionCommand::Interrupt);
+
+        let set_model: super::RemoteSessionCommand = serde_json::from_str(
+            r#"{"type":"set_model","model":"gpt-5.2-codex","effort":"medium"}"#,
+        )
+        .expect("set model command");
+        assert_eq!(
+            set_model,
+            super::RemoteSessionCommand::SetModel {
+                model: "gpt-5.2-codex".to_string(),
+                effort: Some(ReasoningEffort::Medium),
+            }
+        );
     }
 
     #[cfg(unix)]

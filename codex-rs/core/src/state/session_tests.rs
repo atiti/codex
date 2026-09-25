@@ -113,6 +113,19 @@ async fn set_rate_limits_defaults_limit_id_to_codex_when_missing() {
 }
 
 #[tokio::test]
+async fn capacity_snapshot_retains_authoritative_subscription_lock_across_sparse_updates() {
+    let session_configuration = make_session_configuration_for_tests().await;
+    let mut state = SessionState::new(session_configuration);
+
+    state.set_ordinary_usage_allowed(Some(false));
+    // A sparse subsequent poll must not turn a known blocked subscription into an
+    // implicit healthy state before the app-server reports an authoritative recovery.
+    state.set_ordinary_usage_allowed(None);
+
+    assert_eq!(state.capacity_snapshot().1, Some(false));
+}
+
+#[tokio::test]
 async fn replace_history_clears_auto_compact_window_prefill() {
     let session_configuration = make_session_configuration_for_tests().await;
     let mut state = SessionState::new(session_configuration);

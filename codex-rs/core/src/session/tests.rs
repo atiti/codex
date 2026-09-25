@@ -5587,6 +5587,7 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
             /*world_state_baseline*/ None,
             CompactedHistoryMetadata {
                 message: "summary".to_string(),
+                model_provider_id: turn_context.model_provider_id(),
                 window_number,
                 window_ids,
                 compaction_response_id: None,
@@ -5825,6 +5826,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
                 with_baselines.then_some(Arc::clone(&world_state)),
                 CompactedHistoryMetadata {
                     message: String::new(),
+                    model_provider_id: turn_context.model_provider_id(),
                     window_number,
                     window_ids,
                     compaction_response_id: None,

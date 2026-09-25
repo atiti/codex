@@ -194,6 +194,8 @@ fn model_provider_from_proto(
         requires_openai_auth: provider.requires_openai_auth,
         supports_websockets: provider.supports_websockets,
         supports_standalone_web_search: provider.supports_standalone_web_search,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
     Ok((id, info))
 }
@@ -224,6 +226,8 @@ fn model_provider_to_proto(
         requires_openai_auth,
         supports_websockets,
         supports_standalone_web_search,
+        tool_compatibility: _,
+        approval_review_model: _,
     } = provider;
 
     proto::ModelProvider {
@@ -578,6 +582,8 @@ mod tests {
             supports_websockets: true,
             supports_standalone_web_search: true,
             gateway_oauth: None,
+            tool_compatibility: None,
+            approval_review_model: None,
             aws: None,
         }
     }

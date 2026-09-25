@@ -2666,6 +2666,8 @@ fn websocket_provider_with_connect_timeout(
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     }
 }
 

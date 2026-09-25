@@ -5587,7 +5587,6 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
             /*world_state_baseline*/ None,
             CompactedHistoryMetadata {
                 message: "summary".to_string(),
-                model_provider_id: turn_context.model_provider_id(),
                 window_number,
                 window_ids,
                 compaction_response_id: None,
@@ -5722,6 +5721,7 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
             /*world_state_baseline*/ None,
             CompactedHistoryMetadata {
                 message: "summary".to_string(),
+                model_provider_id: turn_context.model_provider_id(),
                 window_number,
                 window_ids,
                 compaction_response_id: None,

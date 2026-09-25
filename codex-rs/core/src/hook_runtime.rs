@@ -888,10 +888,7 @@ pub(crate) async fn inspect_pending_input(
             .model_provider
             .clone()
             .unwrap_or_else(|| turn_context.model_provider_id());
-        let requested_reasoning_effort = outcome
-            .reasoning_effort
-            .as_ref()
-            .map(ToString::to_string);
+        let requested_reasoning_effort = outcome.reasoning_effort.as_ref().map(ToString::to_string);
         let route_notice = outcome.route_message.take().or_else(|| {
             outcome.model.as_ref().map(|model| {
                 let effort = outcome
@@ -924,13 +921,15 @@ pub(crate) async fn inspect_pending_input(
                     // its per-turn status bar; the model never receives it as prompt context.
                     emit_agentroute_route_notice(sess, turn_context, message).await;
                 }
-                turn_context.extension_data.insert(AgentRouteApplicationReceipt {
-                    status: "applied".to_string(),
-                    requested_model,
-                    requested_provider,
-                    requested_reasoning_effort,
-                    reason: None,
-                });
+                turn_context
+                    .extension_data
+                    .insert(AgentRouteApplicationReceipt {
+                        status: "applied".to_string(),
+                        requested_model,
+                        requested_provider,
+                        requested_reasoning_effort,
+                        reason: None,
+                    });
             }
             TurnSettingsUpdateOutcome::TargetUnavailable => {
                 emit_agentroute_route_notice(
@@ -941,13 +940,15 @@ pub(crate) async fn inspect_pending_input(
                     ),
                 )
                 .await;
-                turn_context.extension_data.insert(AgentRouteApplicationReceipt {
-                    status: "target_unavailable".to_string(),
-                    requested_model,
-                    requested_provider,
-                    requested_reasoning_effort,
-                    reason: Some("active turn unavailable".to_string()),
-                });
+                turn_context
+                    .extension_data
+                    .insert(AgentRouteApplicationReceipt {
+                        status: "target_unavailable".to_string(),
+                        requested_model,
+                        requested_provider,
+                        requested_reasoning_effort,
+                        reason: Some("active turn unavailable".to_string()),
+                    });
             }
             TurnSettingsUpdateOutcome::Rejected { reason } => {
                 emit_agentroute_route_notice(
@@ -958,13 +959,15 @@ pub(crate) async fn inspect_pending_input(
                     ),
                 )
                 .await;
-                turn_context.extension_data.insert(AgentRouteApplicationReceipt {
-                    status: "rejected".to_string(),
-                    requested_model,
-                    requested_provider,
-                    requested_reasoning_effort,
-                    reason: Some(reason),
-                });
+                turn_context
+                    .extension_data
+                    .insert(AgentRouteApplicationReceipt {
+                        status: "rejected".to_string(),
+                        requested_model,
+                        requested_provider,
+                        requested_reasoning_effort,
+                        reason: Some(reason),
+                    });
             }
         }
     }
@@ -991,7 +994,8 @@ async fn emit_agentroute_route_notice(
         content: Vec::new(),
         ..agent_message.clone()
     });
-    sess.emit_turn_item_started(turn_context, &started_item).await;
+    sess.emit_turn_item_started(turn_context, &started_item)
+        .await;
     sess.send_event(
         turn_context,
         EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {

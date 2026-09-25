@@ -711,8 +711,10 @@ impl ChatWidget {
     /// git metadata.
     pub(super) fn status_line_value(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
-            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
-            StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
+            StatusLineItem::ModelName => Some(self.model_with_provider_display_name()),
+            StatusLineItem::ModelWithReasoning => {
+                Some(self.model_with_reasoning_and_provider_display_name())
+            }
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
@@ -964,8 +966,45 @@ impl ChatWidget {
     }
 
     fn reasoning_display_name(&self) -> String {
-        let effort = self.effective_reasoning_effort();
+        let effort = self
+            .routed_turn_reasoning_effort
+            .clone()
+            .or_else(|| self.effective_reasoning_effort());
         Self::status_line_reasoning_effort_label(effort.as_ref())
+    }
+
+    fn model_provider_display_name(&self) -> &str {
+        self.routed_turn_model_provider
+            .as_deref()
+            .unwrap_or(self.config.model_provider_id.as_str())
+    }
+
+    fn model_with_provider_display_name(&self) -> String {
+        format!(
+            "{} · {}",
+            self.model_display_name(),
+            self.model_provider_display_name()
+        )
+    }
+
+    fn model_with_reasoning_and_provider_display_name(&self) -> String {
+        let label = self.reasoning_display_name();
+        let service_tier_label = self
+            .current_service_tier()
+            .and_then(|service_tier| {
+                self.current_model_service_tier_commands()
+                    .into_iter()
+                    .find(|tier| tier.id == service_tier)
+                    .map(|tier| tier.name)
+            })
+            .filter(|_| self.has_chatgpt_account)
+            .map(|tier| format!(" {tier}"))
+            .unwrap_or_default();
+        format!(
+            "{} · {} · {label}{service_tier_label}",
+            self.model_display_name(),
+            self.model_provider_display_name()
+        )
     }
 
     fn model_with_reasoning_display_name(&self) -> String {

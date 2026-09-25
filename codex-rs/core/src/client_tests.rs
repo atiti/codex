@@ -8,6 +8,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::normalize_response_items_for_provider;
 use crate::AttestationContext;
 use crate::AttestationProvider;
 use crate::GenerateAttestationFuture;
@@ -36,10 +37,12 @@ use codex_model_provider::SharedModelProvider;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::CHATGPT_CODEX_BASE_URL;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::create_oss_provider_with_base_url;
 use codex_models_manager::manager::SharedModelsManager;
 use codex_otel::SessionTelemetry;
+use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::auth::AuthMode;
 use codex_protocol::error::CodexErr;
@@ -47,6 +50,7 @@ use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::mcp::McpAttribution;
 use codex_protocol::mcp::McpAttributionSource;
 use codex_protocol::mcp::McpAttributionStatus;
+use codex_protocol::models::AgentMessageInputContent;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ExecutedToolCall;
@@ -74,6 +78,7 @@ use futures::StreamExt;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::collections::HashSet;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::pin::Pin;
@@ -83,6 +88,215 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::task::Context;
 use std::task::Poll;
+
+#[test]
+fn compaction_survives_same_provider_but_not_provider_or_account_switch() {
+    let azure = ModelProviderInfo {
+        name: "azure".to_string(),
+        base_url: Some("https://resource.openai.azure.com/openai/v1".to_string()),
+        ..Default::default()
+    };
+    let mut restricted = azure.clone();
+    restricted.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    let openai = ModelProviderInfo::create_openai_provider(None);
+    for provider in [azure, restricted, openai] {
+        for checkpoint in [
+            ResponseItem::Compaction {
+                id: Some(ResponseItemId::with_suffix("cmp", "checkpoint")),
+                encrypted_content: "same-provider-memory".to_string(),
+                internal_chat_message_metadata_passthrough: None,
+            },
+            ResponseItem::ContextCompaction {
+                id: Some(ResponseItemId::with_suffix("cmp", "checkpoint")),
+                encrypted_content: Some("same-provider-memory".to_string()),
+                internal_chat_message_metadata_passthrough: None,
+            },
+        ] {
+            // Also cover tool continuations after a mixed-provider turn: a new
+            // destination checkpoint must survive even while old state is stripped.
+            for mixed_history in [false, true] {
+                let mut input = vec![checkpoint.clone()];
+                normalize_response_items_for_provider(
+                    &mut input,
+                    &provider,
+                    &HashSet::new(),
+                    mixed_history,
+                );
+                // Websocket continuation preparation also normalizes its delta.
+                normalize_response_items_for_provider(
+                    &mut input,
+                    &provider,
+                    &HashSet::new(),
+                    mixed_history,
+                );
+                assert_eq!(input.len(), 1);
+                input[0].set_id(None);
+                let mut expected = checkpoint.clone();
+                expected.set_id(None);
+                assert_eq!(input, vec![expected]);
+            }
+            // Provider/profile switches mark the prior checkpoint as foreign.
+            let mut input = vec![checkpoint.clone()];
+            let foreign = HashSet::from([checkpoint.id().unwrap().clone()]);
+            normalize_response_items_for_provider(&mut input, &provider, &foreign, true);
+            assert!(input.is_empty());
+
+            let mut unattributed = checkpoint;
+            unattributed.set_id(None);
+            let mut input = vec![unattributed.clone()];
+            normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+            assert_eq!(input, vec![unattributed.clone()]);
+            let mut input = vec![unattributed];
+            normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), true);
+            assert!(input.is_empty());
+        }
+    }
+}
+
+#[test]
+fn final_request_boundary_drops_third_party_encrypted_state() {
+    let provider = ModelProviderInfo {
+        name: "compatible-cloud".to_string(),
+        base_url: Some("https://example.invalid/v1".to_string()),
+        ..Default::default()
+    };
+    let function_call = ResponseItem::FunctionCall {
+        id: Some(ResponseItemId::with_suffix("fc", "portable")),
+        name: "lookup".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        encrypted_function_args: Some(vec!["provider-bound".to_string()]),
+        call_id: "call-portable".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut input = vec![
+        ResponseItem::Reasoning {
+            id: Some(ResponseItemId::with_suffix("rs", "foreign")),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("provider-bound".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        function_call.clone(),
+    ];
+
+    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+
+    let mut expected = function_call;
+    expected.set_id(None);
+    if let ResponseItem::FunctionCall {
+        encrypted_function_args,
+        ..
+    } = &mut expected
+    {
+        *encrypted_function_args = None;
+    }
+    assert_eq!(input, vec![expected]);
+}
+
+#[test]
+fn restricted_provider_downgrades_plaintext_agent_message_to_user_message() {
+    let mut provider = ModelProviderInfo::default();
+    provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    let mut input = vec![ResponseItem::AgentMessage {
+        id: Some(ResponseItemId::with_suffix("amsg", "portable")),
+        author: "/root".to_string(),
+        recipient: "/root/deepseek_smoke".to_string(),
+        content: vec![AgentMessageInputContent::InputText {
+            text: "Reply with exactly: deepseek child ok".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+
+    assert_eq!(
+        input,
+        vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Reply with exactly: deepseek child ok".to_string(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
+}
+
+#[test]
+fn restricted_provider_drops_encrypted_agent_message() {
+    let mut provider = ModelProviderInfo::default();
+    provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    let mut input = vec![ResponseItem::AgentMessage {
+        id: Some(ResponseItemId::with_suffix("amsg", "native")),
+        author: "/root".to_string(),
+        recipient: "/root/worker".to_string(),
+        content: vec![AgentMessageInputContent::EncryptedContent {
+            encrypted_content: "provider-owned".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+
+    assert!(input.is_empty());
+}
+
+#[test]
+fn mixed_provider_history_drops_encrypted_state_even_for_openai_destination() {
+    let provider =
+        ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));
+    let mut input = vec![ResponseItem::Reasoning {
+        id: Some(ResponseItemId::with_suffix("rs", "foreign")),
+        summary: Vec::new(),
+        content: None,
+        encrypted_content: Some("provider-bound".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    let foreign_ids = HashSet::from([ResponseItemId::with_suffix("rs", "foreign")]);
+    normalize_response_items_for_provider(&mut input, &provider, &foreign_ids, true);
+
+    assert!(input.is_empty());
+}
+
+#[test]
+fn mixed_provider_history_preserves_destination_reasoning_across_tool_continuations() {
+    let provider = ModelProviderInfo {
+        name: "compatible-cloud".to_string(),
+        base_url: Some("https://example.invalid/v1".to_string()),
+        ..Default::default()
+    };
+    let foreign_id = ResponseItemId::with_suffix("rs", "foreign");
+    let destination_id = ResponseItemId::from_server("encitem_destination".to_string());
+    let destination_reasoning = ResponseItem::Reasoning {
+        id: Some(destination_id),
+        summary: Vec::new(),
+        content: None,
+        encrypted_content: Some("destination-owned".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut input = vec![
+        ResponseItem::Reasoning {
+            id: Some(foreign_id.clone()),
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("foreign".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        },
+        destination_reasoning.clone(),
+    ];
+
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::from([foreign_id]),
+        true,
+    );
+
+    assert_eq!(input, vec![destination_reasoning]);
+}
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::sync::Notify;

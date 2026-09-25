@@ -1,3 +1,4 @@
+use crate::config::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE;
 use crate::function_tool::FunctionCallError;
 use crate::responses_metadata::TurnToolNamespacesInfo;
 use crate::session::session::Session;
@@ -43,7 +44,11 @@ pub struct ToolCall {
 
 impl ToolCall {
     pub(crate) fn direct_source(&self) -> ToolCallSource {
-        if self.tool_name.namespace.as_deref() == Some("collaboration")
+        if self
+            .tool_name
+            .namespace
+            .as_deref()
+            .is_some_and(|namespace| namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE)
             && matches!(
                 self.tool_name.name.as_str(),
                 "spawn_agent" | "send_message" | "followup_task"
@@ -51,7 +56,7 @@ impl ToolCall {
             && self
                 .encrypted_function_args
                 .as_ref()
-                .is_some_and(Vec::is_empty)
+                .is_none_or(Vec::is_empty)
         {
             ToolCallSource::DirectPlaintextMessage
         } else {

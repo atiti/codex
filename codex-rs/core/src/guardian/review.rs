@@ -36,6 +36,7 @@ use super::GUARDIAN_REVIEWER_NAME;
 use super::GuardianApprovalRequest;
 use super::GuardianAssessmentOutcome;
 use super::GuardianReviewContext;
+use super::GuardianReviewerIdentity;
 use super::approval_request::format_guardian_action_pretty;
 use super::approval_request::guardian_assessment_action;
 use super::approval_request::guardian_request_target_item_id;
@@ -142,8 +143,12 @@ pub(super) async fn guardian_review_session_config(
         .get::<codex_guardian_reviewer::ReviewerConfig<crate::config::Config>>()
         .ok_or_else(|| anyhow::anyhow!("Guardian reviewer configuration is not installed"))?;
     let model_messages = ResolvedModelMessages::from_model(&guardian_model_info);
+    let provider = turn.model_provider();
+    let mut routed_parent_config = turn.config.as_ref().clone();
+    routed_parent_config.model_provider_id = turn.model_provider_id();
+    routed_parent_config.model_provider = provider.info().clone();
     let mut spawn_config = build_guardian_review_session_config(
-        (reviewer_config.0)(turn.config.as_ref())?,
+        (reviewer_config.0)(&routed_parent_config)?,
         live_network_config,
         review_model.model.as_str(),
         review_model.reasoning_effort.clone(),
@@ -151,6 +156,23 @@ pub(super) async fn guardian_review_session_config(
         context.personality,
         model_messages,
     )?;
+    if provider.info().tool_compatibility.is_some() {
+        // Provider-compatible reviewers keep the same read-only Guardian authority, but expose
+        // those tools as ordinary functions. Do not let an inherited Code Mode feature rebuild
+        // the `exec` custom tool after startup model compatibility has selected direct mode.
+        for feature in [
+            Feature::CodeMode,
+            Feature::CodeModeOnly,
+            Feature::CodeModeHost,
+        ] {
+            spawn_config.features.disable(feature).map_err(|error| {
+                anyhow::anyhow!(
+                    "guardian review session could not disable incompatible `{}`: {error}",
+                    feature.key()
+                )
+            })?;
+        }
+    }
     if context.model_info.computer_use_review_required() {
         spawn_config
             .features
@@ -189,6 +211,7 @@ pub(super) async fn guardian_review_session_config(
 async fn run_guardian_review_session_before_deadline(
     session: Arc<Session>,
     context: GuardianReviewContext,
+    reviewer: GuardianReviewerIdentity,
     request: GuardianApprovalRequest,
     reasons: ApprovalRequestReasons,
     schema: serde_json::Value,
@@ -218,6 +241,8 @@ async fn run_guardian_review_session_before_deadline(
             GuardianReviewSessionParams {
                 parent_session: Arc::clone(&session),
                 parent_context: context.clone(),
+                reviewer_profile_name: reviewer.name,
+                reviewer_auth_manager: reviewer.auth_manager,
                 parent_history: session.clone_history().await,
                 spawn_config: session_config.spawn_config,
                 node_repl_policy: session_config.node_repl_policy,
@@ -276,6 +301,14 @@ async fn run_guardian_review_session_with_retry_before_deadline(
         run_guardian_review_session_before_deadline(
             Arc::clone(&session),
             context.clone(),
+            GuardianReviewerIdentity {
+                name: None,
+                auth_manager: context
+                    .turn()
+                    .model_provider()
+                    .auth_manager()
+                    .or_else(|| Some(Arc::clone(&session.services.auth_manager))),
+            },
             request.clone(),
             reasons.clone(),
             schema.clone(),

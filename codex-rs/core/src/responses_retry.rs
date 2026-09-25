@@ -72,7 +72,7 @@ pub(crate) async fn handle_response_stream_error(
         && matches!(request, ResponsesStreamRequest::Sampling)
         && matches!(err.details(), CodexErrorDetails::ConnectionFailed(_))
         && !turn_context.session_source.is_internal()
-        && !turn_context.provider.info().is_amazon_bedrock()
+        && !turn_context.model_provider().info().is_amazon_bedrock()
     {
         let retry_delay = retry_state.connection_retry_delay;
         warn!(

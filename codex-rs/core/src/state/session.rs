@@ -76,6 +76,9 @@ pub(crate) struct SessionState {
     /// Cancels work bound to discarded history or a superseded Guardian evidence policy.
     pub(crate) history_reset: CancellationToken,
     pub(crate) latest_rate_limits: Option<RateLimitSnapshot>,
+    /// Latest authoritative permission returned by `account/rateLimits/read` for this login.
+    /// Sparse response headers must not silently clear a known blocked state.
+    pub(crate) ordinary_usage_allowed: Option<bool>,
     pub(crate) latest_token_usage_record: Option<TokenUsageRecord>,
     pub(crate) server_reasoning_included: bool,
     pub(crate) mcp_dependency_prompted: HashSet<String>,
@@ -125,6 +128,7 @@ impl SessionState {
             history,
             history_reset: CancellationToken::new(),
             latest_rate_limits: None,
+            ordinary_usage_allowed: None,
             latest_token_usage_record: None,
             server_reasoning_included: false,
             mcp_dependency_prompted: HashSet::new(),
@@ -342,10 +346,20 @@ impl SessionState {
         ));
     }
 
+    pub(crate) fn set_ordinary_usage_allowed(&mut self, allowed: Option<bool>) {
+        if allowed.is_some() {
+            self.ordinary_usage_allowed = allowed;
+        }
+    }
+
     pub(crate) fn token_info_and_rate_limits(
         &self,
     ) -> (Option<TokenUsageInfo>, Option<RateLimitSnapshot>) {
         (self.token_info(), self.latest_rate_limits.clone())
+    }
+
+    pub(crate) fn capacity_snapshot(&self) -> (Option<RateLimitSnapshot>, Option<bool>) {
+        (self.latest_rate_limits.clone(), self.ordinary_usage_allowed)
     }
 
     pub(crate) fn set_token_usage_full(&mut self, context_window: i64) {

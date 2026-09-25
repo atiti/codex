@@ -26,6 +26,7 @@
 //! fails, normal stream retry/fallback logic handles recovery on the same turn.
 
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -84,6 +85,7 @@ use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AuthRecoveryEvent;
@@ -145,6 +147,7 @@ use codex_model_provider::create_model_provider;
 #[cfg(test)]
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::WireApi;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
@@ -198,7 +201,7 @@ fn session_telemetry_for_request(
 struct ModelClientState {
     thread_id: ThreadId,
     provider: SharedModelProvider,
-    workspace_routing: WorkspaceRoutingContext,
+    workspace_routing: Arc<WorkspaceRoutingContext>,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     originator: String,
@@ -296,6 +299,8 @@ pub struct ModelClientSession {
     /// appends, or continuation requests), and must not send it between different turns.
     /// An auth ownership change clears it so the new owner gets fresh routing state.
     turn_state: Arc<OnceLock<String>>,
+    foreign_provider_state_ids: HashSet<ResponseItemId>,
+    strip_unattributed_provider_state: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -322,6 +327,147 @@ struct WebsocketSession {
     last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
     continuation_reset_reason: Option<&'static str>,
+}
+
+/// Remove provider-owned state at the final shared request boundary.
+///
+/// Every Responses caller passes through this path, including ordinary turns,
+/// reviews, compaction, and retries. Keeping this normalization here prevents
+/// secondary model paths from replaying ciphertext owned by another provider.
+pub(crate) fn normalize_response_items_for_provider(
+    input: &mut Vec<ResponseItem>,
+    provider: &ModelProviderInfo,
+    foreign_provider_state_ids: &HashSet<ResponseItemId>,
+    strip_unattributed_provider_state: bool,
+) {
+    if !foreign_provider_state_ids.is_empty() || strip_unattributed_provider_state {
+        input.retain(|item| {
+            let foreign = item
+                .id()
+                .is_some_and(|id| foreign_provider_state_ids.contains(id));
+            let unattributed = item.id().is_none() && strip_unattributed_provider_state;
+            !(foreign || unattributed)
+                || !matches!(
+                    item,
+                    ResponseItem::Reasoning { .. }
+                        | ResponseItem::Compaction { .. }
+                        | ResponseItem::ContextCompaction { .. }
+                )
+        });
+        for item in input.iter_mut() {
+            let foreign = item
+                .id()
+                .is_some_and(|id| foreign_provider_state_ids.contains(id));
+            if foreign {
+                if let ResponseItem::FunctionCall {
+                    encrypted_function_args,
+                    ..
+                } = item
+                {
+                    *encrypted_function_args = None;
+                }
+                item.set_id(None);
+            }
+        }
+    }
+    match provider.tool_compatibility {
+        Some(ToolCompatibility::FunctionsAndApplyPatch) => {
+            for item in input.iter_mut() {
+                let ResponseItem::AgentMessage { content, .. } = item else {
+                    continue;
+                };
+                let Some(text) = plaintext_agent_message_content(content) else {
+                    continue;
+                };
+                *item = ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![codex_protocol::models::ContentItem::InputText { text }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                };
+            }
+            let unsupported_custom_calls = input
+                .iter()
+                .filter_map(|item| match item {
+                    ResponseItem::CustomToolCall { call_id, name, .. } if name != "apply_patch" => {
+                        Some(call_id.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            input.retain(|item| match item {
+                ResponseItem::Reasoning { .. }
+                | ResponseItem::AdditionalTools { .. }
+                | ResponseItem::LocalShellCall { .. }
+                | ResponseItem::ToolSearchCall { .. }
+                | ResponseItem::ToolSearchOutput { .. }
+                | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::ImageGenerationCall { .. }
+                | ResponseItem::AgentMessage { .. } => false,
+                ResponseItem::CustomToolCall { name, .. } => name == "apply_patch",
+                ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                    !unsupported_custom_calls.contains(call_id)
+                }
+                _ => true,
+            });
+            for item in input.iter_mut() {
+                if !matches!(
+                    item,
+                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+                ) {
+                    item.set_id(None);
+                }
+            }
+        }
+        None if provider.is_openai() => {
+            input.retain(|item| match item {
+                ResponseItem::Reasoning { id, content, .. } => {
+                    id.as_ref()
+                        .is_some_and(|id| id.starts_with("rs_") || id.starts_with("encitem_"))
+                        && content.as_ref().is_none_or(Vec::is_empty)
+                }
+                _ => true,
+            });
+            for item in input.iter_mut() {
+                if item.id().is_some_and(|id| !id.is_prefixed()) {
+                    item.set_id(None);
+                }
+            }
+        }
+        None => {
+            input.retain(|item| match item {
+                ResponseItem::Reasoning { id, content, .. } => {
+                    id.as_ref().is_some_and(|id| id.starts_with("encitem_"))
+                        && content.as_ref().is_none_or(Vec::is_empty)
+                }
+                // Same-provider compaction is the surviving conversation memory.
+                // Foreign/unattributed ciphertext was filtered above, before IDs
+                // are normalized. Tool compatibility is not an ownership boundary.
+                _ => true,
+            });
+            for item in input.iter_mut() {
+                if let ResponseItem::FunctionCall {
+                    encrypted_function_args,
+                    ..
+                } = item
+                {
+                    *encrypted_function_args = None;
+                }
+                let preserve_affinity_id = matches!(
+                    item,
+                    ResponseItem::Reasoning { id: Some(id), .. }
+                        if id.starts_with("encitem_")
+                ) || matches!(
+                    item,
+                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+                );
+                if !preserve_affinity_id {
+                    item.set_id(None);
+                }
+            }
+        }
+    }
 }
 
 // This is intentionally not a `PartialEq` implementation: request equality includes `input` and
@@ -519,7 +665,7 @@ impl ModelClient {
             state: Arc::new(ModelClientState {
                 thread_id,
                 provider: model_provider,
-                workspace_routing,
+                workspace_routing: Arc::new(workspace_routing),
                 auth_env_telemetry,
                 session_source,
                 originator,
@@ -608,7 +754,64 @@ impl ModelClient {
             client: self.clone(),
             websocket_session,
             turn_state: Arc::new(OnceLock::new()),
+            foreign_provider_state_ids: HashSet::new(),
+            strip_unattributed_provider_state: false,
         }
+    }
+
+    /// Creates a turn-scoped client session for a provider selected after the
+    /// Codex thread was started. Provider-specific websocket, sticky-routing,
+    /// authentication fallback, and incremental request state start empty.
+    pub fn new_session_for_provider(&self, provider: SharedModelProvider) -> ModelClientSession {
+        let codex_api_key_env_enabled = provider
+            .auth_manager()
+            .as_ref()
+            .is_some_and(|manager| manager.codex_api_key_env_enabled());
+        let auth_env_telemetry =
+            collect_auth_env_telemetry(provider.info(), codex_api_key_env_enabled);
+        let include_attestation = provider.supports_attestation();
+        let client = Self {
+            state: Arc::new(ModelClientState {
+                thread_id: self.state.thread_id,
+                provider,
+                workspace_routing: self.state.workspace_routing.clone(),
+                auth_env_telemetry,
+                session_source: self.state.session_source.clone(),
+                originator: self.state.originator.clone(),
+                model_verbosity: self.state.model_verbosity,
+                content_item_kinds_enabled: self.state.content_item_kinds_enabled,
+                reasoning_effort_override_enabled: self.state.reasoning_effort_override_enabled,
+                enable_request_compression: self.state.enable_request_compression,
+                include_timing_metrics: self.state.include_timing_metrics,
+                beta_features_header: self.state.beta_features_header.clone(),
+                concurrent_reasoning_summaries_enabled: self
+                    .state
+                    .concurrent_reasoning_summaries_enabled,
+                include_attestation,
+                attestation_provider: self.state.attestation_provider.clone(),
+                disable_websockets: AtomicBool::new(false),
+                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
+                cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+            }),
+            agent_identity_policy: self.agent_identity_policy,
+            prompt_cache_key_override: self.prompt_cache_key_override.clone(),
+            codex_responses_headers: self.codex_responses_headers.clone(),
+            event_sender: self.event_sender.clone(),
+            http_client_factory: self.http_client_factory.clone(),
+            restored_history: self.restored_history,
+        };
+        client.new_session()
+    }
+
+    pub fn new_session_for_mixed_provider_history(
+        &self,
+        provider: SharedModelProvider,
+        foreign_provider_state_ids: HashSet<ResponseItemId>,
+    ) -> ModelClientSession {
+        let mut session = self.new_session_for_provider(provider);
+        session.foreign_provider_state_ids = foreign_provider_state_ids;
+        session.strip_unattributed_provider_state = true;
+        session
     }
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -1003,7 +1206,18 @@ impl ModelClient {
         Ok(request)
     }
 
-    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
+    fn prepare_response_items_for_request(
+        &self,
+        input: &mut Vec<ResponseItem>,
+        foreign_provider_state_ids: &HashSet<ResponseItemId>,
+        strip_unattributed_provider_state: bool,
+    ) {
+        normalize_response_items_for_provider(
+            input,
+            self.state.provider.info(),
+            foreign_provider_state_ids,
+            strip_unattributed_provider_state,
+        );
         for item in input {
             if item.id().is_some_and(|id| !id.is_prefixed()) {
                 item.set_id(/*new_id*/ None);
@@ -1695,8 +1909,11 @@ impl ModelClientSession {
                 client_setup.auth.as_ref(),
                 prompt.cyber_access_program,
             );
-            self.client
-                .prepare_response_items_for_request(&mut request.input);
+            self.client.prepare_response_items_for_request(
+                &mut request.input,
+                &self.foreign_provider_state_ids,
+                self.strip_unattributed_provider_state,
+            );
             if crate::guardian::is_basic_session_source(&self.client.state.session_source) {
                 crate::guardian::observe_guardian_request(session_telemetry, &request);
             }
@@ -1908,6 +2125,11 @@ impl ModelClientSession {
             if let Some(turn_state) = self.turn_state.get() {
                 client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
             }
+            self.client.prepare_response_items_for_request(
+                &mut request.input,
+                &self.foreign_provider_state_ids,
+                self.strip_unattributed_provider_state,
+            );
             let continuation = self.prepare_websocket_request(&request);
             let (mode, reason) = if continuation.is_some() {
                 ("incremental", "incremental")
@@ -1946,20 +2168,13 @@ impl ModelClientSession {
                 Some(continuation) => (Some(continuation.response_id), Some(continuation.items)),
                 None => (None, None),
             };
-            let original_item_ids = if let Some(incremental_items) = &mut incremental_items {
-                self.client
-                    .prepare_response_items_for_request(incremental_items);
-                None
-            } else {
-                let original_item_ids = request
-                    .input
-                    .iter()
-                    .map(|item| item.id().cloned())
-                    .collect::<Vec<_>>();
-                self.client
-                    .prepare_response_items_for_request(&mut request.input);
-                Some(original_item_ids)
-            };
+            if let Some(incremental_items) = &mut incremental_items {
+                self.client.prepare_response_items_for_request(
+                    incremental_items,
+                    &self.foreign_provider_state_ids,
+                    self.strip_unattributed_provider_state,
+                );
+            }
             let mut ws_payload = ResponseCreateWsRequest {
                 previous_response_id,
                 input: incremental_items.as_deref().unwrap_or(&request.input),
@@ -2004,11 +2219,6 @@ impl ModelClientSession {
                     Some(Arc::clone(&self.turn_state)),
                 )
                 .await;
-            if let Some(original_item_ids) = original_item_ids {
-                for (item, original_item_id) in request.input.iter_mut().zip(original_item_ids) {
-                    item.set_id(original_item_id);
-                }
-            }
             self.websocket_session.last_request = Some(request);
             self.websocket_session.last_response_from_untraced_warmup = warmup;
             let stream_result = stream_result.map_err(|err| {

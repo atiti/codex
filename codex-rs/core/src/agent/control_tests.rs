@@ -1092,7 +1092,7 @@ async fn check_v2_agent_reload(route: V2ReloadRoute) {
                 .session
                 .new_default_turn()
                 .await
-                .provider
+                .model_provider()
                 .info()
                 .clone(),
         ),
@@ -2583,6 +2583,7 @@ async fn spawn_agent_fork_strips_parent_usage_hints_from_compacted_history(
         max_concurrency: 2,
         wait_agent_enabled: false,
         expose_model_overrides: false,
+        tool_namespace: None,
     };
     let parent_task = InterAgentCommunication::new(
         AgentPath::root(),

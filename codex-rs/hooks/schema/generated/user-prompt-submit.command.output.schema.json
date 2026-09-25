@@ -13,6 +13,22 @@
       "minLength": 1,
       "type": "string"
     },
+    "ReviewerFallbackProfileWire": {
+      "additionalProperties": false,
+      "properties": {
+        "codexHome": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "codexHome",
+        "name"
+      ],
+      "type": "object"
+    },
     "UserPromptSubmitHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
@@ -43,6 +59,17 @@
             }
           ],
           "default": null
+        },
+        "reviewerFallbackProfiles": {
+          "default": [],
+          "items": {
+            "$ref": "#/definitions/ReviewerFallbackProfileWire"
+          },
+          "type": "array"
+        },
+        "reviewerProfileName": {
+          "default": null,
+          "type": "string"
         },
         "routeMessage": {
           "default": null,

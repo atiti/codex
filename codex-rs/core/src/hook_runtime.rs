@@ -96,6 +96,15 @@ pub(crate) struct HookRuntimeOutcome {
     pub settings_updated: bool,
 }
 
+#[derive(Clone, Debug)]
+struct AgentRouteApplicationReceipt {
+    status: String,
+    requested_model: String,
+    requested_provider: String,
+    requested_reasoning_effort: Option<String>,
+    reason: Option<String>,
+}
+
 pub(crate) enum PreToolUseHookResult {
     Continue { updated_input: Option<Value> },
     Blocked(String),
@@ -492,6 +501,26 @@ pub(crate) async fn run_turn_stop_hooks(
         _ => (StopHookTarget::Stop, sess.hook_transcript_path().await),
     };
     let request_metadata = build_request_metadata(Some(step_context), turn_context);
+    let agentroute_application = turn_context
+        .extension_data
+        .get::<AgentRouteApplicationReceipt>()
+        .map(|receipt| {
+            serde_json::json!({
+                "status": receipt.status,
+                "requested": {
+                    "model": receipt.requested_model,
+                    "provider": receipt.requested_provider,
+                    "reasoning_effort": receipt.requested_reasoning_effort,
+                },
+                "actual": {
+                    "model": step_context.settings.model_info.slug,
+                    "provider": turn_context.model_provider_id(),
+                    "reasoning_effort": step_context.settings.effective_reasoning_effort()
+                        .map(|effort| effort.to_string()),
+                },
+                "reason": receipt.reason,
+            })
+        });
     let request = codex_hooks::StopRequest {
         session_id: sess.session_id().into(),
         turn_id: turn_context.sub_id.clone(),
@@ -501,6 +530,7 @@ pub(crate) async fn run_turn_stop_hooks(
         model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context.approval_policy()),
         request_metadata: (!request_metadata.is_empty()).then_some(request_metadata),
+        agentroute_application,
         stop_hook_active,
         last_assistant_message,
         target,
@@ -850,6 +880,18 @@ pub(crate) async fn inspect_pending_input(
             || outcome.reasoning_effort.is_some()
             || outcome.chatgpt_profile_home.is_some())
     {
+        let requested_model = outcome
+            .model
+            .clone()
+            .unwrap_or_else(|| turn_context.model_info().slug.clone());
+        let requested_provider = outcome
+            .model_provider
+            .clone()
+            .unwrap_or_else(|| turn_context.model_provider_id());
+        let requested_reasoning_effort = outcome
+            .reasoning_effort
+            .as_ref()
+            .map(ToString::to_string);
         let route_notice = outcome.route_message.take().or_else(|| {
             outcome.model.as_ref().map(|model| {
                 let effort = outcome
@@ -880,62 +922,88 @@ pub(crate) async fn inspect_pending_input(
                     // Keep routing notices out of the warning channel. The TUI renders this
                     // display-only commentary as a dedicated colored transcript cell and updates
                     // its per-turn status bar; the model never receives it as prompt context.
-                    let item_id = format!("agentroute-route-{}", turn_context.sub_id);
-                    let agent_message = AgentMessageItem {
-                        id: item_id.clone(),
-                        content: vec![AgentMessageContent::Text {
-                            text: message.clone(),
-                        }],
-                        phase: Some(MessagePhase::Commentary),
-                        memory_citation: None,
-                        delivery: None,
-                        questions: None,
-                    };
-                    let started_item = TurnItem::AgentMessage(AgentMessageItem {
-                        content: Vec::new(),
-                        ..agent_message.clone()
-                    });
-                    sess.emit_turn_item_started(turn_context, &started_item)
-                        .await;
-                    sess.send_event(
-                        turn_context,
-                        EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
-                            thread_id: sess.thread_id.to_string(),
-                            turn_id: turn_context.sub_id.clone(),
-                            item_id,
-                            delta: message,
-                        }),
-                    )
-                    .await;
-                    sess.emit_turn_item_completed(
-                        turn_context,
-                        TurnItem::AgentMessage(agent_message),
-                    )
-                    .await;
+                    emit_agentroute_route_notice(sess, turn_context, message).await;
                 }
+                turn_context.extension_data.insert(AgentRouteApplicationReceipt {
+                    status: "applied".to_string(),
+                    requested_model,
+                    requested_provider,
+                    requested_reasoning_effort,
+                    reason: None,
+                });
             }
             TurnSettingsUpdateOutcome::TargetUnavailable => {
-                sess.send_event(
+                emit_agentroute_route_notice(
+                    sess,
                     turn_context,
-                    EventMsg::Warning(WarningEvent {
-                        message: "UserPromptSubmit route override could not target the active turn"
-                            .to_string(),
-                    }),
+                    format!(
+                        "◆ MODEL ROUTE NOT APPLIED · requested {requested_provider}/{requested_model} · current turn settings kept · active turn unavailable"
+                    ),
                 )
                 .await;
+                turn_context.extension_data.insert(AgentRouteApplicationReceipt {
+                    status: "target_unavailable".to_string(),
+                    requested_model,
+                    requested_provider,
+                    requested_reasoning_effort,
+                    reason: Some("active turn unavailable".to_string()),
+                });
             }
             TurnSettingsUpdateOutcome::Rejected { reason } => {
-                sess.send_event(
+                emit_agentroute_route_notice(
+                    sess,
                     turn_context,
-                    EventMsg::Warning(WarningEvent {
-                        message: format!("UserPromptSubmit route override was rejected: {reason}"),
-                    }),
+                    format!(
+                        "◆ MODEL ROUTE NOT APPLIED · requested {requested_provider}/{requested_model} · current turn settings kept · {reason}"
+                    ),
                 )
                 .await;
+                turn_context.extension_data.insert(AgentRouteApplicationReceipt {
+                    status: "rejected".to_string(),
+                    requested_model,
+                    requested_provider,
+                    requested_reasoning_effort,
+                    reason: Some(reason),
+                });
             }
         }
     }
     outcome
+}
+
+async fn emit_agentroute_route_notice(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    message: String,
+) {
+    let item_id = format!("agentroute-route-{}", turn_context.sub_id);
+    let agent_message = AgentMessageItem {
+        id: item_id.clone(),
+        content: vec![AgentMessageContent::Text {
+            text: message.clone(),
+        }],
+        phase: Some(MessagePhase::Commentary),
+        memory_citation: None,
+        delivery: None,
+        questions: None,
+    };
+    let started_item = TurnItem::AgentMessage(AgentMessageItem {
+        content: Vec::new(),
+        ..agent_message.clone()
+    });
+    sess.emit_turn_item_started(turn_context, &started_item).await;
+    sess.send_event(
+        turn_context,
+        EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+            thread_id: sess.thread_id.to_string(),
+            turn_id: turn_context.sub_id.clone(),
+            item_id,
+            delta: message,
+        }),
+    )
+    .await;
+    sess.emit_turn_item_completed(turn_context, TurnItem::AgentMessage(agent_message))
+        .await;
 }
 
 pub(crate) async fn record_pending_input(

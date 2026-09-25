@@ -642,6 +642,9 @@ pub(crate) struct StopCommandInput {
     pub permission_mode: String,
     pub stop_hook_active: bool,
     pub last_assistant_message: NullableString,
+    /// Turn-scoped AgentRoute application receipt, if this CLI build emitted one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agentroute_application: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -663,6 +666,9 @@ pub(crate) struct SubagentStopCommandInput {
     pub agent_id: String,
     pub agent_type: String,
     pub last_assistant_message: NullableString,
+    /// Turn-scoped AgentRoute application receipt, if this CLI build emitted one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agentroute_application: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]

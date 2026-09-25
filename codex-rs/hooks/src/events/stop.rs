@@ -33,6 +33,7 @@ pub struct StopRequest {
     pub model: String,
     pub permission_mode: String,
     pub request_metadata: Option<Map<String, Value>>,
+    pub agentroute_application: Option<Value>,
     pub stop_hook_active: bool,
     pub last_assistant_message: Option<String>,
     pub target: StopHookTarget,
@@ -161,6 +162,7 @@ pub(crate) async fn run(engine: &ClaudeHooksEngine, request: StopRequest) -> Sto
                 last_assistant_message: NullableString::from_string(
                     request.last_assistant_message.clone(),
                 ),
+                agentroute_application: request.agentroute_application.clone(),
             };
             match serde_json::to_string(&input) {
                 Ok(input_json) => input_json,
@@ -195,6 +197,7 @@ pub(crate) async fn run(engine: &ClaudeHooksEngine, request: StopRequest) -> Sto
                 last_assistant_message: NullableString::from_string(
                     request.last_assistant_message.clone(),
                 ),
+                agentroute_application: request.agentroute_application.clone(),
             };
             match serde_json::to_string(&input) {
                 Ok(input_json) => input_json,

@@ -162,6 +162,9 @@
       "const": "UserPromptSubmit",
       "type": "string"
     },
+    "inherited_model_provider": {
+      "type": "string"
+    },
     "model": {
       "type": "string"
     },
@@ -193,8 +196,14 @@
       ],
       "description": "Latest subscription rate-limit snapshot observed by the active Codex session."
     },
+    "requested_backend": {
+      "type": "string"
+    },
     "session_id": {
       "type": "string"
+    },
+    "spawn_model_explicit": {
+      "type": "boolean"
     },
     "transcript_path": {
       "$ref": "#/definitions/NullableString"

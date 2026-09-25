@@ -2357,6 +2357,7 @@ fn executor_stop_hook_fixture() -> (
         model: "test-model".to_string(),
         permission_mode: "default".to_string(),
         request_metadata: request_metadata.clone(),
+        agentroute_application: None,
         stop_hook_active: false,
         last_assistant_message: None,
         target: StopHookTarget::Stop,

@@ -690,7 +690,7 @@ fn hosted_model_tool_specs(
     // `Some(Cached/Live/Disabled)` are the options for mode when standalone search is unavailable
     // and the provider supports hosted search. `None` prevents emitting a hosted search tool.
     let web_search_mode = (!standalone_web_search_available
-        && turn_context.provider.capabilities().web_search)
+        && turn_context.model_provider().capabilities().web_search)
         .then_some(turn_context.config.web_search_mode.value());
     let web_search_config = web_search_mode
         .as_ref()
@@ -712,6 +712,9 @@ pub(crate) fn tool_suggest_enabled(turn_context: &TurnContext) -> bool {
         && features.enabled(Feature::Plugins)
 }
 
+fn namespace_tools_enabled(turn_context: &TurnContext) -> bool {
+    turn_context.model_provider().capabilities().namespace_tools
+}
 fn multi_agent_v2_enabled(turn_context: &TurnContext) -> bool {
     turn_context.multi_agent_version == MultiAgentVersion::V2
 }
@@ -789,7 +792,9 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
         return false;
     }
 
-    if !turn_context.provider.capabilities().image_generation {
+    let provider = turn_context.model_provider();
+    let capabilities = provider.capabilities();
+    if !capabilities.image_generation || !capabilities.namespace_tools {
         return false;
     }
 
@@ -797,9 +802,9 @@ fn image_generation_available(turn_context: &TurnContext, model_info: &ModelInfo
         return false;
     }
 
-    let provider = turn_context.provider.info();
-    provider.uses_openai_actor_authorization()
-        || (provider.requires_openai_auth
+    let provider_info = provider.info();
+    provider_info.uses_openai_actor_authorization()
+        || (provider_info.requires_openai_auth
             && turn_context
                 .auth_manager
                 .as_deref()
@@ -1102,7 +1107,8 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
 }
 
 fn standalone_web_search_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
-    turn_context.provider.capabilities().web_search
+    namespace_tools_enabled(turn_context)
+        && turn_context.model_provider().capabilities().web_search
         && (model_info.use_responses_lite
             || turn_context
                 .config

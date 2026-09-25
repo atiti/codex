@@ -1,9 +1,12 @@
 use super::*;
 use crate::StartThreadOptions;
 use crate::ThreadManager;
+use crate::agent::child_config::SpawnConfigOptions;
+use crate::agent::child_config::SpawnConfigVersion;
 use crate::agent::child_config::apply_spawn_agent_service_tier;
 use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::child_config::build_agent_spawn_config;
+use crate::agent::child_config::prepare_agent_spawn_config;
 use crate::config::AgentRoleConfig;
 use crate::config::DEFAULT_AGENT_MAX_DEPTH;
 use crate::config::PermissionProfileSnapshot;
@@ -315,7 +318,10 @@ async fn spawn_agent_uses_explorer_role_and_preserves_approval_policy() {
         .approval_policy
         .set(AskForApproval::OnRequest)
         .expect("approval policy should be set");
-    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+    turn.set_model_provider(
+        config.model_provider_id.clone(),
+        create_model_provider(provider_info, turn.auth_manager.clone()),
+    );
     turn.config = Arc::new(config);
 
     let invocation = invocation(
@@ -4548,7 +4554,7 @@ async fn build_agent_spawn_config_uses_captured_step_settings_and_turn_context_v
     expected.base_instructions_provenance = base_instructions.provenance.clone();
     expected.base_instructions = Some(base_instructions.text);
     expected.model = Some("captured-step-model".to_string());
-    expected.model_provider = turn.provider.info().clone();
+    expected.model_provider = turn.model_provider().info().clone();
     expected.model_reasoning_effort = Some(ReasoningEffort::High);
     expected.model_reasoning_summary = Some(ReasoningSummary::Detailed);
     expected.developer_instructions = turn.developer_instructions.clone();
@@ -4601,7 +4607,7 @@ async fn build_agent_resume_config_clears_base_instructions() {
     expected.base_instructions = None;
     expected.base_instructions_provenance = None;
     expected.model = Some(turn.model_info().slug.clone());
-    expected.model_provider = turn.provider.info().clone();
+    expected.model_provider = turn.model_provider().info().clone();
     expected.model_reasoning_effort = turn.reasoning_effort().cloned();
     expected.model_reasoning_summary = Some(turn.reasoning_summary());
     expected.developer_instructions = turn.developer_instructions.clone();
@@ -4615,4 +4621,57 @@ async fn build_agent_resume_config_clears_base_instructions() {
         .set(AskForApproval::OnRequest)
         .expect("approval policy set");
     assert_eq!(config, expected);
+}
+
+#[tokio::test]
+async fn spawn_agent_model_override_can_switch_providers() {
+    let (session, mut turn) = make_session_and_context().await;
+    let azure_provider = codex_model_provider_info::ModelProviderInfo {
+        name: "AgentRoute Azure".to_string(),
+        ..Default::default()
+    };
+    let deepseek_provider = codex_model_provider_info::ModelProviderInfo {
+        name: "AgentRoute DeepSeek".to_string(),
+        ..Default::default()
+    };
+    let parent_config = Arc::make_mut(&mut turn.config);
+    parent_config
+        .model_providers
+        .insert("agentroute-azure".to_string(), azure_provider.clone());
+    parent_config
+        .model_providers
+        .insert("agentroute-deepseek".to_string(), deepseek_provider.clone());
+    parent_config.model_provider_id = "agentroute-azure".to_string();
+    parent_config.model_provider = azure_provider.clone();
+    parent_config.model = Some("dev-gpt-5.6-sol".to_string());
+    turn.set_model_provider(
+        "agentroute-azure".to_string(),
+        create_model_provider(azure_provider, turn.auth_manager.clone()),
+    );
+
+    let step_context = StepContext::for_test(Arc::new(turn));
+    let prepared = prepare_agent_spawn_config(
+        &session,
+        step_context.as_ref(),
+        SpawnConfigOptions {
+            version: SpawnConfigVersion::V2,
+            full_history_fork: false,
+            role_name: None,
+            model: Some("agentroute-deepseek/deepseek-v4-pro"),
+            reasoning_effort: Some(ReasoningEffort::High),
+        },
+    )
+    .await
+    .expect("provider-qualified model override");
+    let child_config = prepared.config;
+    let requested_backend = prepared.requested_backend;
+
+    assert_eq!(child_config.model_provider_id, "agentroute-deepseek");
+    assert_eq!(child_config.model_provider, deepseek_provider);
+    assert_eq!(child_config.model.as_deref(), Some("deepseek-v4-pro"));
+    assert_eq!(
+        child_config.model_reasoning_effort,
+        Some(ReasoningEffort::High)
+    );
+    assert_eq!(requested_backend.as_deref(), Some("deepseek"));
 }

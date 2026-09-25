@@ -133,6 +133,14 @@ impl<'de> Deserialize<'de> for WireApi {
     }
 }
 
+/// Provider-specific restrictions on the tool schemas accepted by a Responses API.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCompatibility {
+    /// Function tools plus the Responses API `apply_patch` custom tool.
+    FunctionsAndApplyPatch,
+}
+
 /// Serializable representation of a provider definition.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
@@ -205,6 +213,12 @@ pub struct ModelProviderInfo {
     #[serde(skip)]
     #[schemars(skip)]
     pub include_internal_metadata: bool,
+    /// Optional tool-schema compatibility profile for OpenAI-compatible providers.
+    #[serde(default)]
+    pub tool_compatibility: Option<ToolCompatibility>,
+    /// Optional provider-native model used for automatic approval review.
+    #[serde(default)]
+    pub approval_review_model: Option<String>,
 }
 
 /// AWS SigV4 auth configuration for a model provider.
@@ -562,6 +576,8 @@ other non-default provider fields are not supported"
             supports_standalone_web_search: true,
             capabilities: None,
             include_internal_metadata: true,
+            tool_compatibility: None,
+            approval_review_model: None,
         }
     }
 
@@ -602,6 +618,8 @@ other non-default provider fields are not supported"
             supports_standalone_web_search: false,
             capabilities: None,
             include_internal_metadata: false,
+            tool_compatibility: None,
+            approval_review_model: None,
         }
     }
 
@@ -776,6 +794,8 @@ pub fn create_oss_provider_with_base_url(base_url: &str, wire_api: WireApi) -> M
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     }
 }
 

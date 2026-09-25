@@ -196,6 +196,8 @@ fn model_provider_from_proto(
         supports_standalone_web_search: provider.supports_standalone_web_search,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
     Ok((id, info))
 }
@@ -228,6 +230,8 @@ fn model_provider_to_proto(
         supports_standalone_web_search,
         include_internal_metadata: _,
         capabilities: _,
+        tool_compatibility: _,
+        approval_review_model: _,
     } = provider;
 
     proto::ModelProvider {
@@ -582,6 +586,8 @@ mod tests {
             supports_websockets: true,
             supports_standalone_web_search: true,
             gateway_oauth: None,
+            tool_compatibility: None,
+            approval_review_model: None,
             aws: None,
             capabilities: None,
             include_internal_metadata: false,

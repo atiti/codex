@@ -12,6 +12,8 @@ use serde_json::Value;
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_protocol::openai_models::ReasoningEffort;
+
 use crate::events::common::SubagentHookContext;
 
 const GENERATED_DIR: &str = "generated";
@@ -446,6 +448,32 @@ pub(crate) struct UserPromptSubmitHookSpecificOutputWire {
     pub hook_event_name: HookEventNameWire,
     #[serde(default)]
     pub additional_context: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub model_provider: Option<String>,
+    #[serde(default)]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    #[serde(default)]
+    pub route_message: Option<String>,
+    #[serde(default)]
+    pub strip_prompt_prefix_bytes: Option<usize>,
+    #[serde(default)]
+    pub strip_provider_state: bool,
+    #[serde(default)]
+    pub chatgpt_profile_home: Option<String>,
+    #[serde(default)]
+    pub reviewer_profile_name: Option<String>,
+    #[serde(default)]
+    pub reviewer_fallback_profiles: Vec<ReviewerFallbackProfileWire>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReviewerFallbackProfileWire {
+    pub name: String,
+    pub codex_home: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -577,6 +605,22 @@ pub(crate) struct UserPromptSubmitCommandInput {
     #[schemars(schema_with = "user_prompt_submit_hook_event_name_schema")]
     pub hook_event_name: String,
     pub model: String,
+    pub model_provider: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub inherited_model_provider: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requested_backend: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub spawn_model_explicit: bool,
+    /// Opaque ChatGPT account identity for local capacity affinity. Consumers must not display it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    /// Latest subscription rate-limit snapshot observed by the active Codex session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rate_limits: Option<codex_protocol::protocol::RateLimitSnapshot>,
+    /// Authoritative ordinary subscription permission from account/rateLimits/read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ordinary_usage_allowed: Option<bool>,
     #[schemars(schema_with = "permission_mode_schema")]
     pub permission_mode: String,
     pub prompt: String,
@@ -598,6 +642,9 @@ pub(crate) struct StopCommandInput {
     pub permission_mode: String,
     pub stop_hook_active: bool,
     pub last_assistant_message: NullableString,
+    /// Turn-scoped AgentRoute application receipt, if this CLI build emitted one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agentroute_application: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -619,6 +666,9 @@ pub(crate) struct SubagentStopCommandInput {
     pub agent_id: String,
     pub agent_type: String,
     pub last_assistant_message: NullableString,
+    /// Turn-scoped AgentRoute application receipt, if this CLI build emitted one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agentroute_application: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -1191,6 +1241,30 @@ mod tests {
                 .expect("schema required fields");
             assert!(!required.contains(&Value::String("agent_id".to_string())));
             assert!(!required.contains(&Value::String("agent_type".to_string())));
+        }
+    }
+
+    #[test]
+    fn user_prompt_submit_routing_context_is_optional_and_snake_case() {
+        let schema: Value = serde_json::from_slice(
+            &schema_json::<UserPromptSubmitCommandInput>()
+                .expect("serialize user prompt submit input schema"),
+        )
+        .expect("parse user prompt submit input schema");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("user prompt submit properties");
+        let required = schema["required"]
+            .as_array()
+            .expect("user prompt submit required fields");
+
+        for field in [
+            "inherited_model_provider",
+            "requested_backend",
+            "spawn_model_explicit",
+        ] {
+            assert!(properties.contains_key(field));
+            assert!(!required.contains(&Value::String(field.to_string())));
         }
     }
 

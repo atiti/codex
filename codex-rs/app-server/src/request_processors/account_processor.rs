@@ -1203,11 +1203,21 @@ impl AccountRequestProcessor {
         let rate_limit_upsell = response
             .rate_limit_upsell
             .filter(|_| matches_active_account);
+        let ordinary_usage_allowed = response
+            .ordinary_usage_allowed
+            .filter(|_| matches_active_account);
+        if ordinary_usage_allowed.is_some() {
+            for thread_id in self.thread_manager.list_thread_ids().await {
+                if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+                    thread
+                        .record_ordinary_usage_allowed(ordinary_usage_allowed)
+                        .await;
+                }
+            }
+        }
 
         Ok(GetAccountRateLimitsResponse {
-            ordinary_usage_allowed: response
-                .ordinary_usage_allowed
-                .filter(|_| matches_active_account),
+            ordinary_usage_allowed,
             rate_limits: rate_limits.into(),
             rate_limits_by_limit_id: Some(
                 rate_limits_by_limit_id

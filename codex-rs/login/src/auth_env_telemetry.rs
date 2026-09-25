@@ -80,6 +80,8 @@ mod tests {
             supports_websockets: false,
             supports_standalone_web_search: false,
             include_internal_metadata: false,
+            tool_compatibility: None,
+            approval_review_model: None,
         };
 
         let telemetry =

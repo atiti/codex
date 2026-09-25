@@ -59,6 +59,55 @@ fn tool_log_payload_redacts_plaintext_multi_agent_messages() {
     );
 }
 
+#[test]
+fn plaintext_v2_custom_namespace_calls_are_redacted_without_encryption_metadata() {
+    for tool_name in ["spawn_agent", "send_message", "followup_task"] {
+        for encrypted_function_args in [None, Some(Vec::new())] {
+            let call = ToolCall {
+                tool_name: ToolName::namespaced(
+                    crate::config::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE,
+                    tool_name,
+                ),
+                call_id: format!("call-{tool_name}"),
+                payload: ToolPayload::Function {
+                    arguments: json!({"message": "portable task"}).to_string(),
+                },
+                encrypted_function_args,
+            };
+
+            assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
+        }
+    }
+}
+
+#[test]
+fn encrypted_v2_collaboration_calls_remain_encrypted() {
+    let call = ToolCall {
+        tool_name: ToolName::namespaced("collaboration", "spawn_agent"),
+        call_id: "call-encrypted-spawn".to_string(),
+        payload: ToolPayload::Function {
+            arguments: json!({"message": "gAAAA-provider-bound"}).to_string(),
+        },
+        encrypted_function_args: Some(vec!["message".to_string()]),
+    };
+
+    assert_eq!(call.direct_source(), ToolCallSource::Direct);
+}
+
+#[test]
+fn reserved_collaboration_calls_without_metadata_remain_provider_managed() {
+    let call = ToolCall {
+        tool_name: ToolName::namespaced("collaboration", "spawn_agent"),
+        call_id: "call-reserved-spawn".to_string(),
+        payload: ToolPayload::Function {
+            arguments: json!({"message": "provider-managed"}).to_string(),
+        },
+        encrypted_function_args: None,
+    };
+
+    assert_eq!(call.direct_source(), ToolCallSource::Direct);
+}
+
 impl codex_extension_api::ToolContributor for ExtensionEchoContributor {
     fn tools(
         &self,

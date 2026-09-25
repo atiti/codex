@@ -229,10 +229,6 @@ impl Session {
     ///
     /// Callers must serialize updates through completion, including model
     /// resolution, so each sparse patch sees the preceding publication.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the final managed-policy check and active settings publication must remain atomic"
-    )]
     pub(crate) async fn apply_turn_settings(
         &self,
         turn_id: &str,
@@ -244,6 +240,10 @@ impl Session {
         .await
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the final managed-policy check and active settings publication must remain atomic"
+    )]
     pub(crate) async fn apply_routed_turn_settings(
         &self,
         turn_id: &str,

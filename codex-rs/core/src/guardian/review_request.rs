@@ -168,6 +168,10 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         ))
     }
 
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "reviewer fallback selection and credential validation must remain serialized"
+    )]
     async fn attempt(
         &self,
         prepared: &PreparedApproval,

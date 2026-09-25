@@ -103,7 +103,8 @@ impl ChatWidget {
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.restore_realtime_transcripts_before_turn(&notification.turn_id);
-                if !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
+                if !notification.item_id.starts_with("agentroute-route-")
+                    && !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
                     && (from_replay
                         || !self.is_realtime_delegated_agent_item(
                             &notification.turn_id,

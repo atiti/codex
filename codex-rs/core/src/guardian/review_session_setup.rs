@@ -9,6 +9,7 @@ pub struct PreparedGuardianContext {
     parent: Arc<Session>,
     context: GuardianReviewContext,
     config: Config,
+    reviewer_auth_manager: Option<Arc<codex_login::AuthManager>>,
     context_policy: ReviewContextPolicy,
     key: GuardianReviewSessionReuseKey,
     parent_compaction: Option<ResponseItem>,
@@ -20,6 +21,8 @@ impl PreparedGuardianContext {
         parent: Arc<Session>,
         context: GuardianReviewContext,
         config: Config,
+        reviewer_profile_name: Option<String>,
+        reviewer_auth_manager: Option<Arc<codex_login::AuthManager>>,
         history: &ContextManager,
         node_repl_policy: &GuardianNodeReplPolicy,
     ) -> anyhow::Result<Self> {
@@ -44,10 +47,12 @@ impl PreparedGuardianContext {
         .with_node_repl_policy(node_repl_policy);
         key.root_authorization_version = root_authorization_version;
         key.parent_reset_version = history.reset_version;
+        key.reviewer_profile_name = reviewer_profile_name;
         Ok(Self {
             parent,
             context,
             config,
+            reviewer_auth_manager,
             context_policy,
             key,
             parent_compaction,
@@ -101,7 +106,10 @@ impl PreparedGuardianContext {
         let options = crate::StartThreadOptions {
             internal_parent: Some(crate::thread_manager::InternalSessionParent {
                 thread_id: self.parent.thread_id(),
-                auth_manager: Arc::clone(&self.parent.services.auth_manager),
+                auth_manager: self
+                    .reviewer_auth_manager
+                    .clone()
+                    .unwrap_or_else(|| Arc::clone(&self.parent.services.auth_manager)),
                 agent_control: self
                     .parent
                     .services
@@ -223,6 +231,8 @@ pub(super) async fn prepare_review(
         Arc::clone(&params.parent_session),
         params.parent_context.clone(),
         params.spawn_config.clone(),
+        params.reviewer_profile_name.clone(),
+        params.reviewer_auth_manager.clone(),
         &params.parent_history,
         &params.node_repl_policy,
     )
@@ -250,13 +260,15 @@ pub(super) fn prepare_prewarm(
     turn: Arc<TurnContext>,
 ) -> BoxFuture<'static, anyhow::Result<PreparedGuardianContext>> {
     Box::pin(async move {
-        let context = GuardianReviewContext::from(turn);
+        let context = GuardianReviewContext::from(Arc::clone(&turn));
         let config = guardian_review_session_config(&parent, &context).await?;
         let history = parent.clone_history().await;
         PreparedGuardianContext::prepare(
             Arc::clone(&parent),
             context,
             config.spawn_config,
+            None,
+            turn.model_provider().auth_manager(),
             &history,
             &config.node_repl_policy,
         )

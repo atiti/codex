@@ -42,7 +42,7 @@ pub(super) async fn spawn_review_thread(
     );
 
     let review_prompt = resolved.prompt.clone();
-    let provider = parent_turn_context.provider.clone();
+    let provider = parent_turn_context.model_provider();
     let auth_manager = parent_turn_context.auth_manager.clone();
     let model_info = review_model_info.clone();
     let mut selected = parent_turn_context.initial_settings.selected().clone();
@@ -165,7 +165,8 @@ pub(super) async fn spawn_review_thread(
         active_host_plugin_identities: None,
         next_step_settings: ArcSwap::from(step_settings),
         session_telemetry: session_telemetry_for_context,
-        provider: provider_for_context,
+        provider: std::sync::RwLock::new(provider_for_context),
+        model_provider_id: std::sync::RwLock::new(parent_turn_context.model_provider_id()),
         session_source,
         history_mode: parent_turn_context.history_mode,
         parent_thread_id: parent_turn_context.parent_thread_id,

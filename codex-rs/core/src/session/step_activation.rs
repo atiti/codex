@@ -13,15 +13,21 @@ use crate::config::ConstraintResult;
 use crate::environment_selection::validate_environment_ids_and_cwds;
 use crate::exec_policy::AllowPrefixRules;
 use codex_features::Feature;
+use codex_login::AuthManager;
+use codex_model_provider::create_model_provider;
+use codex_model_provider_info::ToolCompatibility;
 use codex_prompts::ResolvedModelMessages;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::GuardianV2ModelConfig;
 use codex_protocol::openai_models::GuardianV2TranscriptModelConfig;
 use codex_protocol::openai_models::MODEL_SPECIALTY_CYBER;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::EnvironmentConfigState;
 use codex_protocol::protocol::TurnEnvironmentSelection;
 use codex_protocol::protocol::TurnSettingsUpdate;
 use codex_protocol::protocol::TurnSettingsUpdateOutcome;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Temporary restrictions while approvals and Guardian still read the admitted
@@ -95,9 +101,10 @@ fn check_legacy_model_safety(
     if admitted.used_fallback_model_metadata || current.used_fallback_model_metadata {
         return Err("the active model has only fallback metadata".to_string());
     }
-    if destination.used_fallback_model_metadata {
-        return Err("the destination model has only fallback metadata".to_string());
-    }
+    // External providers commonly use deployment names that do not appear in
+    // Codex's bundled model catalog. Their fallback metadata is acceptable as
+    // long as every model-owned authority checked below remains identical to
+    // the admitted turn. The active model still requires trusted metadata.
     let retained_models = [admitted, current];
     // The Guardian reviewer extension still selects its circuit-breaker
     // policy from the admitted model's Cyber classification.
@@ -222,16 +229,31 @@ impl Session {
     ///
     /// Callers must serialize updates through completion, including model
     /// resolution, so each sparse patch sees the preceding publication.
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the final managed-policy check and active settings publication must remain atomic"
-    )]
-    pub(super) async fn apply_turn_settings(
+    pub(crate) async fn apply_turn_settings(
         &self,
         turn_id: &str,
         update: TurnSettingsUpdate,
     ) -> TurnSettingsUpdateOutcome {
+        self.apply_routed_turn_settings(
+            turn_id, update, /*model_provider*/ None, /*chatgpt_profile_home*/ None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the final managed-policy check and active settings publication must remain atomic"
+    )]
+    pub(crate) async fn apply_routed_turn_settings(
+        &self,
+        turn_id: &str,
+        update: TurnSettingsUpdate,
+        model_provider: Option<String>,
+        chatgpt_profile_home: Option<String>,
+    ) -> TurnSettingsUpdateOutcome {
         let updates_model_settings = update.model.is_some()
+            || model_provider.is_some()
+            || chatgpt_profile_home.is_some()
             || update.effort.is_some()
             || update.summary.is_some()
             || update.service_tier.is_some();
@@ -273,6 +295,77 @@ impl Session {
             service_tier,
         } = update;
         let updates_step_settings = updates_model_settings || approvals_reviewer.is_some();
+        let requested_provider_id = model_provider.or_else(|| {
+            chatgpt_profile_home
+                .as_ref()
+                .map(|_| turn_context.model_provider_id())
+        });
+        let requested_provider = if let Some(provider_id) = requested_provider_id {
+            if let Some(required) = turn_context
+                .config
+                .config_layer_stack
+                .required_model_provider()
+                && required != provider_id
+            {
+                return TurnSettingsUpdateOutcome::Rejected {
+                    reason: format!(
+                        "model provider `{provider_id}` is disallowed; managed configuration requires `{required}`"
+                    ),
+                };
+            }
+            let Some(provider_info) = turn_context.config.model_providers.get(&provider_id) else {
+                return TurnSettingsUpdateOutcome::Rejected {
+                    reason: format!("model provider `{provider_id}` is not configured"),
+                };
+            };
+            let auth_manager = if let Some(profile_home) = chatgpt_profile_home {
+                if !provider_info.is_openai() || !provider_info.requires_openai_auth {
+                    return TurnSettingsUpdateOutcome::Rejected {
+                        reason: "ChatGPT profile routing requires the OpenAI provider".to_string(),
+                    };
+                }
+                let profile_home = PathBuf::from(profile_home);
+                if !profile_home.is_absolute() {
+                    return TurnSettingsUpdateOutcome::Rejected {
+                        reason: "ChatGPT profile home must be an absolute path".to_string(),
+                    };
+                }
+                let auth_manager = match AuthManager::shared_from_config_for_codex_home(
+                    turn_context.config.as_ref(),
+                    profile_home,
+                    /*enable_codex_api_key_env*/ false,
+                )
+                .await
+                {
+                    Ok(auth_manager) => auth_manager,
+                    Err(error) => {
+                        return TurnSettingsUpdateOutcome::Rejected {
+                            reason: format!("could not load ChatGPT profile: {error}"),
+                        };
+                    }
+                };
+                if auth_manager
+                    .auth()
+                    .await
+                    .is_none_or(|auth| !auth.is_chatgpt_auth())
+                {
+                    return TurnSettingsUpdateOutcome::Rejected {
+                        reason: "ChatGPT profile is not signed in or is disallowed by policy"
+                            .to_string(),
+                    };
+                }
+                Some(auth_manager)
+            } else {
+                turn_context.auth_manager.clone()
+            };
+            Some((
+                provider_id,
+                provider_info.tool_compatibility,
+                create_model_provider(provider_info.clone(), auth_manager),
+            ))
+        } else {
+            None
+        };
         let update = StepSettingsUpdate {
             approvals_reviewer,
             model,
@@ -312,10 +405,19 @@ impl Session {
         {
             return TurnSettingsUpdateOutcome::TargetUnavailable;
         }
-        let updated_settings = match prepared {
+        let mut updated_settings = match prepared {
             Ok(settings) => settings,
             Err(reason) => return TurnSettingsUpdateOutcome::Rejected { reason },
         };
+        if let (Some(destination), Some((_, compatibility, _))) =
+            (updated_settings.as_mut(), requested_provider.as_ref())
+        {
+            destination.model_info = Arc::new(model_info_for_provider_compatibility(
+                &current.model_info,
+                &destination.model_info,
+                *compatibility,
+            ));
+        }
         let candidate_settings = updated_settings.as_ref().unwrap_or(current.as_ref());
 
         // Recheck the latest rules before applying the update.
@@ -369,6 +471,9 @@ impl Session {
         }
         if environments.is_some() {
             self.services.turn_environments.update_selections(proposed);
+        }
+        if let Some((provider_id, _, provider)) = requested_provider {
+            task.turn_context.set_model_provider(provider_id, provider);
         }
         TurnSettingsUpdateOutcome::Applied
     }
@@ -465,6 +570,48 @@ fn any_environment_has_full_disk_write(
             .file_system_sandbox_policy()
             .has_full_disk_write_access(),
     }
+}
+
+pub(crate) fn model_info_for_provider_compatibility(
+    admitted: &ModelInfo,
+    destination: &ModelInfo,
+    compatibility: Option<ToolCompatibility>,
+) -> ModelInfo {
+    // Limits, compaction policy, modalities and model guidance belong to the
+    // destination. Retain only the authority captured by the admitted turn:
+    // switching providers must not silently alter local approval requirements.
+    let mut model_info = destination.clone();
+    model_info.guardian.clone_from(&admitted.guardian);
+    model_info
+        .model_specialty
+        .clone_from(&admitted.model_specialty);
+    model_info.node_repl_auto_review_required = admitted.node_repl_auto_review_required;
+    model_info.node_repl_disabled = admitted.node_repl_disabled;
+    model_info
+        .auto_review_model_override
+        .clone_from(&admitted.auto_review_model_override);
+    if model_info.model_messages.is_some() || admitted.model_messages.is_some() {
+        let messages = model_info.model_messages.get_or_insert_default();
+        messages.auto_review = admitted
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.auto_review.clone());
+        messages.guardian_v2 = admitted
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.guardian_v2.clone());
+    }
+    match compatibility {
+        Some(ToolCompatibility::FunctionsAndApplyPatch) => {
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+            model_info.supports_search_tool = false;
+            model_info.use_responses_lite = false;
+            model_info.experimental_supported_tools.clear();
+        }
+        None => {}
+    }
+    model_info
 }
 
 #[cfg(test)]

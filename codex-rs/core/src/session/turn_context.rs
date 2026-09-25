@@ -324,7 +324,8 @@ pub struct TurnContext {
     pub(super) next_step_settings: ArcSwap<ResolvedStepSettings>,
     /// Turn-wide telemetry; model-attributed step work should use `StepContext::session_telemetry`.
     pub(crate) session_telemetry: SessionTelemetry,
-    pub(crate) provider: SharedModelProvider,
+    pub(crate) provider: std::sync::RwLock<SharedModelProvider>,
+    pub(crate) model_provider_id: std::sync::RwLock<String>,
     pub(crate) session_source: SessionSource,
     pub(crate) history_mode: ThreadHistoryMode,
     pub(crate) parent_thread_id: Option<ThreadId>,
@@ -378,6 +379,31 @@ enum TurnContextBuildMode {
 }
 
 impl TurnContext {
+    pub(crate) fn model_provider(&self) -> SharedModelProvider {
+        self.provider
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn model_provider_id(&self) -> String {
+        self.model_provider_id
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(crate) fn set_model_provider(&self, provider_id: String, provider: SharedModelProvider) {
+        *self
+            .provider
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = provider;
+        *self
+            .model_provider_id
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = provider_id;
+    }
+
     /// Captures current model metadata without preparing a step.
     pub(crate) fn capture_current_model_info(&self) -> Arc<ModelInfo> {
         Arc::clone(&self.next_step_settings.load().model_info)
@@ -693,7 +719,8 @@ impl TurnContext {
             active_host_plugin_identities: self.active_host_plugin_identities.clone(),
             next_step_settings: ArcSwap::from(step_settings),
             session_telemetry,
-            provider: self.provider.clone(),
+            provider: std::sync::RwLock::new(self.model_provider()),
+            model_provider_id: std::sync::RwLock::new(self.model_provider_id()),
             session_source: self.session_source.clone(),
             history_mode: self.history_mode,
             parent_thread_id: self.parent_thread_id,
@@ -974,6 +1001,7 @@ impl Session {
                     &PathUri::from_abs_path(&cwd),
                 )
             });
+        let model_provider_id = per_turn_config.model_provider_id.clone();
         let per_turn_config = Arc::new(per_turn_config);
         let turn_metadata_state = Arc::new(TurnMetadataState::new(
             session_id.to_string(),
@@ -1009,7 +1037,8 @@ impl Session {
             active_host_plugin_identities: None,
             next_step_settings: ArcSwap::from(step_settings),
             session_telemetry: session_telemetry_for_context,
-            provider,
+            provider: std::sync::RwLock::new(provider),
+            model_provider_id: std::sync::RwLock::new(model_provider_id),
             session_source,
             history_mode: session_configuration.history_mode,
             parent_thread_id: session_configuration.parent_thread_id,
@@ -1174,6 +1203,17 @@ impl Session {
                 &session_configuration.model_info_overrides,
             )
             .await;
+        let model_info = if let Some(tool_compatibility) =
+            session_configuration.provider.info().tool_compatibility
+        {
+            step_activation::model_info_for_provider_compatibility(
+                &model_info,
+                &model_info,
+                Some(tool_compatibility),
+            )
+        } else {
+            model_info
+        };
         let multi_agent_version = match build_mode {
             TurnContextBuildMode::Full | TurnContextBuildMode::InjectItems => {
                 // A background preview must not overwrite a newer turn's model metadata.

@@ -27,6 +27,7 @@ use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
 use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
+use codex_model_provider::create_model_provider;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::error::AgentErrorContext;
 use codex_protocol::intersect_effective_permission_profiles;
@@ -1091,33 +1092,41 @@ impl LocalAgentControl {
                 Some(meta_line.meta.selected_capability_roots.clone())
             })
             .unwrap_or_default();
-        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
-            if multi_agent_version == MultiAgentVersion::V2 {
-                let parent_config = parent_thread.session.get_config().await;
-                let parent_usage_hints = resolve_usage_hints(
-                    &parent_config.multi_agent_v2,
-                    ResolvedModelMessages::bundled().multi_agent(),
-                    !parent_config.update_plan_enabled,
-                );
-                [parent_usage_hints.root, parent_usage_hints.subagent]
-                    .into_iter()
-                    .flatten()
-                    .map(|instructions| instructions.render())
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        let mut preserve_context_baselines = true;
-        for item in forked_rollout_items.iter().rev() {
-            let RolloutItem::Compacted(compacted) = item else {
-                continue;
-            };
-            // Legacy checkpoints force the child to rebuild context regardless of the
-            // live parent's reference baseline; an older superseded checkpoint does not.
-            if compacted.replacement_history.is_none() {
-                preserve_context_baselines = false;
+        if let SpawnAgentForkMode::LastNTurns(last_n_turns) = fork_mode {
+            forked_rollout_items =
+                truncate_rollout_to_last_n_fork_turns(forked_rollout_items, *last_n_turns);
+        }
+        let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> = if multi_agent_version
+            == MultiAgentVersion::V2
+        {
+            let parent_config = parent_thread.session.get_config().await;
+            let parent_usage_hints = resolve_usage_hints(
+                &parent_config.multi_agent_v2,
+                ResolvedModelMessages::bundled().multi_agent(),
+                !parent_config.update_plan_enabled,
+                create_model_provider(parent_config.model_provider.clone(), None).capabilities(),
+            );
+            [parent_usage_hints.root, parent_usage_hints.subagent]
+                .into_iter()
+                .flatten()
+                .map(|instructions| instructions.render())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut preserve_context_baselines = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
+        if preserve_context_baselines {
+            for item in forked_rollout_items.iter().rev() {
+                let RolloutItem::Compacted(compacted) = item else {
+                    continue;
+                };
+                // Legacy checkpoints force the child to rebuild context regardless of the
+                // live parent's reference baseline; an older superseded checkpoint does not.
+                if compacted.replacement_history.is_none() {
+                    preserve_context_baselines = false;
+                }
+                break;
             }
-            break;
         }
         let mut replaced_parent_developer_instructions = false;
         // Scrub inherited hints and replace only the parent's developer-instruction fragment.
@@ -1302,6 +1311,7 @@ impl LocalAgentControl {
                         &config.multi_agent_v2,
                         ResolvedModelMessages::bundled().multi_agent(),
                         !config.update_plan_enabled,
+                        create_model_provider(config.model_provider.clone(), None).capabilities(),
                     )
                     .subagent
                 })

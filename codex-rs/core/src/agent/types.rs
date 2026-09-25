@@ -64,6 +64,13 @@ pub enum MessageDeliveryMode {
 pub enum AgentMessage {
     Plaintext(String),
     Encrypted(String),
+    Routed {
+        message: Box<AgentMessage>,
+        routing_prompt: Option<String>,
+        inherited_model_provider: Option<String>,
+        requested_backend: Option<String>,
+        model_explicit: bool,
+    },
 }
 
 /// Holds a backend-owned reservation until the turn ends or is cancelled.

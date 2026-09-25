@@ -87,7 +87,7 @@ fn tool_dispatch_invocation(invocation: &ToolInvocation) -> Option<ToolDispatchI
             .filter(|_| !invocation.tool_name.is_default_namespace())
             .cloned(),
         requester,
-        payload: tool_dispatch_payload(&invocation.payload),
+        payload: tool_dispatch_payload(&invocation.payload, &invocation.source),
     })
 }
 
@@ -109,7 +109,12 @@ fn tool_dispatch_result(
     }
 }
 
-fn tool_dispatch_payload(payload: &ToolPayload) -> ToolDispatchPayload {
+fn tool_dispatch_payload(payload: &ToolPayload, source: &ToolCallSource) -> ToolDispatchPayload {
+    if matches!(source, ToolCallSource::DirectPlaintextMessage) {
+        return ToolDispatchPayload::Function {
+            arguments: "{}".to_string(),
+        };
+    }
     match payload {
         ToolPayload::Function { arguments } => ToolDispatchPayload::Function {
             arguments: arguments.clone(),

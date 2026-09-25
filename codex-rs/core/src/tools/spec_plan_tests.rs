@@ -63,7 +63,7 @@ use crate::tools::router::ToolSuggestPresentation;
 use crate::tools::spec_plan::append_source_tools;
 use crate::tools::spec_plan::build_core_tool_registry;
 
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "agentroute_collaboration";
 
 #[derive(Default)]
 struct ToolPlanInputs {
@@ -312,9 +312,12 @@ fn use_chatgpt_auth(turn: &mut TurnContext) {
     turn.auth_manager = Some(AuthManager::from_auth_for_testing(
         CodexAuth::create_dummy_chatgpt_auth_for_testing(),
     ));
-    turn.provider = create_model_provider(
-        turn.config.model_provider.clone(),
-        turn.auth_manager.clone(),
+    turn.set_model_provider(
+        turn.config.model_provider_id.clone(),
+        create_model_provider(
+            turn.config.model_provider.clone(),
+            turn.auth_manager.clone(),
+        ),
     );
 }
 
@@ -324,7 +327,10 @@ fn use_bedrock_provider(turn: &mut TurnContext) {
         config.model_provider_id = AMAZON_BEDROCK_PROVIDER_ID.to_string();
         config.model_provider = provider_info.clone();
     });
-    turn.provider = create_model_provider(provider_info, turn.auth_manager.clone());
+    turn.set_model_provider(
+        turn.config.model_provider_id.clone(),
+        create_model_provider(provider_info, turn.auth_manager.clone()),
+    );
 }
 
 struct TestNamespaceExtensionTool {
@@ -628,6 +634,22 @@ async fn reviewer_tool_policy_exclude_optional_core_tools() {
             .collect::<Vec<_>>(),
         vec!["exec_command", "write_stdin", "view_image"]
     );
+}
+
+#[tokio::test]
+async fn direct_provider_compatibility_hides_code_mode_exec() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::CodeMode, /*enabled*/ true);
+        update_turn_settings_for_test(turn, |settings| {
+            let model_info = Arc::make_mut(&mut settings.model_info);
+            model_info.tool_mode = Some(ToolMode::Direct);
+            model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
+        });
+    })
+    .await;
+
+    plan.assert_visible_lacks(&[codex_code_mode::PUBLIC_TOOL_NAME]);
+    plan.assert_visible_contains(&["exec_command", "write_stdin", "apply_patch"]);
 }
 
 #[tokio::test]
@@ -2877,7 +2899,7 @@ async fn multi_agent_feature_selects_one_agent_tool_family() {
 }
 
 #[tokio::test]
-async fn multi_agent_v2_message_schemas_are_encrypted() {
+async fn multi_agent_v2_custom_namespace_message_schemas_are_plaintext() {
     let plan = probe(|turn| {
         set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
     })
@@ -2893,6 +2915,41 @@ async fn multi_agent_v2_message_schemas_are_encrypted() {
             )
         }) else {
             panic!("expected {tool_name} in {MULTI_AGENT_V2_NAMESPACE} namespace");
+        };
+        let properties = tool
+            .parameters
+            .properties
+            .as_ref()
+            .expect("tool should use object params");
+        assert_eq!(
+            properties
+                .get("message")
+                .and_then(|schema| schema.encrypted),
+            None
+        );
+    }
+}
+
+#[tokio::test]
+async fn multi_agent_v2_reserved_namespace_message_schemas_are_encrypted() {
+    let plan = probe(|turn| {
+        set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
+        update_config(turn, |config| {
+            config.multi_agent_v2.tool_namespace = Some("collaboration".to_string());
+        });
+    })
+    .await;
+    let ToolSpec::Namespace(namespace) = plan.visible_spec("collaboration") else {
+        panic!("expected collaboration namespace");
+    };
+    for tool_name in ["spawn_agent", "send_message", "followup_task"] {
+        let Some(ResponsesApiNamespaceTool::Function(tool)) = namespace.tools.iter().find(|tool| {
+            matches!(
+                tool,
+                ResponsesApiNamespaceTool::Function(tool) if tool.name == tool_name
+            )
+        }) else {
+            panic!("expected {tool_name} in collaboration namespace");
         };
         let properties = tool
             .parameters
@@ -2929,7 +2986,7 @@ async fn multi_agent_v2_can_disable_wait_agent() {
         ]
     );
     plan.assert_visible_lacks(&["clock"]);
-    plan.assert_registered_lacks(&["collaboration.wait_agent", "clock.sleep"]);
+    plan.assert_registered_lacks(&["agentroute_collaboration.wait_agent", "clock.sleep"]);
     assert!(plan.can_manage_children);
 }
 

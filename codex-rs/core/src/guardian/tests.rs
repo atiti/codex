@@ -178,8 +178,10 @@ async fn guardian_test_session_turn_and_rx(
     crate::guardian::test_host::install(&session, &config);
     let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
     turn_mut.config = Arc::clone(&config);
-    turn_mut.provider =
-        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
+    turn_mut.set_model_provider(
+        config.model_provider_id.clone(),
+        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone()),
+    );
 
     (session, turn, rx)
 }
@@ -240,7 +242,10 @@ async fn guardian_test_session_and_turn_with_base_url(
     session.services.models_manager = models_manager;
     crate::guardian::test_host::install(&session, &config);
     turn.config = Arc::clone(&config);
-    turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
+    turn.set_model_provider(
+        config.model_provider_id.clone(),
+        create_model_provider(config.model_provider.clone(), turn.auth_manager.clone()),
+    );
 
     (Arc::new(session), Arc::new(turn))
 }
@@ -1929,7 +1934,10 @@ async fn guardian_request_model_for_auto_review(
         },
     );
     let parent_model = turn.model_info().slug.clone();
-    let preferred_model = turn.provider.approval_review_preferred_model().to_string();
+    let preferred_model = turn
+        .model_provider()
+        .approval_review_preferred_model()
+        .to_string();
     let parent_turn_id = turn.sub_id.clone();
     seed_guardian_parent_history(&session, &turn).await;
 
@@ -2155,7 +2163,10 @@ async fn guardian_review_request_layout_matches_model_visible_request_snapshot()
     )?;
     session.services.skills_service.clear_cache();
     turn.config = Arc::clone(&config);
-    turn.provider = create_model_provider(config.model_provider.clone(), turn.auth_manager.clone());
+    turn.set_model_provider(
+        config.model_provider_id.clone(),
+        create_model_provider(config.model_provider.clone(), turn.auth_manager.clone()),
+    );
     update_turn_settings_for_test(&mut turn, |settings| {
         Arc::make_mut(&mut settings.model_info).auto_review_model_override =
             Some("codex-auto-review".to_string());
@@ -2962,8 +2973,10 @@ async fn guardian_review_surfaces_responses_api_errors_in_rejection_reason() -> 
     crate::guardian::test_host::install(&session, &config);
     let turn_mut = Arc::get_mut(&mut turn).expect("turn should be uniquely owned");
     turn_mut.config = Arc::clone(&config);
-    turn_mut.provider =
-        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone());
+    turn_mut.set_model_provider(
+        config.model_provider_id.clone(),
+        create_model_provider(config.model_provider.clone(), turn_mut.auth_manager.clone()),
+    );
 
     seed_guardian_parent_history(&session, &turn).await;
 
@@ -3849,6 +3862,100 @@ async fn guardian_review_session_config_preserves_context_overrides_for_same_eff
         ),
         (Some(128_000), Some(100_000))
     );
+}
+
+#[tokio::test]
+async fn guardian_review_session_config_uses_routed_turn_provider() {
+    let server = start_mock_server().await;
+    let (session, mut turn) = guardian_test_session_and_turn(&server).await;
+    let routed_provider = ModelProviderInfo {
+        name: "routed-compatible-provider".to_string(),
+        base_url: Some("https://routed.example.invalid/v1".to_string()),
+        approval_review_model: Some("routed-reviewer".to_string()),
+        requires_openai_auth: false,
+        tool_compatibility: Some(
+            codex_model_provider_info::ToolCompatibility::FunctionsAndApplyPatch,
+        ),
+        ..Default::default()
+    };
+    let auth_manager = turn.model_provider().auth_manager();
+    Arc::get_mut(&mut turn)
+        .expect("turn should be unique")
+        .set_model_provider(
+            "routed-provider".to_string(),
+            create_model_provider(routed_provider, auth_manager),
+        );
+
+    let guardian_session_config =
+        guardian_review_session_config(session.as_ref(), &GuardianReviewContext::from(&turn))
+            .await
+            .expect("guardian config");
+    assert_eq!(
+        guardian_session_config.spawn_config.model.as_deref(),
+        Some("routed-reviewer")
+    );
+    let guardian_config = guardian_session_config.spawn_config;
+
+    assert_eq!(guardian_config.model_provider_id, "routed-provider");
+    assert_eq!(
+        guardian_config.model_provider.name,
+        "routed-compatible-provider"
+    );
+    assert_eq!(
+        guardian_config.model_provider.base_url.as_deref(),
+        Some("https://routed.example.invalid/v1")
+    );
+    assert!(!guardian_config.features.enabled(Feature::CodeMode));
+    assert!(!guardian_config.features.enabled(Feature::CodeModeOnly));
+    assert!(!guardian_config.features.enabled(Feature::CodeModeHost));
+}
+
+#[tokio::test]
+async fn guardian_review_session_config_clears_parent_developer_instructions() {
+    let mut parent_config = test_config().await;
+    parent_config.developer_instructions =
+        Some("parent or managed config should not replace guardian policy".to_string());
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+        ReasoningSummary::default(),
+        /*personality*/ None,
+        ResolvedModelMessages::bundled(),
+    )
+    .expect("guardian config");
+
+    assert_eq!(guardian_config.developer_instructions, None);
+    assert!(
+        guardian_config
+            .base_instructions
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn guardian_review_session_config_clears_legacy_notify() {
+    let mut parent_config = test_config().await;
+    parent_config.notify = Some(vec![
+        "/path/to/notify".to_string(),
+        "turn-ended".to_string(),
+    ]);
+
+    let guardian_config = build_guardian_review_session_config_for_test(
+        parent_config,
+        /*live_network_config*/ None,
+        "active-model",
+        /*reasoning_effort*/ None,
+        ReasoningSummary::default(),
+        /*personality*/ None,
+        ResolvedModelMessages::bundled(),
+    )
+    .expect("guardian config");
+
+    assert_eq!(guardian_config.notify, None);
 }
 
 #[tokio::test]

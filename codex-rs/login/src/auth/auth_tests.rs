@@ -1957,6 +1957,46 @@ fn auth_config_from_preserves_all_fields() {
 
 #[tokio::test]
 #[serial(codex_auth_env)]
+async fn shared_from_config_for_codex_home_loads_only_the_selected_profile() {
+    let primary_home = tempdir().expect("primary home");
+    let selected_home = tempdir().expect("selected profile home");
+    let _access_token_guard = remove_access_token_env_var();
+    write_auth_file(
+        AuthFileParams {
+            openai_api_key: None,
+            chatgpt_plan_type: Some("pro".to_string()),
+            chatgpt_account_id: Some("managed-workspace".to_string()),
+        },
+        selected_home.path(),
+    )
+    .expect("seed selected profile credentials");
+    let mut config = test_auth_manager_config(primary_home.path());
+    config.0.forced_chatgpt_workspace_id = Some(vec!["managed-workspace".to_string()]);
+
+    let manager = AuthManager::shared_from_config_for_codex_home(
+        &config,
+        selected_home.path().to_path_buf(),
+        /*enable_codex_api_key_env*/ false,
+    )
+    .await
+    .expect("selected profile auth manager");
+    let auth = manager.auth().await.expect("selected profile auth");
+
+    assert!(auth.is_chatgpt_auth());
+    assert_eq!(
+        auth.get_token_data()
+            .expect("selected profile token data")
+            .id_token
+            .chatgpt_account_id
+            .as_deref(),
+        Some("managed-workspace")
+    );
+    assert!(selected_home.path().join("auth.json").exists());
+    assert!(!primary_home.path().join("auth.json").exists());
+}
+
+#[tokio::test]
+#[serial(codex_auth_env)]
 async fn shared_from_config_prefers_workload_identity_to_explicit_access_token() {
     let codex_home = tempdir().expect("tempdir");
     let config = test_auth_manager_config(codex_home.path());

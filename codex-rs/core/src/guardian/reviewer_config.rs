@@ -22,6 +22,8 @@ pub fn build_guardian_review_session_config(
     personality: Option<codex_protocol::config_types::Personality>,
     model_messages: ResolvedModelMessages<'_>,
 ) -> anyhow::Result<Config> {
+    guardian_config.developer_instructions = None;
+    guardian_config.notify = None;
     guardian_config.model = Some(active_model.to_owned());
     guardian_config.model_reasoning_effort = reasoning_effort;
     guardian_config.model_reasoning_summary = Some(reasoning_summary);
@@ -81,9 +83,25 @@ pub(crate) async fn resolve_review_model(
             turn.config.http_client_factory(),
         )
         .await;
-    let default_review_model_id = turn.provider.approval_review_preferred_model();
+    let provider = turn.model_provider();
+    let uses_openai_reviewer = provider.info().is_openai();
+    let mut provider_parent_model = context.model_info.as_ref().clone();
+    if !uses_openai_reviewer {
+        provider_parent_model.auto_review_model_override =
+            provider.info().approval_review_model.clone();
+    }
+    let review_parent_model = if uses_openai_reviewer {
+        context.model_info.as_ref()
+    } else {
+        &provider_parent_model
+    };
+    let default_review_model_id = if uses_openai_reviewer {
+        provider.approval_review_preferred_model()
+    } else {
+        review_parent_model.slug.as_str()
+    };
     let review_model = codex_guardian_reviewer::select_review_model(
-        &context.model_info,
+        review_parent_model,
         context.reasoning_effort.as_ref(),
         default_review_model_id,
         &available_models,

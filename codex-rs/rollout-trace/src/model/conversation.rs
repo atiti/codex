@@ -46,6 +46,9 @@ pub struct ConversationItem {
 /// Sender and destination identities attached to a model-visible agent message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentMessageMetadata {
+    /// Provider-visible response item id used to correlate a delivered message with its sender tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     /// Agent path that authored the message.
     pub author: AgentPath,
     /// Agent path that received the message.

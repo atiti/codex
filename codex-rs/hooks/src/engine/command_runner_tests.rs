@@ -495,6 +495,13 @@ async fn schedule(runtime: &CommandHookRuntime, handler: ConfiguredHandler, cwd:
             cwd: AbsolutePathBuf::try_from(cwd.to_path_buf()).expect("absolute test hook cwd"),
             transcript_path: None,
             model: "test-model".to_string(),
+            model_provider: "openai".to_string(),
+            inherited_model_provider: None,
+            requested_backend: None,
+            spawn_model_explicit: false,
+            account_id: None,
+            rate_limits: None,
+            ordinary_usage_allowed: None,
             permission_mode: "default".to_string(),
             prompt: "test prompt".to_string(),
         })

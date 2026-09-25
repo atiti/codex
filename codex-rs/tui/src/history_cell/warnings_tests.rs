@@ -98,3 +98,15 @@ fn warning_count_deduplicates_messages_mcp_summaries_and_composites() {
     }));
     assert!(cells.iter().all(|cell| !cell.raw_lines().is_empty()));
 }
+
+#[test]
+fn agentroute_route_notices_are_transcript_cells_not_warnings() {
+    let notice = Arc::new(new_agentroute_route_event(
+        "◆ MODEL ROUTE · NORMAL → gpt-6-luna · xhigh reasoning · backend gpt/openai".into(),
+    ));
+    let cells: Vec<Arc<dyn HistoryCell>> = vec![notice.clone()];
+
+    assert_eq!(warning_count(&cells), 0);
+    assert!(warning_entries(&cells).is_empty());
+    assert!(!notice.display_lines(100).is_empty());
+}

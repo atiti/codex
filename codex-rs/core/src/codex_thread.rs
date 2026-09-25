@@ -235,6 +235,12 @@ impl CodexThread {
         self.io.submit(op).await
     }
 
+    /// Record authoritative subscription permission obtained by the hosting app-server.
+    /// This is consumed by pre-turn hooks without switching accounts inside a live thread.
+    pub async fn record_ordinary_usage_allowed(&self, allowed: Option<bool>) {
+        self.session.record_ordinary_usage_allowed(allowed).await;
+    }
+
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.session.services.session_telemetry.clone()

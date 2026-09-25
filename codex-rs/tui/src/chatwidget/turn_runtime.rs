@@ -10,6 +10,40 @@ const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "Invalid prompt: we've limited access to this content for safety reasons.";
 const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "This content was flagged for possible biological risk.";
+const MODEL_ROUTE_PREFIX: &str = "◆ MODEL ROUTE · ";
+
+pub(crate) fn parse_model_route(
+    message: &str,
+) -> Option<(String, Option<String>, ReasoningEffortConfig)> {
+    let details = message
+        .lines()
+        .find_map(|line| line.strip_prefix(MODEL_ROUTE_PREFIX))?;
+    let mut parts = details.split(" · ");
+    let route = parts.next()?;
+    let effort = parts.next()?.strip_suffix(" reasoning")?;
+    let model_provider = parts.find_map(|part| {
+        part.strip_prefix("backend ")
+            .and_then(|backend| backend.split_once('/'))
+            .map(|(_, provider)| provider.to_string())
+    });
+    let model = route
+        .split_once("→")
+        .map(|(_, model)| model.trim())
+        .or_else(|| route.strip_prefix("using "))?;
+    let effort = match effort {
+        "none" => ReasoningEffortConfig::None,
+        "minimal" => ReasoningEffortConfig::Minimal,
+        "low" => ReasoningEffortConfig::Low,
+        "medium" => ReasoningEffortConfig::Medium,
+        "high" => ReasoningEffortConfig::High,
+        "xhigh" => ReasoningEffortConfig::XHigh,
+        "max" => ReasoningEffortConfig::Max,
+        "ultra" => ReasoningEffortConfig::Ultra,
+        "persistent" => ReasoningEffortConfig::Persistent,
+        custom => ReasoningEffortConfig::Custom(custom.to_string()),
+    };
+    Some((model.to_string(), model_provider, effort))
+}
 
 fn is_safety_access_block_message(message: &str) -> bool {
     message.starts_with(LEGACY_SAFETY_ACCESS_BLOCK_PREFIX)
@@ -76,6 +110,9 @@ impl ChatWidget {
 
     pub(super) fn on_task_started(&mut self) {
         self.bottom_pane.dismiss_composer_sparkle();
+        self.routed_turn_model = None;
+        self.routed_turn_model_provider = None;
+        self.routed_turn_reasoning_effort = None;
         self.clear_context_compaction();
         self.input_queue.user_turn_pending_start = false;
         self.reset_safety_buffering_for_turn_start();
@@ -528,6 +565,15 @@ impl ChatWidget {
         if !self.warning_display_state.should_display(&message) {
             return;
         }
+        if let Some((model, model_provider, effort)) = parse_model_route(&message) {
+            self.routed_turn_model = Some(model);
+            self.routed_turn_model_provider = model_provider;
+            self.routed_turn_reasoning_effort = Some(effort);
+            self.refresh_status_surfaces();
+            self.add_to_history(history_cell::new_agentroute_route_event(message));
+            self.request_redraw();
+            return;
+        }
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
     }
@@ -563,5 +609,48 @@ impl ChatWidget {
         }
 
         "Conversation interrupted - tell the model what to do differently. Something went wrong? Hit `/feedback` to report the issue.".to_string()
+    }
+}
+
+#[cfg(test)]
+mod route_notice_tests {
+    use super::*;
+
+    #[test]
+    fn parses_rich_model_route_notice() {
+        assert_eq!(
+            parse_model_route(
+                "◆ MODEL ROUTE · FAST → gpt-5.6-luna · low reasoning · confidence 92% · score -2"
+            ),
+            Some(("gpt-5.6-luna".to_string(), None, ReasoningEffortConfig::Low))
+        );
+    }
+
+    #[test]
+    fn parses_model_provider_from_rich_route_notice() {
+        assert_eq!(
+            parse_model_route(
+                "◆ MODEL ROUTE · SMART → gpt-5.6-sol · high reasoning · backend azure/agentroute-azure · scope root"
+            ),
+            Some((
+                "gpt-5.6-sol".to_string(),
+                Some("agentroute-azure".to_string()),
+                ReasoningEffortConfig::High
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_model_provider_after_profile_route_notice() {
+        assert_eq!(
+            parse_model_route(
+                "◆ PROFILE ROUTE · markster · session affinity\n◆ MODEL ROUTE · MAX → dev-gpt-6-astra · high reasoning · backend azure/agentroute-azure · scope root"
+            ),
+            Some((
+                "dev-gpt-6-astra".to_string(),
+                Some("agentroute-azure".to_string()),
+                ReasoningEffortConfig::High
+            ))
+        );
     }
 }

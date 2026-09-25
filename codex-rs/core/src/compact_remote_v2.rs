@@ -235,7 +235,7 @@ async fn run_remote_compact_task_inner_impl(
         turn_context.sub_id.as_str(),
         compaction_id.as_str(),
         turn_context.model_info().slug.as_str(),
-        turn_context.provider.info().name.as_str(),
+        turn_context.model_provider().info().name.as_str(),
     );
     let compaction_item = TurnItem::ContextCompaction(context_compaction_item);
     sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -267,7 +267,7 @@ async fn run_remote_compact_task_inner_impl(
                     fallback_turn_context.sub_id.as_str(),
                     compaction_id.as_str(),
                     fallback_turn_context.model_info().slug.as_str(),
-                    fallback_turn_context.provider.info().name.as_str(),
+                    fallback_turn_context.model_provider().info().name.as_str(),
                 );
             let fallback_result = run_remote_compact_v2_attempt(
                 sess,
@@ -368,6 +368,7 @@ async fn run_remote_compact_task_inner_impl(
             compaction_response_id: Some(compaction_response_id),
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
             reviewer_compaction_hash,
+            model_provider_id: compaction_turn_context.model_provider_id(),
         },
     )
     .await;
@@ -393,7 +394,7 @@ async fn run_remote_compaction_request_v2(
 ) -> CodexResult<RemoteCompactionV2Output> {
     let turn_context = &step_context.turn;
     let max_retries = turn_context
-        .provider
+        .model_provider()
         .info()
         .stream_max_retries()
         .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);

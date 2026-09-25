@@ -5,6 +5,7 @@ use crate::style::accent_color;
 use crate::terminal_hyperlinks::LineWrapPolicy;
 use crate::terminal_hyperlinks::remap_source_wrapped_line;
 use crate::wrapping::adaptive_wrap_line_to_width;
+use ratatui::style::Color;
 
 #[cfg_attr(not(test), allow(dead_code))]
 const RECAP_HEADING: &str = "Conversation recap";
@@ -112,6 +113,77 @@ pub(crate) fn new_usage_warning_event(message: String) -> WarningHistoryCell {
     WarningHistoryCell {
         visible_in_transcript: true,
         ..new_warning_event(message)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AgentRouteNoticeHistoryCell {
+    details: PrefixedWrappedHistoryCell,
+}
+
+pub(crate) fn new_agentroute_route_event(message: String) -> AgentRouteNoticeHistoryCell {
+    let lines = message
+        .lines()
+        .map(|line| {
+            let Some(details) = line.strip_prefix("◆ MODEL ROUTE · ") else {
+                return Line::from(line.to_string().fg(accent_color()));
+            };
+            let mut spans = vec![
+                Span::styled("◆ MODEL ROUTE", Style::default().fg(accent_color()).bold()),
+                Span::raw(" · "),
+            ];
+            let mut segments = details.split(" · ");
+            if let Some(route) = segments.next() {
+                if let Some((tier, model)) = route.split_once(" → ") {
+                    spans.push(Span::styled(
+                        tier.to_string(),
+                        Style::default().fg(Color::Magenta).bold(),
+                    ));
+                    spans.push(Span::raw(" → "));
+                    spans.push(Span::styled(
+                        model.to_string(),
+                        Style::default().fg(Color::Green).bold(),
+                    ));
+                } else {
+                    spans.push(Span::styled(
+                        route.to_string(),
+                        Style::default().fg(Color::Green).bold(),
+                    ));
+                }
+            }
+            for segment in segments {
+                spans.push(Span::raw(" · "));
+                let color = if segment.starts_with("backend ") {
+                    Color::Yellow
+                } else if segment.ends_with(" reasoning") {
+                    Color::Cyan
+                } else {
+                    Color::Gray
+                };
+                spans.push(Span::styled(
+                    segment.to_string(),
+                    Style::default().fg(color),
+                ));
+            }
+            Line::from(spans)
+        })
+        .collect::<Vec<_>>();
+    AgentRouteNoticeHistoryCell {
+        details: PrefixedWrappedHistoryCell::new(Text::from(lines), "  ", "  "),
+    }
+}
+
+impl HistoryCell for AgentRouteNoticeHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        self.details.display_lines(width)
+    }
+
+    fn raw_lines(&self) -> Vec<Line<'static>> {
+        self.details.raw_lines()
+    }
+
+    fn transcript_hyperlink_lines(&self, width: u16) -> Vec<HyperlinkLine> {
+        self.details.transcript_hyperlink_lines(width)
     }
 }
 

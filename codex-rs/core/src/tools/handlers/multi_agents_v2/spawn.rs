@@ -17,6 +17,7 @@ use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
 use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
 use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
 use crate::turn_timing::now_unix_timestamp_ms;
+use codex_model_provider::create_model_provider;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::ThreadId;
 use codex_protocol::protocol::MultiAgentVersion;
@@ -123,6 +124,9 @@ async fn handle_spawn_agent(
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
     let message = message_content(args.message)?;
+    let routing_prompt = Some(args.task_name.clone());
+    let inherited_model_provider = Some(turn.model_provider_id());
+    let model_explicit = args.model.is_some();
     let role_name = args
         .agent_type
         .as_deref()
@@ -144,6 +148,7 @@ async fn handle_spawn_agent(
     )
     .await
     .map_err(FunctionCallError::RespondToModel)?;
+    let requested_backend = prepared.requested_backend.clone();
     let config = prepared.config;
     let is_full_history_fork = matches!(fork_mode, Some(SpawnAgentForkMode::FullHistory));
     let spawn_source = thread_spawn_source(
@@ -178,18 +183,30 @@ async fn handle_spawn_agent(
                 &config.multi_agent_v2,
                 child_multi_agent_messages,
                 !config.update_plan_enabled && config.model_catalog.is_none(),
+                create_model_provider(
+                    config.model_provider.clone(),
+                    Some(session.services.auth_manager.clone()),
+                )
+                .capabilities(),
             ))
         } else {
             None
         };
     let (spawned_agent, agent_snapshot) = session
         .services
-        .agent_control
+        .local_agent_runtime
+        .control(session.session_id())
         .spawn(SpawnRequest {
             caller: session.thread_id,
             config,
             input: AgentInput::Message {
-                message: agent_message_from_tool(message, &source),
+                message: crate::agent::types::AgentMessage::Routed {
+                    message: Box::new(agent_message_from_tool(message, &source)),
+                    routing_prompt,
+                    inherited_model_provider,
+                    requested_backend,
+                    model_explicit,
+                },
                 mode: MessageDeliveryMode::TriggerTurn,
             },
             source: spawn_source,

@@ -2,6 +2,7 @@ use crate::agent::types::ResolvedMultiAgentV2UsageHints;
 use crate::config::MultiAgentV2Config;
 use crate::context::MultiAgentRoleInstructions;
 use crate::session::step_context::StepContext;
+use codex_model_provider::ProviderCapabilities;
 use codex_prompts::ResolvedMessage;
 use codex_prompts::ResolvedModelMessages;
 use codex_prompts::ResolvedMultiAgentMessages;
@@ -23,6 +24,7 @@ pub(super) fn usage_hint_text(step_context: &StepContext) -> Option<MultiAgentRo
         &turn_context.config.multi_agent_v2,
         multi_agent_messages,
         !turn_context.config.update_plan_enabled && turn_context.config.model_catalog.is_none(),
+        turn_context.model_provider().capabilities(),
     );
     match &turn_context.session_source {
         SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. }) => snapshot.subagent,
@@ -40,7 +42,12 @@ pub(crate) fn resolve_usage_hints(
     config: &MultiAgentV2Config,
     multi_agent_messages: ResolvedMultiAgentMessages<'_>,
     omit_update_plan_instructions: bool,
+    provider_capabilities: ProviderCapabilities,
 ) -> ResolvedMultiAgentV2UsageHints {
+    let tool_namespace = provider_capabilities
+        .namespace_tools
+        .then_some(config.tool_namespace.as_deref())
+        .flatten();
     let resolve_role = |configured: Option<&str>, message: ResolvedMessage<'_>| {
         // Configured roles take precedence; empty configured or catalog roles suppress fallback.
         if let Some(configured) = configured {
@@ -59,6 +66,7 @@ pub(crate) fn resolve_usage_hints(
             max_concurrency: config.max_concurrent_threads_per_session,
             wait_agent_enabled: config.wait_agent_enabled,
             expose_model_overrides: config.expose_spawn_agent_model_overrides,
+            tool_namespace: tool_namespace.map(str::to_owned),
         })
     };
 

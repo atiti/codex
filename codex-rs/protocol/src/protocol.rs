@@ -485,6 +485,7 @@ pub struct TurnSettingsUpdate {
     /// which can be pending. An already-selected environment with its own cannot switch back.
     pub environments: Option<Vec<TurnEnvironmentSelection>>,
     pub model: Option<String>,
+    /// Key into the active turn's configured model provider map.
     /// `None` preserves the selection; `Some(None)` clears it.
     pub effort: Option<Option<ReasoningEffortConfig>>,
     pub summary: Option<ReasoningSummaryConfig>,
@@ -812,6 +813,30 @@ pub struct InterAgentCommunication {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub encrypted_content: Option<String>,
+    /// Ephemeral plaintext used by local pre-turn routing hooks when the actual
+    /// delegated message is provider-encrypted. It must never cross a
+    /// serialization boundary or enter model-visible history.
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub routing_prompt: Option<String>,
+    /// Ephemeral provider id inherited from the parent turn. Local pre-turn
+    /// routing hooks use this instead of inferring parent affinity from the
+    /// child's pre-hook model.
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub routing_inherited_model_provider: Option<String>,
+    /// Ephemeral backend explicitly requested for this child spawn.
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub routing_requested_backend: Option<String>,
+    /// True only when the caller explicitly supplied a child model override.
+    #[serde(skip)]
+    #[schemars(skip)]
+    #[ts(skip)]
+    pub routing_model_explicit: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub internal_chat_message_metadata_passthrough: Option<InternalChatMessageMetadataPassthrough>,
@@ -833,6 +858,10 @@ impl InterAgentCommunication {
             other_recipients,
             content,
             encrypted_content: None,
+            routing_prompt: None,
+            routing_inherited_model_provider: None,
+            routing_requested_backend: None,
+            routing_model_explicit: false,
             internal_chat_message_metadata_passthrough: None,
             trigger_turn,
         }
@@ -852,9 +881,32 @@ impl InterAgentCommunication {
             other_recipients,
             content: String::new(),
             encrypted_content: Some(encrypted_content),
+            routing_prompt: None,
+            routing_inherited_model_provider: None,
+            routing_requested_backend: None,
+            routing_model_explicit: false,
             internal_chat_message_metadata_passthrough: None,
             trigger_turn,
         }
+    }
+
+    pub fn with_routing_prompt(mut self, routing_prompt: Option<String>) -> Self {
+        self.routing_prompt = routing_prompt.filter(|prompt| !prompt.trim().is_empty());
+        self
+    }
+
+    pub fn with_routing_provider_context(
+        mut self,
+        inherited_model_provider: Option<String>,
+        requested_backend: Option<String>,
+        model_explicit: bool,
+    ) -> Self {
+        self.routing_inherited_model_provider =
+            inherited_model_provider.filter(|provider| !provider.trim().is_empty());
+        self.routing_requested_backend =
+            requested_backend.filter(|backend| !backend.trim().is_empty());
+        self.routing_model_explicit = model_explicit;
+        self
     }
 
     pub fn set_turn_id_if_missing(&mut self, turn_id: &str) {
@@ -867,6 +919,10 @@ impl InterAgentCommunication {
     pub fn to_response_input_item(&self) -> ResponseInputItem {
         let mut communication = self.clone();
         communication.id = None;
+        communication.routing_prompt = None;
+        communication.routing_inherited_model_provider = None;
+        communication.routing_requested_backend = None;
+        communication.routing_model_explicit = false;
         communication.internal_chat_message_metadata_passthrough = None;
         ResponseInputItem::Message {
             role: "assistant".to_string(),
@@ -4712,6 +4768,10 @@ mod tests {
             other_recipients: vec![AgentPath::root().join("worker").expect("recipient path")],
             content: "review the diff".to_string(),
             encrypted_content: None,
+            routing_prompt: None,
+            routing_inherited_model_provider: None,
+            routing_requested_backend: None,
+            routing_model_explicit: false,
             internal_chat_message_metadata_passthrough: None,
             trigger_turn: true,
         };
@@ -4741,6 +4801,15 @@ mod tests {
             Vec::new(),
             "encrypted payload".to_string(),
             /*trigger_turn*/ false,
+        )
+        .with_routing_prompt(Some("classify this task".to_string()));
+
+        let serialized = serde_json::to_value(&communication).expect("serialize communication");
+        assert!(
+            !serialized
+                .as_object()
+                .expect("object")
+                .contains_key("routing_prompt")
         );
 
         assert_eq!(
@@ -4761,6 +4830,30 @@ mod tests {
                 internal_chat_message_metadata_passthrough: None,
             }
         );
+    }
+
+    #[test]
+    fn response_input_serialization_excludes_ephemeral_routing_prompt() {
+        let communication = InterAgentCommunication::new_encrypted(
+            AgentPath::root(),
+            AgentPath::root().join("worker").expect("recipient path"),
+            Vec::new(),
+            "encrypted payload".to_string(),
+            /*trigger_turn*/ true,
+        )
+        .with_routing_prompt(Some("private local routing summary".to_string()));
+
+        let ResponseInputItem::Message { content, .. } = communication.to_response_input_item()
+        else {
+            panic!("communication should serialize as a response message");
+        };
+        let serialized = match content.as_slice() {
+            [ContentItem::OutputText { text }] => text,
+            other => panic!("unexpected response content: {other:?}"),
+        };
+
+        assert!(!serialized.contains("routing_prompt"));
+        assert!(!serialized.contains("private local routing summary"));
     }
 
     #[test]

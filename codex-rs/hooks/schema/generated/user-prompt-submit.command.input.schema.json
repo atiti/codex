@@ -2,14 +2,153 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "additionalProperties": false,
   "definitions": {
+    "CreditsSnapshot": {
+      "properties": {
+        "balance": {
+          "type": "string"
+        },
+        "has_credits": {
+          "type": "boolean"
+        },
+        "unlimited": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "has_credits",
+        "unlimited"
+      ],
+      "type": "object"
+    },
     "NullableString": {
       "type": [
         "string",
         "null"
       ]
+    },
+    "PlanType": {
+      "enum": [
+        "free",
+        "go",
+        "plus",
+        "pro",
+        "prolite",
+        "team",
+        "self_serve_business_prolite",
+        "self_serve_business_usage_based",
+        "business",
+        "ent26",
+        "enterprise_cbp_automation",
+        "enterprise_cbp_usage_based",
+        "enterprise",
+        "edu",
+        "edu_plus",
+        "edu_pro",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "RateLimitReachedType": {
+      "enum": [
+        "rate_limit_reached",
+        "workspace_owner_credits_depleted",
+        "workspace_member_credits_depleted",
+        "workspace_owner_usage_limit_reached",
+        "workspace_member_usage_limit_reached"
+      ],
+      "type": "string"
+    },
+    "RateLimitSnapshot": {
+      "properties": {
+        "credits": {
+          "$ref": "#/definitions/CreditsSnapshot"
+        },
+        "individual_limit": {
+          "$ref": "#/definitions/SpendControlLimitSnapshot"
+        },
+        "limit_id": {
+          "type": "string"
+        },
+        "limit_name": {
+          "type": "string"
+        },
+        "normal_model_slug": {
+          "description": "Normal model metadata for a quota alias; never a replacement for the request model.",
+          "type": "string"
+        },
+        "plan_type": {
+          "$ref": "#/definitions/PlanType"
+        },
+        "primary": {
+          "$ref": "#/definitions/RateLimitWindow"
+        },
+        "rate_limit_reached_type": {
+          "$ref": "#/definitions/RateLimitReachedType"
+        },
+        "secondary": {
+          "$ref": "#/definitions/RateLimitWindow"
+        },
+        "spend_control_reached": {
+          "description": "Backend-reported spend-control state. `None` is unavailable, not a sparse-update recovery.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "RateLimitWindow": {
+      "properties": {
+        "resets_at": {
+          "description": "Unix timestamp (seconds since epoch) when the window resets.",
+          "format": "int64",
+          "type": "integer"
+        },
+        "used_percent": {
+          "description": "Percentage (0-100) of the window that has been consumed.",
+          "format": "double",
+          "type": "number"
+        },
+        "window_minutes": {
+          "description": "Rolling window duration, in minutes.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "used_percent"
+      ],
+      "type": "object"
+    },
+    "SpendControlLimitSnapshot": {
+      "properties": {
+        "limit": {
+          "type": "string"
+        },
+        "remaining_percent": {
+          "format": "int32",
+          "type": "integer"
+        },
+        "resets_at": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "used": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "limit",
+        "remaining_percent",
+        "resets_at",
+        "used"
+      ],
+      "type": "object"
     }
   },
   "properties": {
+    "account_id": {
+      "description": "Opaque ChatGPT account identity for local capacity affinity. Consumers must not display it.",
+      "type": "string"
+    },
     "agent_id": {
       "type": "string"
     },
@@ -26,6 +165,13 @@
     "model": {
       "type": "string"
     },
+    "model_provider": {
+      "type": "string"
+    },
+    "ordinary_usage_allowed": {
+      "description": "Authoritative ordinary subscription permission from account/rateLimits/read.",
+      "type": "boolean"
+    },
     "permission_mode": {
       "enum": [
         "default",
@@ -38,6 +184,14 @@
     },
     "prompt": {
       "type": "string"
+    },
+    "rate_limits": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/RateLimitSnapshot"
+        }
+      ],
+      "description": "Latest subscription rate-limit snapshot observed by the active Codex session."
     },
     "session_id": {
       "type": "string"
@@ -54,6 +208,7 @@
     "cwd",
     "hook_event_name",
     "model",
+    "model_provider",
     "permission_mode",
     "prompt",
     "session_id",

@@ -72,6 +72,13 @@ fn guardian_review_retry_only_retries_transient_session_and_parse_errors() {
     outcomes.extend([
         (GuardianReviewOutcome::Completed(assessment), false),
         (
+            GuardianReviewOutcome::Error(GuardianReviewError::ReviewerFallbackReady {
+                from_profile: "exhausted".to_string(),
+                to_profile: "healthy".to_string(),
+            }),
+            true,
+        ),
+        (
             GuardianReviewOutcome::Error(GuardianReviewError::InputBudgetExceeded),
             false,
         ),

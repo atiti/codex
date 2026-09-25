@@ -1,13 +1,19 @@
 //! Captures a review on the host's original action and authorization state.
 //! The extension chooses effects; this adapter supplies evidence, validation and publication.
 
+use super::super::GuardianReviewerFallbackState;
+use super::super::GuardianReviewerIdentity;
+use super::super::GuardianReviewerProfiles;
 use super::*;
 use crate::codex_thread::GuardianAuthorizationVersion;
 use codex_guardian_reviewer::ReviewHost;
 use codex_protocol::approvals::GuardianReviewReason;
+use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::WarningEvent;
 
 pub(in crate::guardian) struct PreparedApproval {
     request: GuardianApprovalRequest,
+    turn: Arc<crate::session::turn_context::TurnContext>,
     root_authorization_version: Option<GuardianAuthorizationVersion>,
     user_message_revision: u64,
     review_evidence: Option<(
@@ -16,6 +22,7 @@ pub(in crate::guardian) struct PreparedApproval {
         GuardianAuthorizationVersion,
         Option<GuardianAuthorizationVersion>,
     )>,
+    reviewer_profiles: tokio::sync::Mutex<GuardianReviewerFallbackState>,
 }
 
 impl ReviewHost for super::super::runtime::ReviewRuntime {
@@ -135,9 +142,27 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         Ok((
             PreparedApproval {
                 request,
+                turn: Arc::clone(&turn),
                 root_authorization_version,
                 user_message_revision,
                 review_evidence,
+                reviewer_profiles: tokio::sync::Mutex::new(GuardianReviewerFallbackState {
+                    active: GuardianReviewerIdentity {
+                        name: turn
+                            .extension_data
+                            .get::<GuardianReviewerProfiles>()
+                            .and_then(|profiles| profiles.current_name.clone()),
+                        auth_manager: turn
+                            .model_provider()
+                            .auth_manager()
+                            .or_else(|| Some(Arc::clone(&session.services.auth_manager))),
+                    },
+                    fallbacks: turn
+                        .extension_data
+                        .get::<GuardianReviewerProfiles>()
+                        .map(|profiles| profiles.fallbacks.iter().cloned().collect())
+                        .unwrap_or_default(),
+                }),
             },
             report,
         ))
@@ -149,9 +174,11 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         deadline: Instant,
         cancellation: &CancellationToken,
     ) -> (GuardianReviewOutcome, GuardianReviewAnalyticsResult) {
+        let reviewer = prepared.reviewer_profiles.lock().await.active.clone();
         let (mut outcome, analytics) = run_guardian_review_session_before_deadline(
             Arc::clone(&self.session),
             self.context.clone(),
+            reviewer,
             prepared.request.clone(),
             self.reasons.clone(),
             guardian_output_schema(),
@@ -179,11 +206,68 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 || self.history_reset.is_cancelled()
                 || cancellation.is_cancelled())
         {
-            // A completed approval cannot outlive the owning-session or root evidence
-            // it evaluated, including when either changed before prompt construction.
             outcome = GuardianReviewOutcome::Error(GuardianReviewError::Cancelled);
         }
-
+        if !matches!(
+            &outcome,
+            GuardianReviewOutcome::Error(GuardianReviewError::Session {
+                error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+                ..
+            })
+        ) {
+            return (outcome, analytics);
+        }
+        let mut reviewer_profiles = prepared.reviewer_profiles.lock().await;
+        while let Some(fallback) = reviewer_profiles.fallbacks.pop_front() {
+            let auth_manager = match codex_login::AuthManager::shared_from_config_for_codex_home(
+                prepared.turn.config.as_ref(),
+                fallback.codex_home,
+                /*enable_codex_api_key_env*/ false,
+            )
+            .await
+            {
+                Ok(auth_manager) => auth_manager,
+                Err(error) => {
+                    tracing::warn!(profile = %fallback.name, %error, "could not load reviewer fallback profile");
+                    continue;
+                }
+            };
+            if auth_manager
+                .auth()
+                .await
+                .is_none_or(|auth| !auth.is_chatgpt_auth())
+            {
+                tracing::warn!(profile = %fallback.name, "reviewer fallback profile is not signed in");
+                continue;
+            }
+            let from_profile = reviewer_profiles
+                .active
+                .name
+                .clone()
+                .unwrap_or_else(|| "current".to_string());
+            reviewer_profiles.active = GuardianReviewerIdentity {
+                name: Some(fallback.name.clone()),
+                auth_manager: Some(auth_manager),
+            };
+            self.session
+                .send_event(
+                    prepared.turn.as_ref(),
+                    EventMsg::GuardianWarning(WarningEvent {
+                        message: format!(
+                            "◆ APPROVAL REVIEWER FALLBACK · {from_profile} → {} · current subscription usage limit reached",
+                            fallback.name
+                        ),
+                    }),
+                )
+                .await;
+            return (
+                GuardianReviewOutcome::Error(GuardianReviewError::ReviewerFallbackReady {
+                    from_profile,
+                    to_profile: fallback.name,
+                }),
+                analytics,
+            );
+        }
         (outcome, analytics)
     }
 

@@ -2793,6 +2793,19 @@ impl AuthManager {
         Self::shared_from_auth_config(auth_config_from(config), enable_codex_api_key_env).await
     }
 
+    /// Builds a shared manager from the resolved auth policy while loading credentials from a
+    /// different Codex home. This is used for turn-boundary account routing without mutating the
+    /// thread's primary authentication manager.
+    pub async fn shared_from_config_for_codex_home(
+        config: &impl AuthManagerConfig,
+        codex_home: PathBuf,
+        enable_codex_api_key_env: bool,
+    ) -> Result<Arc<Self>, AuthManagerInitializationError> {
+        let mut auth_config = auth_config_from(config);
+        auth_config.codex_home = codex_home;
+        Self::shared_from_auth_config(auth_config, enable_codex_api_key_env).await
+    }
+
     /// Activates workload identity against an auth config resolved before full runtime config.
     pub async fn shared_from_auth_config(
         auth_config: AuthConfig,

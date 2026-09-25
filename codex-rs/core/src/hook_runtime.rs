@@ -29,11 +29,15 @@ use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
 use codex_otel::HOOK_RUN_DURATION_METRIC;
 use codex_otel::HOOK_RUN_METRIC;
 use codex_plugin::ExecutorPluginHookSource;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
 use codex_protocol::items::FunctionCallOutputItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::items::UserMessageItem;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
+use codex_protocol::protocol::AgentMessageContentDeltaEvent;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::EventMsg;
@@ -49,6 +53,8 @@ use codex_protocol::protocol::HookStartedEvent;
 use codex_protocol::protocol::InternalSessionSource;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
+use codex_protocol::protocol::TurnSettingsUpdate;
+use codex_protocol::protocol::TurnSettingsUpdateOutcome;
 use codex_protocol::protocol::WarningEvent;
 use codex_rollout::state_db;
 use codex_thread_store::PersistContext;
@@ -64,6 +70,8 @@ use crate::context::HookAdditionalContext;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::event_mapping::parse_turn_item;
 use crate::guardian::GuardianReviewContext;
+use crate::guardian::GuardianReviewerProfile;
+use crate::guardian::GuardianReviewerProfiles;
 use crate::session::TurnInput;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
@@ -76,6 +84,16 @@ use crate::turn_metadata::ExecutionMetadata;
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
     pub additional_contexts: Vec<String>,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    pub route_message: Option<String>,
+    pub strip_prompt_prefix_bytes: Option<usize>,
+    pub strip_provider_state: bool,
+    pub chatgpt_profile_home: Option<String>,
+    pub reviewer_profile_name: Option<String>,
+    pub reviewer_fallback_profiles: Vec<codex_hooks::ReviewerFallbackProfile>,
+    pub settings_updated: bool,
 }
 
 pub(crate) enum PreToolUseHookResult {
@@ -101,6 +119,16 @@ impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
             outcome: HookRuntimeOutcome {
                 should_stop,
                 additional_contexts,
+                model: None,
+                model_provider: None,
+                reasoning_effort: None,
+                route_message: None,
+                strip_prompt_prefix_bytes: None,
+                strip_provider_state: false,
+                chatgpt_profile_home: None,
+                reviewer_profile_name: None,
+                reviewer_fallback_profiles: Vec::new(),
+                settings_updated: false,
             },
         }
     }
@@ -113,12 +141,31 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
             should_stop,
             stop_reason: _,
             additional_contexts,
+            model,
+            model_provider,
+            reasoning_effort,
+            route_message,
+            strip_prompt_prefix_bytes,
+            strip_provider_state,
+            chatgpt_profile_home,
+            reviewer_profile_name,
+            reviewer_fallback_profiles,
         } = value;
         Self {
             hook_events,
             outcome: HookRuntimeOutcome {
                 should_stop,
                 additional_contexts,
+                model,
+                model_provider,
+                reasoning_effort,
+                route_message,
+                strip_prompt_prefix_bytes,
+                strip_provider_state,
+                chatgpt_profile_home,
+                reviewer_profile_name,
+                reviewer_fallback_profiles,
+                settings_updated: false,
             },
         }
     }
@@ -451,7 +498,7 @@ pub(crate) async fn run_turn_stop_hooks(
         #[allow(deprecated)]
         cwd: turn_context.cwd.clone(),
         transcript_path,
-        model: turn_context.model_info().slug.clone(),
+        model: step_context.settings.model_info.slug.clone(),
         permission_mode: hook_permission_mode(turn_context.approval_policy()),
         request_metadata: (!request_metadata.is_empty()).then_some(request_metadata),
         stop_hook_active,
@@ -674,43 +721,221 @@ pub(crate) async fn run_legacy_after_agent_hook(
     true
 }
 
+fn routing_prompt_for_pending_input(
+    turn_context: &TurnContext,
+    pending_input_item: &TurnInput,
+) -> Option<String> {
+    match pending_input_item {
+        TurnInput::UserInput { content, .. } => UserMessageItem::new(content).message(),
+        TurnInput::InterAgentCommunication(communication)
+            if matches!(
+                turn_context.session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            ) && communication.trigger_turn =>
+        {
+            communication
+                .routing_prompt
+                .clone()
+                .unwrap_or_else(|| communication.content.clone())
+        }
+        TurnInput::ResponseItem(_)
+        | TurnInput::FunctionCallOutput(_)
+        | TurnInput::InterAgentCommunication(_) => {
+            return None;
+        }
+    }
+    .into()
+}
+
+fn routing_provider_context_for_pending_input(
+    turn_context: &TurnContext,
+    pending_input_item: &TurnInput,
+) -> (Option<String>, Option<String>, bool) {
+    match pending_input_item {
+        TurnInput::InterAgentCommunication(communication)
+            if matches!(
+                turn_context.session_source,
+                SessionSource::SubAgent(SubAgentSource::ThreadSpawn { .. })
+            ) && communication.trigger_turn =>
+        {
+            (
+                communication.routing_inherited_model_provider.clone(),
+                communication.routing_requested_backend.clone(),
+                communication.routing_model_explicit,
+            )
+        }
+        _ => (None, None, false),
+    }
+}
+
 pub(crate) async fn inspect_pending_input(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     pending_input_item: &TurnInput,
 ) -> HookRuntimeOutcome {
-    match pending_input_item {
-        TurnInput::UserInput { content, .. } => {
-            let request = UserPromptSubmitRequest {
-                session_id: sess.session_id().into(),
-                turn_id: turn_context.sub_id.clone(),
-                subagent: thread_spawn_subagent_hook_context(sess, turn_context),
-                #[allow(deprecated)]
-                cwd: turn_context.cwd.clone(),
-                transcript_path: sess.hook_transcript_path().await,
-                model: turn_context.model_info().slug.clone(),
-                permission_mode: hook_permission_mode(turn_context.approval_policy()),
-                prompt: UserMessageItem::new(content).message(),
-            };
-            let hooks = sess.hooks();
-            let preview_runs = hooks.preview_user_prompt_submit(&request);
-            run_context_injecting_hook(
-                sess,
-                turn_context,
-                preview_runs,
-                hooks.run_user_prompt_submit(request),
+    let Some(prompt) = routing_prompt_for_pending_input(turn_context, pending_input_item) else {
+        return HookRuntimeOutcome {
+            should_stop: false,
+            additional_contexts: Vec::new(),
+            model: None,
+            model_provider: None,
+            reasoning_effort: None,
+            route_message: None,
+            strip_prompt_prefix_bytes: None,
+            strip_provider_state: false,
+            chatgpt_profile_home: None,
+            reviewer_profile_name: None,
+            reviewer_fallback_profiles: Vec::new(),
+            settings_updated: false,
+        };
+    };
+    let account_id = sess
+        .services
+        .auth_manager
+        .auth()
+        .await
+        .and_then(|auth| auth.get_account_id());
+    let (rate_limits, ordinary_usage_allowed) = sess.capacity_snapshot().await;
+    let (inherited_model_provider, requested_backend, spawn_model_explicit) =
+        routing_provider_context_for_pending_input(turn_context, pending_input_item);
+    let request = UserPromptSubmitRequest {
+        session_id: sess.session_id().into(),
+        turn_id: turn_context.sub_id.clone(),
+        subagent: thread_spawn_subagent_hook_context(sess, turn_context),
+        #[allow(deprecated)]
+        cwd: turn_context.cwd.clone(),
+        transcript_path: sess.hook_transcript_path().await,
+        model: turn_context.model_info().slug.clone(),
+        model_provider: turn_context.model_provider_id(),
+        inherited_model_provider,
+        requested_backend,
+        spawn_model_explicit,
+        account_id,
+        rate_limits,
+        ordinary_usage_allowed,
+        permission_mode: hook_permission_mode(turn_context.approval_policy()),
+        prompt,
+    };
+    let hooks = sess.hooks();
+    let preview_runs = hooks.preview_user_prompt_submit(&request);
+    let mut outcome = run_context_injecting_hook(
+        sess,
+        turn_context,
+        preview_runs,
+        hooks.run_user_prompt_submit(request),
+    )
+    .await;
+    let reviewer_fallbacks = outcome
+        .reviewer_fallback_profiles
+        .iter()
+        .filter_map(|profile| {
+            let codex_home = std::path::PathBuf::from(&profile.codex_home);
+            codex_home.is_absolute().then(|| GuardianReviewerProfile {
+                name: profile.name.clone(),
+                codex_home,
+            })
+        })
+        .collect::<Vec<_>>();
+    if outcome.reviewer_profile_name.is_some() || !reviewer_fallbacks.is_empty() {
+        turn_context
+            .extension_data
+            .insert(GuardianReviewerProfiles {
+                current_name: outcome.reviewer_profile_name.clone(),
+                fallbacks: reviewer_fallbacks,
+            });
+    }
+    if !outcome.should_stop
+        && (outcome.model.is_some()
+            || outcome.model_provider.is_some()
+            || outcome.reasoning_effort.is_some()
+            || outcome.chatgpt_profile_home.is_some())
+    {
+        let route_notice = outcome.route_message.take().or_else(|| {
+            outcome.model.as_ref().map(|model| {
+                let effort = outcome
+                    .reasoning_effort
+                    .as_ref()
+                    .map(|effort| format!(" · {} reasoning", effort.as_str()))
+                    .unwrap_or_default();
+                format!("◆ MODEL ROUTE · using {model}{effort} for this turn")
+            })
+        });
+        let update = TurnSettingsUpdate {
+            model: outcome.model.take(),
+            effort: outcome.reasoning_effort.take().map(Some),
+            ..Default::default()
+        };
+        match sess
+            .apply_routed_turn_settings(
+                &turn_context.sub_id,
+                update,
+                outcome.model_provider.take(),
+                outcome.chatgpt_profile_home.take(),
             )
             .await
+        {
+            TurnSettingsUpdateOutcome::Applied => {
+                outcome.settings_updated = true;
+                if let Some(message) = route_notice {
+                    // Keep routing notices out of the warning channel. The TUI renders this
+                    // display-only commentary as a dedicated colored transcript cell and updates
+                    // its per-turn status bar; the model never receives it as prompt context.
+                    let item_id = format!("agentroute-route-{}", turn_context.sub_id);
+                    let agent_message = AgentMessageItem {
+                        id: item_id.clone(),
+                        content: vec![AgentMessageContent::Text {
+                            text: message.clone(),
+                        }],
+                        phase: Some(MessagePhase::Commentary),
+                        memory_citation: None,
+                        delivery: None,
+                        questions: None,
+                    };
+                    let started_item = TurnItem::AgentMessage(AgentMessageItem {
+                        content: Vec::new(),
+                        ..agent_message.clone()
+                    });
+                    sess.emit_turn_item_started(turn_context, &started_item)
+                        .await;
+                    sess.send_event(
+                        turn_context,
+                        EventMsg::AgentMessageContentDelta(AgentMessageContentDeltaEvent {
+                            thread_id: sess.thread_id.to_string(),
+                            turn_id: turn_context.sub_id.clone(),
+                            item_id,
+                            delta: message,
+                        }),
+                    )
+                    .await;
+                    sess.emit_turn_item_completed(
+                        turn_context,
+                        TurnItem::AgentMessage(agent_message),
+                    )
+                    .await;
+                }
+            }
+            TurnSettingsUpdateOutcome::TargetUnavailable => {
+                sess.send_event(
+                    turn_context,
+                    EventMsg::Warning(WarningEvent {
+                        message: "UserPromptSubmit route override could not target the active turn"
+                            .to_string(),
+                    }),
+                )
+                .await;
+            }
+            TurnSettingsUpdateOutcome::Rejected { reason } => {
+                sess.send_event(
+                    turn_context,
+                    EventMsg::Warning(WarningEvent {
+                        message: format!("UserPromptSubmit route override was rejected: {reason}"),
+                    }),
+                )
+                .await;
+            }
         }
-        TurnInput::ResponseItem(_) | TurnInput::FunctionCallOutput(_) => HookRuntimeOutcome {
-            should_stop: false,
-            additional_contexts: Vec::new(),
-        },
-        TurnInput::InterAgentCommunication(_) => HookRuntimeOutcome {
-            should_stop: false,
-            additional_contexts: Vec::new(),
-        },
     }
+    outcome
 }
 
 pub(crate) async fn record_pending_input(
@@ -1074,6 +1299,7 @@ mod tests {
     use codex_otel::HOOK_RUN_METRIC;
     use codex_otel::MetricsClient;
     use codex_otel::MetricsConfig;
+    use codex_protocol::ThreadId;
     use codex_protocol::models::ContentItem;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookExecutionMode;
@@ -1081,6 +1307,9 @@ mod tests {
     use codex_protocol::protocol::HookRunStatus;
     use codex_protocol::protocol::HookScope;
     use codex_protocol::protocol::HookSource;
+    use codex_protocol::protocol::InterAgentCommunication;
+    use codex_protocol::protocol::SessionSource;
+    use codex_protocol::protocol::SubAgentSource;
     use opentelemetry_sdk::metrics::InMemoryMetricExporter;
     use opentelemetry_sdk::metrics::data::AggregatedMetrics;
     use opentelemetry_sdk::metrics::data::HistogramDataPoint;
@@ -1093,6 +1322,8 @@ mod tests {
     use super::emit_hook_started_events;
     use super::hook_run_analytics_payload;
     use super::hook_run_metric_tags;
+    use super::routing_prompt_for_pending_input;
+    use super::routing_provider_context_for_pending_input;
     use crate::session::tests::make_session_and_context;
     use crate::session::tests::make_session_and_context_with_rx;
     use codex_protocol::protocol::HookCompletedEvent;
@@ -1133,6 +1364,134 @@ mod tests {
                 ("developer", "first tide note".to_string()),
                 ("developer", "second tide note".to_string()),
             ],
+        );
+    }
+
+    #[tokio::test]
+    async fn encrypted_subagent_input_uses_ephemeral_routing_prompt() {
+        let (_session, mut turn_context) = make_session_and_context().await;
+        turn_context.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::default(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+        let communication = InterAgentCommunication::new_encrypted(
+            codex_protocol::AgentPath::root(),
+            codex_protocol::AgentPath::root()
+                .join("worker")
+                .expect("recipient path"),
+            Vec::new(),
+            "encrypted payload".to_string(),
+            /*trigger_turn*/ true,
+        )
+        .with_routing_prompt(Some(
+            "Design a zero-downtime database migration".to_string(),
+        ));
+
+        assert_eq!(
+            routing_prompt_for_pending_input(
+                &turn_context,
+                &crate::session::TurnInput::InterAgentCommunication(communication),
+            )
+            .as_deref(),
+            Some("Design a zero-downtime database migration")
+        );
+    }
+
+    #[tokio::test]
+    async fn spawned_subagent_input_exposes_ephemeral_provider_context() {
+        let (_session, mut turn_context) = make_session_and_context().await;
+        turn_context.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::default(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+        let communication = InterAgentCommunication::new_encrypted(
+            codex_protocol::AgentPath::root(),
+            codex_protocol::AgentPath::root()
+                .join("worker")
+                .expect("recipient path"),
+            Vec::new(),
+            "encrypted payload".to_string(),
+            /*trigger_turn*/ true,
+        )
+        .with_routing_provider_context(
+            Some("agentroute-azure".to_string()),
+            Some("deepseek".to_string()),
+            /*model_explicit*/ true,
+        );
+
+        assert_eq!(
+            routing_provider_context_for_pending_input(
+                &turn_context,
+                &crate::session::TurnInput::InterAgentCommunication(communication),
+            ),
+            (
+                Some("agentroute-azure".to_string()),
+                Some("deepseek".to_string()),
+                true,
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn root_input_does_not_expose_spawn_provider_context() {
+        let (_session, turn_context) = make_session_and_context().await;
+        let communication = InterAgentCommunication::new(
+            codex_protocol::AgentPath::root(),
+            codex_protocol::AgentPath::root()
+                .join("worker")
+                .expect("recipient path"),
+            Vec::new(),
+            "task".to_string(),
+            /*trigger_turn*/ true,
+        )
+        .with_routing_provider_context(
+            Some("agentroute-azure".to_string()),
+            Some("deepseek".to_string()),
+            /*model_explicit*/ true,
+        );
+
+        assert_eq!(
+            routing_provider_context_for_pending_input(
+                &turn_context,
+                &crate::session::TurnInput::InterAgentCommunication(communication),
+            ),
+            (None, None, false)
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_plaintext_subagent_input_remains_routable() {
+        let (_session, mut turn_context) = make_session_and_context().await;
+        turn_context.session_source = SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
+            parent_thread_id: ThreadId::default(),
+            depth: 1,
+            agent_path: None,
+            agent_nickname: None,
+            agent_role: None,
+        });
+        let communication = InterAgentCommunication::new(
+            codex_protocol::AgentPath::root(),
+            codex_protocol::AgentPath::root()
+                .join("worker")
+                .expect("recipient path"),
+            Vec::new(),
+            "legacy plaintext task".to_string(),
+            /*trigger_turn*/ true,
+        );
+
+        assert_eq!(
+            routing_prompt_for_pending_input(
+                &turn_context,
+                &crate::session::TurnInput::InterAgentCommunication(communication),
+            )
+            .as_deref(),
+            Some("legacy plaintext task")
         );
     }
 

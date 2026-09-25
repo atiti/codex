@@ -8,6 +8,11 @@
       ],
       "type": "string"
     },
+    "ReasoningEffort": {
+      "description": "A non-empty reasoning effort value advertised by the model.",
+      "minLength": 1,
+      "type": "string"
+    },
     "UserPromptSubmitHookSpecificOutputWire": {
       "additionalProperties": false,
       "properties": {
@@ -15,9 +20,43 @@
           "default": null,
           "type": "string"
         },
+        "chatgptProfileHome": {
+          "default": null,
+          "type": "string"
+        },
         "hookEventName": {
           "const": "UserPromptSubmit",
           "type": "string"
+        },
+        "model": {
+          "default": null,
+          "type": "string"
+        },
+        "modelProvider": {
+          "default": null,
+          "type": "string"
+        },
+        "reasoningEffort": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ReasoningEffort"
+            }
+          ],
+          "default": null
+        },
+        "routeMessage": {
+          "default": null,
+          "type": "string"
+        },
+        "stripPromptPrefixBytes": {
+          "default": null,
+          "format": "uint",
+          "minimum": 0.0,
+          "type": "integer"
+        },
+        "stripProviderState": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [

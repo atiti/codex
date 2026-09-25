@@ -7,7 +7,7 @@ use pretty_assertions::assert_eq;
 
 #[test]
 fn role_segment_filters_base_and_appends_bundled_guidance() {
-    let shared = DEFAULT_MULTI_AGENT_V2_SHARED_USAGE_HINT_TEXT;
+    let shared = shared_usage_hint_text(None);
     let wait = DEFAULT_MULTI_AGENT_V2_WAIT_AGENT_USAGE_HINT_TEXT;
     let model_override = DEFAULT_MULTI_AGENT_V2_MODEL_OVERRIDE_USAGE_HINT_TEXT;
     let expected_body = format!(
@@ -22,6 +22,7 @@ fn role_segment_filters_base_and_appends_bundled_guidance() {
             max_concurrency: 2,
             wait_agent_enabled: true,
             expose_model_overrides: true,
+            tool_namespace: None,
         };
         let expected_text = if marked {
             format!("<multi_agent_role>{expected_body}</multi_agent_role>")

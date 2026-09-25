@@ -108,6 +108,11 @@ pub struct CodexHarnessMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compaction_model_hash: Option<String>,
 
+    /// Model provider that produced this item. This is harness-owned provenance used to avoid
+    /// replaying opaque reasoning and response IDs to a different provider after live routing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider_id: Option<String>,
+
     /// User acceptance or assistant delivery order, independent of queued input recording.
     /// The serialized name is retained for compatibility with saved history.
     #[serde(default, skip_serializing_if = "Option::is_none")]

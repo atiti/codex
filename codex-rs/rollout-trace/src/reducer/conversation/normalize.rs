@@ -200,6 +200,7 @@ fn normalize_agent_message_item(
             format!("failed to parse agent_message item in payload {raw_payload_id}")
         })?;
     let ResponseItem::AgentMessage {
+        id,
         author,
         recipient,
         content,
@@ -228,7 +229,11 @@ fn normalize_agent_message_item(
         role: ConversationRole::Assistant,
         channel: Some(ConversationChannel::Analysis),
         kind: ConversationItemKind::Message,
-        agent_message: Some(AgentMessageMetadata { author, recipient }),
+        agent_message: Some(AgentMessageMetadata {
+            id: id.map(String::from),
+            author,
+            recipient,
+        }),
         body: ConversationBody { parts },
         call_id: None,
     })

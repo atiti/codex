@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 
 use codex_protocol::ThreadId;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::HookCompletedEvent;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::HookOutputEntry;
 use codex_protocol::protocol::HookOutputEntryKind;
 use codex_protocol::protocol::HookRunStatus;
 use codex_protocol::protocol::HookRunSummary;
+use codex_protocol::protocol::RateLimitSnapshot;
 use codex_utils_absolute_path::AbsolutePathBuf;
 
 use super::common;
@@ -28,6 +30,13 @@ pub struct UserPromptSubmitRequest {
     pub cwd: AbsolutePathBuf,
     pub transcript_path: Option<PathBuf>,
     pub model: String,
+    pub model_provider: String,
+    pub inherited_model_provider: Option<String>,
+    pub requested_backend: Option<String>,
+    pub spawn_model_explicit: bool,
+    pub account_id: Option<String>,
+    pub rate_limits: Option<RateLimitSnapshot>,
+    pub ordinary_usage_allowed: Option<bool>,
     pub permission_mode: String,
     pub prompt: String,
 }
@@ -38,6 +47,21 @@ pub struct UserPromptSubmitOutcome {
     pub should_stop: bool,
     pub stop_reason: Option<String>,
     pub additional_contexts: Vec<String>,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub reasoning_effort: Option<ReasoningEffort>,
+    pub route_message: Option<String>,
+    pub strip_prompt_prefix_bytes: Option<usize>,
+    pub strip_provider_state: bool,
+    pub chatgpt_profile_home: Option<String>,
+    pub reviewer_profile_name: Option<String>,
+    pub reviewer_fallback_profiles: Vec<ReviewerFallbackProfile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewerFallbackProfile {
+    pub name: String,
+    pub codex_home: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -45,6 +69,15 @@ struct UserPromptSubmitHandlerData {
     should_stop: bool,
     stop_reason: Option<String>,
     additional_contexts_for_model: Vec<AdditionalContext>,
+    model: Option<String>,
+    model_provider: Option<String>,
+    reasoning_effort: Option<ReasoningEffort>,
+    route_message: Option<String>,
+    strip_prompt_prefix_bytes: Option<usize>,
+    strip_provider_state: bool,
+    chatgpt_profile_home: Option<String>,
+    reviewer_profile_name: Option<String>,
+    reviewer_fallback_profiles: Vec<ReviewerFallbackProfile>,
 }
 
 pub(crate) fn preview(
@@ -76,6 +109,15 @@ pub(crate) async fn run(
             should_stop: false,
             stop_reason: None,
             additional_contexts: Vec::new(),
+            model: None,
+            model_provider: None,
+            reasoning_effort: None,
+            route_message: None,
+            strip_prompt_prefix_bytes: None,
+            strip_provider_state: false,
+            chatgpt_profile_home: None,
+            reviewer_profile_name: None,
+            reviewer_fallback_profiles: Vec::new(),
         };
     }
 
@@ -89,6 +131,13 @@ pub(crate) async fn run(
         cwd: request.cwd.display().to_string(),
         hook_event_name: "UserPromptSubmit".to_string(),
         model: request.model.clone(),
+        model_provider: request.model_provider.clone(),
+        inherited_model_provider: request.inherited_model_provider.clone(),
+        requested_backend: request.requested_backend.clone(),
+        spawn_model_explicit: request.spawn_model_explicit,
+        account_id: request.account_id.clone(),
+        rate_limits: request.rate_limits.clone(),
+        ordinary_usage_allowed: request.ordinary_usage_allowed,
         permission_mode: request.permission_mode.clone(),
         prompt: request.prompt.clone(),
     }) {
@@ -126,12 +175,48 @@ pub(crate) async fn run(
         .output_spiller()
         .maybe_spill_additional_contexts(additional_contexts)
         .await;
+    let model = results.iter().find_map(|result| result.data.model.clone());
+    let model_provider = results
+        .iter()
+        .find_map(|result| result.data.model_provider.clone());
+    let reasoning_effort = results
+        .iter()
+        .find_map(|result| result.data.reasoning_effort.clone());
+    let route_message = results
+        .iter()
+        .find_map(|result| result.data.route_message.clone());
+    let strip_prompt_prefix_bytes = results
+        .iter()
+        .find_map(|result| result.data.strip_prompt_prefix_bytes);
+    let strip_provider_state = results
+        .iter()
+        .any(|result| result.data.strip_provider_state);
+    let chatgpt_profile_home = results
+        .iter()
+        .find_map(|result| result.data.chatgpt_profile_home.clone());
+    let reviewer_profile_name = results
+        .iter()
+        .find_map(|result| result.data.reviewer_profile_name.clone());
+    let reviewer_fallback_profiles = results
+        .iter()
+        .find(|result| !result.data.reviewer_fallback_profiles.is_empty())
+        .map(|result| result.data.reviewer_fallback_profiles.clone())
+        .unwrap_or_default();
 
     UserPromptSubmitOutcome {
         hook_events: results.into_iter().map(|result| result.completed).collect(),
         should_stop,
         stop_reason,
         additional_contexts,
+        model,
+        model_provider,
+        reasoning_effort,
+        route_message,
+        strip_prompt_prefix_bytes,
+        strip_provider_state,
+        chatgpt_profile_home,
+        reviewer_profile_name,
+        reviewer_fallback_profiles,
     }
 }
 
@@ -145,6 +230,15 @@ fn parse_completed(
     let mut should_stop = false;
     let mut stop_reason = None;
     let mut additional_contexts_for_model = Vec::new();
+    let mut model = None;
+    let mut model_provider = None;
+    let mut reasoning_effort = None;
+    let mut route_message = None;
+    let mut strip_prompt_prefix_bytes = None;
+    let mut strip_provider_state = false;
+    let mut chatgpt_profile_home = None;
+    let mut reviewer_profile_name = None;
+    let mut reviewer_fallback_profiles = Vec::new();
 
     match run_result.error.as_deref() {
         Some(error) => {
@@ -180,6 +274,15 @@ fn parse_completed(
                     }
                     let _ = parsed.universal.suppress_output;
                     if handler.can_apply_control_effects() {
+                        model = parsed.model;
+                        model_provider = parsed.model_provider;
+                        reasoning_effort = parsed.reasoning_effort;
+                        route_message = parsed.route_message;
+                        strip_prompt_prefix_bytes = parsed.strip_prompt_prefix_bytes;
+                        strip_provider_state = parsed.strip_provider_state;
+                        chatgpt_profile_home = parsed.chatgpt_profile_home;
+                        reviewer_profile_name = parsed.reviewer_profile_name;
+                        reviewer_fallback_profiles = parsed.reviewer_fallback_profiles;
                         if !parsed.universal.continue_processing {
                             status = HookRunStatus::Stopped;
                             should_stop = true;
@@ -269,6 +372,15 @@ fn parse_completed(
             should_stop,
             stop_reason,
             additional_contexts_for_model,
+            model,
+            model_provider,
+            reasoning_effort,
+            route_message,
+            strip_prompt_prefix_bytes,
+            strip_provider_state,
+            chatgpt_profile_home,
+            reviewer_profile_name,
+            reviewer_fallback_profiles,
         },
         completion_order: 0,
     }
@@ -280,11 +392,21 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> UserPr
         should_stop: false,
         stop_reason: None,
         additional_contexts: Vec::new(),
+        model: None,
+        model_provider: None,
+        reasoning_effort: None,
+        route_message: None,
+        strip_prompt_prefix_bytes: None,
+        strip_provider_state: false,
+        chatgpt_profile_home: None,
+        reviewer_profile_name: None,
+        reviewer_fallback_profiles: Vec::new(),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use codex_protocol::openai_models::ReasoningEffort;
     use codex_protocol::protocol::HookEventName;
     use codex_protocol::protocol::HookOutputEntry;
     use codex_protocol::protocol::HookOutputEntryKind;
@@ -293,6 +415,7 @@ mod tests {
     use codex_utils_absolute_path::test_support::test_path_buf;
     use pretty_assertions::assert_eq;
 
+    use super::ReviewerFallbackProfile;
     use super::UserPromptSubmitHandlerData;
     use super::parse_completed;
     use crate::engine::ConfiguredHandler;
@@ -320,6 +443,15 @@ mod tests {
                     text: "do not inject".to_string(),
                     limit: Default::default(),
                 }],
+                model: None,
+                model_provider: None,
+                reasoning_effort: None,
+                route_message: None,
+                strip_prompt_prefix_bytes: None,
+                strip_provider_state: false,
+                chatgpt_profile_home: None,
+                reviewer_profile_name: None,
+                reviewer_fallback_profiles: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Stopped);
@@ -359,6 +491,15 @@ mod tests {
                     text: "do not inject".to_string(),
                     limit: Default::default(),
                 }],
+                model: None,
+                model_provider: None,
+                reasoning_effort: None,
+                route_message: None,
+                strip_prompt_prefix_bytes: None,
+                strip_provider_state: false,
+                chatgpt_profile_home: None,
+                reviewer_profile_name: None,
+                reviewer_fallback_profiles: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -392,6 +533,15 @@ mod tests {
                 should_stop: false,
                 stop_reason: None,
                 additional_contexts_for_model: Vec::new(),
+                model: None,
+                model_provider: None,
+                reasoning_effort: None,
+                route_message: None,
+                strip_prompt_prefix_bytes: None,
+                strip_provider_state: false,
+                chatgpt_profile_home: None,
+                reviewer_profile_name: None,
+                reviewer_fallback_profiles: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
@@ -434,6 +584,15 @@ mod tests {
                 should_stop: true,
                 stop_reason: Some("blocked by policy".to_string()),
                 additional_contexts_for_model: Vec::new(),
+                model: None,
+                model_provider: None,
+                reasoning_effort: None,
+                route_message: None,
+                strip_prompt_prefix_bytes: None,
+                strip_provider_state: false,
+                chatgpt_profile_home: None,
+                reviewer_profile_name: None,
+                reviewer_fallback_profiles: Vec::new(),
             }
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Blocked);
@@ -453,6 +612,40 @@ mod tests {
         );
         assert_eq!(parsed.completed.run.status, HookRunStatus::Failed);
         assert!(!parsed.data.should_stop);
+    }
+
+    #[test]
+    fn parses_model_and_reasoning_effort_override() {
+        let parsed = parse_completed(
+            &handler(),
+            run_result(
+                Some(0),
+                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","model":"gpt-5.6-sol","reasoningEffort":"high","routeMessage":"route details","stripPromptPrefixBytes":7,"stripProviderState":true,"chatgptProfileHome":"/tmp/codex-work","reviewerProfileName":"markster","reviewerFallbackProfiles":[{"name":"personal","codexHome":"/tmp/codex-personal"}]}}"#,
+                "",
+            ),
+            Some("turn-1".to_string()),
+        );
+
+        assert_eq!(parsed.data.model.as_deref(), Some("gpt-5.6-sol"));
+        assert_eq!(parsed.data.reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(parsed.data.route_message.as_deref(), Some("route details"));
+        assert_eq!(parsed.data.strip_prompt_prefix_bytes, Some(7));
+        assert!(parsed.data.strip_provider_state);
+        assert_eq!(
+            parsed.data.chatgpt_profile_home.as_deref(),
+            Some("/tmp/codex-work")
+        );
+        assert_eq!(
+            parsed.data.reviewer_profile_name.as_deref(),
+            Some("markster")
+        );
+        assert_eq!(
+            parsed.data.reviewer_fallback_profiles,
+            vec![ReviewerFallbackProfile {
+                name: "personal".to_string(),
+                codex_home: "/tmp/codex-personal".to_string(),
+            }]
+        );
     }
 
     fn handler() -> ConfiguredHandler {

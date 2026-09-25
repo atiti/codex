@@ -34,7 +34,8 @@ pub(in crate::reducer) struct PendingAgentInteractionEdge {
     pub(in crate::reducer) source: TraceAnchor,
     pub(in crate::reducer) target_thread_id: String,
     pub(in crate::reducer) message_author: String,
-    pub(in crate::reducer) message_content: String,
+    pub(in crate::reducer) communication_id: Option<String>,
+    pub(in crate::reducer) message_content: Option<String>,
     /// Spawn-only fallback for children that fail before their task message is model-visible.
     pub(in crate::reducer) unresolved_spawn_thread_id: Option<String>,
     pub(in crate::reducer) started_at_unix_ms: i64,
@@ -257,7 +258,9 @@ impl TraceReducer {
         })?;
         let started_at_unix_ms = tool_call.execution.started_at_unix_ms;
         let message_author = self.agent_path_for_thread(&tool_call.thread_id)?;
-        let message_content = self.agent_message_content_from_invocation(tool_call_id)?;
+        let message_content = self
+            .agent_message_content_from_invocation(tool_call_id)
+            .ok();
         let carried_raw_payload_ids = self.agent_tool_payload_ids(tool_call_id)?;
         self.queue_or_resolve_agent_interaction_edge(PendingAgentInteractionEdge {
             edge_id,
@@ -267,6 +270,7 @@ impl TraceReducer {
             },
             target_thread_id,
             message_author,
+            communication_id: Some(agent_message_id(tool_call_id)),
             message_content,
             unresolved_spawn_thread_id,
             started_at_unix_ms,
@@ -368,7 +372,8 @@ impl TraceReducer {
             },
             target_thread_id: child_thread_id.clone(),
             message_author,
-            message_content: payload.prompt.clone(),
+            communication_id: None,
+            message_content: Some(payload.prompt.clone()),
             unresolved_spawn_thread_id: Some(child_thread_id),
             started_at_unix_ms: tool_call.execution.started_at_unix_ms,
             ended_at_unix_ms: Some(wall_time_unix_ms),
@@ -410,7 +415,8 @@ impl TraceReducer {
             },
             target_thread_id,
             message_author,
-            message_content,
+            communication_id: None,
+            message_content: Some(message_content),
             unresolved_spawn_thread_id: None,
             started_at_unix_ms: tool_call.execution.started_at_unix_ms,
             ended_at_unix_ms,
@@ -502,7 +508,8 @@ impl TraceReducer {
             source,
             target_thread_id: observed.parent_thread_id,
             message_author,
-            message_content: observed.message,
+            communication_id: None,
+            message_content: Some(observed.message),
             unresolved_spawn_thread_id: None,
             started_at_unix_ms: observed.wall_time_unix_ms,
             ended_at_unix_ms: Some(observed.wall_time_unix_ms),
@@ -521,7 +528,7 @@ impl TraceReducer {
         if self.is_interaction_edge_target_item(item_id) {
             return Ok(());
         }
-        let Some((thread_id, message_author, message_content)) =
+        let Some((thread_id, communication_id, message_author, message_content)) =
             self.inter_agent_message_item(item_id)
         else {
             return Ok(());
@@ -532,7 +539,11 @@ impl TraceReducer {
             .position(|pending| {
                 pending.target_thread_id == thread_id
                     && pending.message_author == message_author
-                    && pending.message_content == message_content
+                    && pending_agent_message_matches(
+                        pending,
+                        communication_id.as_deref(),
+                        &message_content,
+                    )
             })
         else {
             return Ok(());
@@ -548,7 +559,8 @@ impl TraceReducer {
         if let Some(item_id) = self.find_unlinked_inter_agent_message_item(
             &pending.target_thread_id,
             &pending.message_author,
-            &pending.message_content,
+            pending.communication_id.as_deref(),
+            pending.message_content.as_deref(),
         ) {
             return self.upsert_agent_interaction_edge_for_item(pending, item_id);
         }
@@ -562,6 +574,7 @@ impl TraceReducer {
                 || existing.source != pending.source
                 || existing.target_thread_id != pending.target_thread_id
                 || existing.message_author != pending.message_author
+                || existing.communication_id != pending.communication_id
                 || existing.message_content != pending.message_content
                 || existing.unresolved_spawn_thread_id != pending.unresolved_spawn_thread_id
             {
@@ -681,7 +694,8 @@ impl TraceReducer {
         &self,
         thread_id: &str,
         message_author: &str,
-        message_content: &str,
+        communication_id: Option<&str>,
+        message_content: Option<&str>,
     ) -> Option<String> {
         self.rollout
             .threads
@@ -690,16 +704,22 @@ impl TraceReducer {
             .iter()
             .find(|item_id| {
                 !self.is_interaction_edge_target_item(item_id)
-                    && self
-                        .inter_agent_message_item(item_id)
-                        .is_some_and(|(_, author, content)| {
-                            author == message_author && content == message_content
-                        })
+                    && self.inter_agent_message_item(item_id).is_some_and(
+                        |(_, item_id, author, content)| {
+                            author == message_author
+                                && (communication_id
+                                    .is_some_and(|expected| item_id.as_deref() == Some(expected))
+                                    || message_content.is_some_and(|expected| content == expected))
+                        },
+                    )
             })
             .cloned()
     }
 
-    fn inter_agent_message_item(&self, item_id: &str) -> Option<(String, String, String)> {
+    fn inter_agent_message_item(
+        &self,
+        item_id: &str,
+    ) -> Option<(String, Option<String>, String, String)> {
         let item = self.rollout.conversation_items.get(item_id)?;
         let (author_agent_path, recipient_agent_path, message_content) =
             inter_agent_message_fields(item)?;
@@ -707,7 +727,14 @@ impl TraceReducer {
         if recipient_agent_path != thread.agent_path {
             return None;
         }
-        Some((item.thread_id.clone(), author_agent_path, message_content))
+        Some((
+            item.thread_id.clone(),
+            item.agent_message
+                .as_ref()
+                .and_then(|message| message.id.clone()),
+            author_agent_path,
+            message_content,
+        ))
     }
 
     fn agent_path_for_thread(&self, thread_id: &str) -> Result<String> {
@@ -755,6 +782,25 @@ fn extend_unique(items: &mut Vec<String>, new_items: Vec<String>) {
 
 fn tool_edge_id(tool_call_id: &str) -> String {
     format!("edge:tool:{tool_call_id}")
+}
+
+fn agent_message_id(tool_call_id: &str) -> String {
+    format!("amsg_{tool_call_id}")
+}
+
+fn pending_agent_message_matches(
+    pending: &PendingAgentInteractionEdge,
+    communication_id: Option<&str>,
+    message_content: &str,
+) -> bool {
+    pending
+        .communication_id
+        .as_deref()
+        .is_some_and(|expected| communication_id == Some(expected))
+        || pending
+            .message_content
+            .as_deref()
+            .is_some_and(|expected| message_content == expected)
 }
 
 fn tool_call_source_matches(anchor: &TraceAnchor, tool_call_id: &str) -> bool {

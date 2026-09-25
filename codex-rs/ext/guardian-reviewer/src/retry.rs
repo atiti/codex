@@ -93,6 +93,7 @@ async fn wait_before_guardian_retry(
 
 fn should_retry_guardian_review(outcome: &GuardianReviewOutcome) -> bool {
     match outcome {
+        GuardianReviewOutcome::Error(GuardianReviewError::ReviewerFallbackReady { .. }) => true,
         GuardianReviewOutcome::Error(
             GuardianReviewError::Parse { .. } | GuardianReviewError::StaleAuthorization,
         ) => true,

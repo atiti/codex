@@ -268,8 +268,14 @@ fn assert_compact_request_omits_harness_metadata(request: &responses::ResponsesR
     }
 }
 
+#[test_case(false, false; "openai")]
+#[test_case(true, false; "azure")]
+#[test_case(true, true; "azure_function_compatibility")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()> {
+async fn remote_compact_v2_retains_metadata_from_resumed_history(
+    azure: bool,
+    restricted: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = wiremock::MockServer::start().await;
@@ -296,7 +302,21 @@ async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()>
     )
     .await;
 
-    let builder = || test_codex().with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing());
+    let builder = || {
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(move |config| {
+                if azure {
+                    config.model_provider_id = "agentroute-azure".to_string();
+                    config.model_provider.name = "Azure".to_string();
+                    if restricted {
+                        config.model_provider.tool_compatibility = Some(
+                            codex_model_provider_info::ToolCompatibility::FunctionsAndApplyPatch,
+                        );
+                    }
+                }
+            })
+    };
     let initial = builder()
         .with_pre_build_hook(|home| {
             fs::write(
@@ -325,6 +345,19 @@ async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()>
     resumed.submit_turn("continue after compaction").await?;
     resumed.codex.shutdown_and_wait().await?;
 
+    // Repeat after another restart so persisted provenance, not just the
+    // compaction turn's in-memory client, protects the summary.
+    let resumed_again = builder()
+        .resume(&server, resumed.home.clone(), rollout_path.clone())
+        .await?;
+    let final_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![responses::ev_completed("response-final")]),
+    )
+    .await;
+    resumed_again.submit_turn("continue after restart").await?;
+    resumed_again.codex.shutdown_and_wait().await?;
+
     let requests = response_mock.requests();
     let compact_request = &requests[1];
     assert_eq!(
@@ -338,6 +371,10 @@ async fn remote_compact_v2_retains_metadata_from_resumed_history() -> Result<()>
         "ANNOTATED_V2_COMPACTION_SUMMARY"
     );
     assert!(requests[2].body_contains_text("continue after compaction"));
+    assert_eq!(
+        final_mock.single_request().inputs_of_type("compaction")[0]["encrypted_content"],
+        "ANNOTATED_V2_COMPACTION_SUMMARY"
+    );
 
     Ok(())
 }

@@ -60,6 +60,7 @@ use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::model_info;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
@@ -82,6 +83,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -1468,6 +1470,47 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
 
     let turn_context = session.new_default_turn().await;
     assert!(turn_context.network.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn new_turn_reapplies_provider_tool_compatibility_after_model_resolution()
+-> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config.features.enable(Feature::CodeMode).unwrap();
+        config.model_provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+    let model_info = turn_context.model_info();
+
+    assert_eq!(model_info.tool_mode, Some(ToolMode::Direct));
+    assert_eq!(
+        model_info.apply_patch_tool_type,
+        Some(ApplyPatchToolType::Freeform)
+    );
+    assert_eq!(
+        crate::tools::effective_tool_mode(&turn_context, model_info),
+        ToolMode::Direct
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn new_turn_without_provider_tool_compatibility_preserves_fallback_metadata()
+-> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config.model = Some("unknown-provider-model".to_string());
+        config.model_provider.tool_compatibility = None;
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+
+    assert!(turn_context.model_info().used_fallback_model_metadata);
+
     Ok(())
 }
 
@@ -5502,7 +5545,7 @@ async fn session_configuration_apply_preserves_absolute_cwd_write_root_on_cwd_up
 
 #[tokio::test]
 async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
-    let (mut session, _turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
+    let (mut session, turn_context, rx) = make_session_and_context_with_auth_and_config_and_rx(
         CodexAuth::from_api_key("Test API Key"),
         Vec::new(),
         |config| {
@@ -5549,6 +5592,7 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
                 compaction_response_id: None,
                 compaction_model_hash: None,
                 reviewer_compaction_hash: None,
+                model_provider_id: turn_context.model_provider_id(),
             },
         ),
     ));
@@ -5677,6 +5721,7 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
             /*world_state_baseline*/ None,
             CompactedHistoryMetadata {
                 message: "summary".to_string(),
+                model_provider_id: turn_context.model_provider_id(),
                 window_number,
                 window_ids,
                 compaction_response_id: None,
@@ -5781,6 +5826,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
                 with_baselines.then_some(Arc::clone(&world_state)),
                 CompactedHistoryMetadata {
                     message: String::new(),
+                    model_provider_id: turn_context.model_provider_id(),
                     window_number,
                     window_ids,
                     compaction_response_id: None,

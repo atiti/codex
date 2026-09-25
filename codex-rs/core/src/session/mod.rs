@@ -705,9 +705,16 @@ impl Session {
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
         // 3. rendered instructions_template for current model
-        let model_info = models_manager
+        let mut model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        if let Some(tool_compatibility) = config.model_provider.tool_compatibility {
+            model_info = step_activation::model_info_for_provider_compatibility(
+                &model_info,
+                &model_info,
+                Some(tool_compatibility),
+            );
+        }
         let auth = auth_manager.auth_cached();
         // Forked subagents keep their parent's activation with the copied history.
         // Fresh children restore configured preferences before applying startup defaults.
@@ -3572,6 +3579,11 @@ impl Session {
         let policy: codex_utils_output_truncation::TruncationPolicy =
             model_info.truncation_policy.into();
         for envelope in &mut items {
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .model_provider_id
+                .get_or_insert_with(|| turn_context.model_provider_id());
             if matches!(
                 envelope.item,
                 ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
@@ -4027,6 +4039,11 @@ impl Session {
     ) {
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .model_provider_id
+                .get_or_insert_with(|| metadata.model_provider_id.clone());
         }
         let mcp_revision = self
             .services
@@ -4553,6 +4570,7 @@ impl Session {
                 compaction_response_id: None,
                 compaction_model_hash: None,
                 reviewer_compaction_hash: None,
+                model_provider_id: turn_context.model_provider_id(),
             },
         )
         .await;
@@ -4807,6 +4825,16 @@ impl Session {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
         }
+    }
+
+    pub(crate) async fn record_ordinary_usage_allowed(&self, allowed: Option<bool>) {
+        let mut state = self.state.lock().await;
+        state.set_ordinary_usage_allowed(allowed);
+    }
+
+    pub(crate) async fn capacity_snapshot(&self) -> (Option<RateLimitSnapshot>, Option<bool>) {
+        let state = self.state.lock().await;
+        state.capacity_snapshot()
     }
 
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {

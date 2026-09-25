@@ -15,6 +15,7 @@ use crate::context::ContextualUserFragment;
 use crate::context::UserVerificationNotice;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
+use crate::hook_runtime::HookRuntimeOutcome;
 use crate::hook_runtime::drain_async_hook_results;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::record_additional_contexts;
@@ -174,8 +175,66 @@ pub(crate) async fn run_turn(
     // Record results from hooks that finished after the previous turn before this turn's user prompt.
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
 
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut client_session = prewarmed_client_session.unwrap_or_else(|| {
+        sess.services
+            .model_client
+            .new_session_for_provider(turn_context.model_provider())
+    });
+    // Route the turn before pre-sampling compaction. A resumed mixed-provider thread may contain
+    // encrypted reasoning owned by the previous provider, and compaction is itself a model request.
+    // Waiting until after compaction to install the mixed-provider client session can therefore
+    // fail before the routed turn gets its first ordinary sample.
+    let hook_outcomes = inspect_input_hooks(&sess, &turn_context, &input).await;
+    let active_provider_id = turn_context.model_provider_id();
+    let history = sess.clone_history().await;
+    let explicit_strip_provider_state = hook_outcomes
+        .iter()
+        .any(|outcome| outcome.strip_provider_state);
+    let foreign_provider_state_ids = history
+        .annotated_items()
+        .iter()
+        .filter(|envelope| {
+            explicit_strip_provider_state
+                || envelope
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.model_provider_id.as_deref())
+                    != Some(active_provider_id.as_str())
+        })
+        .filter_map(|envelope| envelope.item.id().cloned())
+        .collect::<HashSet<_>>();
+    let history_has_foreign_provider_state = history.annotated_items().iter().any(|envelope| {
+        envelope
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.model_provider_id.as_deref())
+            != Some(active_provider_id.as_str())
+            && matches!(
+                &envelope.item,
+                ResponseItem::Reasoning { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::ContextCompaction { .. }
+                    | ResponseItem::FunctionCall {
+                        encrypted_function_args: Some(_),
+                        ..
+                    }
+            )
+    });
+    let strip_provider_state = history_has_foreign_provider_state || explicit_strip_provider_state;
+    if hook_outcomes.iter().any(|outcome| outcome.settings_updated) || strip_provider_state {
+        client_session = if strip_provider_state {
+            sess.services
+                .model_client
+                .new_session_for_mixed_provider_history(
+                    turn_context.model_provider(),
+                    foreign_provider_state_ids,
+                )
+        } else {
+            sess.services
+                .model_client
+                .new_session_for_provider(turn_context.model_provider())
+        };
+    }
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -184,16 +243,18 @@ pub(crate) async fn run_turn(
         &sess,
         &turn_context,
         &mut client_session,
+        strip_provider_state,
         &cancellation_token,
     )
     .await
     {
         // Compaction runs before the new input is recorded, so preserve it on every failure.
-        run_hooks_and_record_inputs(
+        record_inputs_with_hook_outcomes(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
             &input,
+            hook_outcomes,
             PersistContext::Standard,
         )
         .await;
@@ -208,7 +269,11 @@ pub(crate) async fn run_turn(
             .await;
         // Publish the failure only after prompt hooks finish, so clients cannot react to
         // an error by steering follow-up input into a turn still preserving its prompt.
-        let message_prefix = match turn_context.provider.capabilities().remote_compaction {
+        let message_prefix = match turn_context
+            .model_provider()
+            .capabilities()
+            .remote_compaction
+        {
             RemoteCompactionSupport::V2 => Some("Error running remote compact task".to_string()),
             RemoteCompactionSupport::Unsupported => None,
         };
@@ -238,11 +303,12 @@ pub(crate) async fn run_turn(
         {
             Ok(requirements) => requirements,
             Err(err) => {
-                run_hooks_and_record_inputs(
+                record_inputs_with_hook_outcomes(
                     &sess,
                     &turn_context,
                     &turn_context.capture_current_model_info(),
                     &input,
+                    hook_outcomes,
                     PersistContext::Standard,
                 )
                 .await;
@@ -266,11 +332,12 @@ pub(crate) async fn run_turn(
     {
         Ok(step_context) => step_context,
         Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-            run_hooks_and_record_inputs(
+            record_inputs_with_hook_outcomes(
                 &sess,
                 &turn_context,
                 &turn_context.capture_current_model_info(),
                 &input,
+                hook_outcomes,
                 PersistContext::Standard,
             )
             .await;
@@ -363,11 +430,12 @@ pub(crate) async fn run_turn(
         .await?;
     }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(
+    if record_inputs_with_hook_outcomes(
         &sess,
         &turn_context,
         &first_step_context.settings.model_info,
         &input,
+        hook_outcomes,
         PersistContext::TurnStart,
     )
     .await
@@ -387,8 +455,8 @@ pub(crate) async fn run_turn(
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info().slug.clone(),
-        comp_hash: turn_context.model_info().comp_hash.clone(),
+        model: first_step_context.settings.model_info.slug.clone(),
+        comp_hash: first_step_context.settings.model_info.comp_hash.clone(),
         realtime_active: Some(turn_context.realtime_active),
     }))
     .await;
@@ -843,6 +911,38 @@ pub(crate) async fn run_hooks_and_record_inputs(
     input: &[TurnInput],
     persist_context: PersistContext,
 ) -> bool {
+    let hook_outcomes = inspect_input_hooks(sess, turn_context, input).await;
+    record_inputs_with_hook_outcomes(
+        sess,
+        turn_context,
+        model_info,
+        input,
+        hook_outcomes,
+        persist_context,
+    )
+    .await
+}
+
+async fn inspect_input_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[TurnInput],
+) -> Vec<HookRuntimeOutcome> {
+    let mut outcomes = Vec::with_capacity(input.len());
+    for input_item in input {
+        outcomes.push(inspect_pending_input(sess, turn_context, input_item).await);
+    }
+    outcomes
+}
+
+async fn record_inputs_with_hook_outcomes(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    model_info: &ModelInfo,
+    input: &[TurnInput],
+    hook_outcomes: Vec<HookRuntimeOutcome>,
+    persist_context: PersistContext,
+) -> bool {
     // Cancellation can reach this path before Guardian's tools and context are
     // resolved. Only finalized evidence may enter reusable reviewer history.
     if sess
@@ -855,8 +955,7 @@ pub(crate) async fn run_hooks_and_record_inputs(
     }
     let mut blocked_input = false;
     let mut accepted_user_input = false;
-    for input_item in input {
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+    for (input_item, hook_outcome) in input.iter().zip(hook_outcomes) {
         if hook_outcome.should_stop {
             blocked_input = true;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
@@ -872,11 +971,15 @@ pub(crate) async fn run_hooks_and_record_inputs(
             } else {
                 persist_context
             };
+            let mut recorded_input = input_item.clone();
+            if let Some(prefix_bytes) = hook_outcome.strip_prompt_prefix_bytes {
+                strip_text_prefix(&mut recorded_input, prefix_bytes);
+            }
             record_pending_input(
                 sess,
                 turn_context,
                 model_info,
-                input_item.clone(),
+                recorded_input,
                 hook_outcome.additional_contexts,
                 input_persist_context,
             )
@@ -884,6 +987,48 @@ pub(crate) async fn run_hooks_and_record_inputs(
         }
     }
     blocked_input && !accepted_user_input
+}
+
+fn strip_text_prefix(input: &mut TurnInput, prefix_bytes: usize) {
+    let TurnInput::UserInput { content, .. } = input else {
+        return;
+    };
+    let Some(UserInput::Text {
+        text,
+        text_elements,
+    }) = content
+        .iter_mut()
+        .find(|item| matches!(item, UserInput::Text { .. }))
+    else {
+        return;
+    };
+    if prefix_bytes <= text.len() && text.is_char_boundary(prefix_bytes) {
+        text.drain(..prefix_bytes);
+        // Rich spans refer to the original byte offsets. Routing directives are
+        // plain prefix text, so discarding stale spans is safer than misplacing them.
+        text_elements.clear();
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn route_directive_prefix_is_not_recorded_as_user_task_text() {
+    let mut input = TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "@azure check CRM sync status".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+        acceptance_order: None,
+    };
+
+    strip_text_prefix(&mut input, "@azure ".len());
+
+    assert!(matches!(
+        input,
+        TurnInput::UserInput { content, .. }
+            if matches!(&content[0], UserInput::Text { text, .. } if text == "check CRM sync status")
+    ));
 }
 
 fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
@@ -1272,10 +1417,21 @@ async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
+    skip_previous_model_compact: bool,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
-    maybe_run_previous_model_inline_compact(sess, turn_context, client_session, cancellation_token)
+    // A provider switch deliberately drops provider-owned opaque state. Compacting with the
+    // previous model would pair that model name with the newly selected provider (and can also
+    // reintroduce the provider boundary we just removed), so compact only with the routed model.
+    if !skip_previous_model_compact {
+        maybe_run_previous_model_inline_compact(
+            sess,
+            turn_context,
+            client_session,
+            cancellation_token,
+        )
         .await?;
+    }
     let token_status =
         super::context_window::context_window_token_status(sess.as_ref(), turn_context.as_ref())
             .await;
@@ -1322,7 +1478,7 @@ async fn capture_current_model_fallback_step_context(
         .as_deref()
         .is_some_and(codex_login::AuthManager::current_auth_uses_codex_backend);
     if !uses_codex_backend
-        || !turn_context.provider.info().is_openai()
+        || !turn_context.model_provider().info().is_openai()
         || previous_model == turn_context.model_info().slug
     {
         return Ok(None);
@@ -1463,7 +1619,11 @@ async fn run_auto_compact(
         return Ok(());
     }
 
-    match turn_context.provider.capabilities().remote_compaction {
+    match turn_context
+        .model_provider()
+        .capabilities()
+        .remote_compaction
+    {
         RemoteCompactionSupport::V2 => {
             emit_compact_metric(
                 &sess.services.session_telemetry,
@@ -1489,7 +1649,8 @@ async fn run_auto_compact(
             );
             run_inline_auto_compact_task(
                 Arc::clone(sess),
-                Arc::clone(turn_context),
+                step_context,
+                client_session,
                 initial_context_injection,
                 reason,
                 phase,
@@ -1603,7 +1764,7 @@ async fn run_sampling_request(
         Arc::clone(&step_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let max_retries = turn_context.provider.info().stream_max_retries();
+    let max_retries = turn_context.model_provider().info().stream_max_retries();
     let mut retry_state = ResponsesStreamRetryState::default();
     let mut initial_input = Some(input);
     let mut original_input = None;
@@ -2495,14 +2656,14 @@ async fn try_run_sampling_request(
     let inference_trace = sess.services.rollout_thread_trace.inference_trace_context(
         turn_context.sub_id.as_str(),
         step_context.settings.model_info.slug.as_str(),
-        turn_context.provider.info().name.as_str(),
+        turn_context.model_provider().info().name.as_str(),
     );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     let uses_sequential_cutoff_reasoning_summaries = turn_context
         .config
         .features
         .enabled(Feature::ConcurrentReasoningSummaries)
-        && turn_context.provider.info().is_openai();
+        && turn_context.model_provider().info().is_openai();
     let mut stream = client_session
         .stream(
             prompt,

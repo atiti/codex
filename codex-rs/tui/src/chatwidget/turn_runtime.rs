@@ -14,14 +14,18 @@ const MODEL_ROUTE_PREFIX: &str = "◆ MODEL ROUTE · ";
 
 pub(crate) fn parse_model_route(
     message: &str,
-) -> Option<(String, Option<String>, ReasoningEffortConfig)> {
+) -> Option<(String, Option<String>, Option<ReasoningEffortConfig>)> {
     let details = message
         .lines()
         .find_map(|line| line.strip_prefix(MODEL_ROUTE_PREFIX))?;
     let mut parts = details.split(" · ");
     let route = parts.next()?;
-    let effort = parts.next()?.strip_suffix(" reasoning")?;
-    let model_provider = parts.find_map(|part| {
+    // The fields after the route are optional and not always in the same order,
+    // so search them instead of reading by position. AgentRoute omits the effort
+    // when the turn keeps the session effort, and the routed model and provider
+    // must still reach the status line.
+    let fields: Vec<&str> = parts.collect();
+    let model_provider = fields.iter().find_map(|part| {
         part.strip_prefix("backend ")
             .and_then(|backend| backend.split_once('/'))
             .map(|(_, provider)| provider.to_string())
@@ -30,18 +34,21 @@ pub(crate) fn parse_model_route(
         .split_once("→")
         .map(|(_, model)| model.trim())
         .or_else(|| route.strip_prefix("using "))?;
-    let effort = match effort {
-        "none" => ReasoningEffortConfig::None,
-        "minimal" => ReasoningEffortConfig::Minimal,
-        "low" => ReasoningEffortConfig::Low,
-        "medium" => ReasoningEffortConfig::Medium,
-        "high" => ReasoningEffortConfig::High,
-        "xhigh" => ReasoningEffortConfig::XHigh,
-        "max" => ReasoningEffortConfig::Max,
-        "ultra" => ReasoningEffortConfig::Ultra,
-        "persistent" => ReasoningEffortConfig::Persistent,
-        custom => ReasoningEffortConfig::Custom(custom.to_string()),
-    };
+    let effort = fields
+        .iter()
+        .find_map(|part| part.strip_suffix(" reasoning"))
+        .map(|effort| match effort {
+            "none" => ReasoningEffortConfig::None,
+            "minimal" => ReasoningEffortConfig::Minimal,
+            "low" => ReasoningEffortConfig::Low,
+            "medium" => ReasoningEffortConfig::Medium,
+            "high" => ReasoningEffortConfig::High,
+            "xhigh" => ReasoningEffortConfig::XHigh,
+            "max" => ReasoningEffortConfig::Max,
+            "ultra" => ReasoningEffortConfig::Ultra,
+            "persistent" => ReasoningEffortConfig::Persistent,
+            custom => ReasoningEffortConfig::Custom(custom.to_string()),
+        });
     Some((model.to_string(), model_provider, effort))
 }
 
@@ -568,7 +575,7 @@ impl ChatWidget {
         if let Some((model, model_provider, effort)) = parse_model_route(&message) {
             self.routed_turn_model = Some(model);
             self.routed_turn_model_provider = model_provider;
-            self.routed_turn_reasoning_effort = Some(effort);
+            self.routed_turn_reasoning_effort = effort;
             self.refresh_status_surfaces();
             self.add_to_history(history_cell::new_agentroute_route_event(message));
             self.request_redraw();
@@ -622,7 +629,7 @@ mod route_notice_tests {
             parse_model_route(
                 "◆ MODEL ROUTE · FAST → gpt-5.6-luna · low reasoning · confidence 92% · score -2"
             ),
-            Some(("gpt-5.6-luna".to_string(), None, ReasoningEffortConfig::Low))
+            Some(("gpt-5.6-luna".to_string(), None, Some(ReasoningEffortConfig::Low)))
         );
     }
 
@@ -635,7 +642,37 @@ mod route_notice_tests {
             Some((
                 "gpt-5.6-sol".to_string(),
                 Some("agentroute-azure".to_string()),
-                ReasoningEffortConfig::High
+                Some(ReasoningEffortConfig::High)
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_route_notice_without_an_effort_field() {
+        // AgentRoute omits the effort when the turn keeps the session effort;
+        // the routed model and provider must still reach the status line.
+        assert_eq!(
+            parse_model_route(
+                "◆ MODEL ROUTE · MAX → claude-opus-5 · backend claude/agentroute-claude · scope root · source SESSION_AFFINITY · rule confidence 99%"
+            ),
+            Some((
+                "claude-opus-5".to_string(),
+                Some("agentroute-claude".to_string()),
+                None
+            ))
+        );
+    }
+
+    #[test]
+    fn parses_effort_that_follows_the_backend_field() {
+        assert_eq!(
+            parse_model_route(
+                "◆ MODEL ROUTE · MAX → gpt-6-astra · backend azure/agentroute-azure · xhigh reasoning · scope root"
+            ),
+            Some((
+                "gpt-6-astra".to_string(),
+                Some("agentroute-azure".to_string()),
+                Some(ReasoningEffortConfig::XHigh)
             ))
         );
     }
@@ -649,7 +686,7 @@ mod route_notice_tests {
             Some((
                 "dev-gpt-6-astra".to_string(),
                 Some("agentroute-azure".to_string()),
-                ReasoningEffortConfig::High
+                Some(ReasoningEffortConfig::High)
             ))
         );
     }

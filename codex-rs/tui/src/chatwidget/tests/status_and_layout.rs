@@ -1005,6 +1005,75 @@ async fn rolling_rate_limit_snapshot_preserves_prior_individual_limit() {
 }
 
 #[tokio::test]
+async fn streamed_routed_limit_family_fills_status_rows() {
+    // A routed provider has no account read behind its quota, so its streamed limit family is
+    // the only source for the `/status` rows.
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_rolling_rate_limit_snapshot(RateLimitSnapshot {
+        limit_id: Some("claude".to_string()),
+        limit_name: Some("Claude".to_string()),
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 74,
+            window_duration_mins: Some(300),
+            resets_at: Some(1_790_460_000),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 8,
+            window_duration_mins: Some(10_080),
+            resets_at: Some(1_790_942_400),
+        }),
+        credits: None,
+        individual_limit: None,
+        plan_type: None,
+        spend_control_reached: None,
+        rate_limit_reached_type: None,
+    });
+
+    let display = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("claude")
+        .expect("streamed routed limits should reach the status rows");
+    assert_eq!(display.limit_name, "Claude");
+    assert_eq!(
+        display.primary.as_ref().map(|window| window.used_percent),
+        Some(74.0)
+    );
+    assert_eq!(
+        display.secondary.as_ref().map(|window| window.used_percent),
+        Some(8.0)
+    );
+    // Codex labels these windows by length, which is the "5h / weekly" pair users expect.
+    assert_eq!(get_limits_duration(300).as_deref(), Some("5h"));
+    assert_eq!(get_limits_duration(10_080).as_deref(), Some("weekly"));
+    assert!(
+        !chat.rate_limit_snapshots_by_limit_id.contains_key("codex"),
+        "a routed family must not invent a Codex bucket"
+    );
+}
+
+#[tokio::test]
+async fn streamed_codex_family_still_leaves_status_rows_to_the_account_read() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut account_read = snapshot(/*percent*/ 20.0);
+    account_read.limit_id = Some("codex_other".to_string());
+    chat.on_rate_limit_snapshot(Some(account_read));
+
+    let mut rolling = snapshot(/*percent*/ 90.0);
+    rolling.limit_id = Some("codex_other".to_string());
+    chat.on_rolling_rate_limit_snapshot(rolling);
+
+    let display = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("codex_other")
+        .expect("the account read still populates Codex families");
+    assert_eq!(
+        display.primary.as_ref().map(|window| window.used_percent),
+        Some(20.0)
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

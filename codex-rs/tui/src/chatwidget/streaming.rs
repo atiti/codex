@@ -427,7 +427,7 @@ impl ChatWidget {
             if let Some((model, model_provider, effort)) = super::parse_model_route(&message) {
                 self.routed_turn_model = Some(model);
                 self.routed_turn_model_provider = model_provider;
-                self.routed_turn_reasoning_effort = Some(effort);
+                self.routed_turn_reasoning_effort = effort;
                 self.refresh_status_surfaces();
             }
             self.add_to_history(history_cell::new_agentroute_route_event(message));

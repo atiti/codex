@@ -88,6 +88,7 @@ use codex_protocol::auth::AuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::openai_models::ModelInfo;
@@ -555,6 +556,51 @@ fn response_items_equal_ignoring_internal_metadata(
     let mut current = current.clone();
     current.clear_internal_chat_message_metadata_passthrough();
     previous == current
+}
+
+/// Whether the resolved outbound Responses destination may receive internal tool metadata.
+fn is_internal_metadata_destination(provider: &ApiProvider) -> bool {
+    url::Url::parse(&provider.base_url).ok().is_some_and(|url| {
+        url.scheme() == "https"
+            && url.host_str().is_some_and(|host| {
+                host == "api.openai.com" || codex_http_client::is_allowed_chatgpt_host(host)
+            })
+    })
+}
+
+/// Keep the harness guidance but avoid asserting Codex's identity to routed models.
+/// Only request copies are changed; saved history and OpenAI requests are untouched.
+fn neutralize_harness_identity(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let line = line
+                .strip_prefix("You are Codex, an agent based on ")
+                .and_then(|remainder| remainder.split_once(". ").map(|(_, guidance)| guidance))
+                .unwrap_or(line);
+            if let Some(guidance) = line.strip_prefix("As Codex, you ") {
+                format!("You {guidance}")
+            } else if let Some(guidance) = line.strip_prefix("As Codex, You ") {
+                format!("You {guidance}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn neutralize_harness_identity_in_input(input: &mut [ResponseItem]) {
+    for item in input {
+        if let ResponseItem::Message { role, content, .. } = item
+            && matches!(role.as_str(), "system" | "developer")
+        {
+            for part in content {
+                if let ContentItem::InputText { text } | ContentItem::OutputText { text } = part {
+                    *text = neutralize_harness_identity(text);
+                }
+            }
+        }
+    }
 }
 
 impl WebsocketSession {
@@ -1102,7 +1148,7 @@ impl ModelClient {
             input.retain(|item| !matches!(item, ResponseItem::ConfigurationUpdate { .. }));
         }
         let is_openai = self.state.provider.info().is_openai();
-        let (instructions, tools) = if model_info.use_responses_lite {
+        let (mut instructions, tools) = if model_info.use_responses_lite {
             // These prompt-only items are rebuilt on every request. Hash their visible payloads
             // within the thread so retries and resumed sessions preserve their identity.
             let prefix_namespace = Uuid::new_v5(
@@ -1141,6 +1187,8 @@ impl ModelClient {
             )
         };
         if !is_openai {
+            instructions = neutralize_harness_identity(&instructions);
+            neutralize_harness_identity_in_input(&mut input);
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
                 if let ResponseItem::FunctionCall {

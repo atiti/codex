@@ -351,6 +351,71 @@ fn test_model_client_with_thread_id(
     )
 }
 
+#[test]
+fn routed_provider_requests_keep_guidance_without_codex_identity() -> anyhow::Result<()> {
+    let mut client = test_model_client(SessionSource::Cli);
+    let prompt = Prompt {
+        base_instructions: BaseInstructions {
+            text: "You are Codex, an agent based on GPT-6. Keep working with the user.\nAs Codex, you are careful.".into(),
+            provenance: None,
+        },
+        input: vec![ResponseItem::Message {
+            id: None,
+            role: "developer".into(),
+            content: vec![ContentItem::InputText {
+                text: "You are Codex, an agent based on GPT-6. Follow the user's task.".into(),
+            }],
+            phase: None,
+            internal_chat_message_metadata_passthrough: None,
+        }],
+        ..Default::default()
+    };
+    let model = test_model_info();
+    let request = |client: &ModelClient| {
+        client.build_responses_request(
+            &prompt,
+            &model,
+            None,
+            codex_protocol::config_types::ReasoningSummary::None,
+            None,
+            &test_responses_metadata_for_client(
+                client,
+                None,
+                format!("{}:0", client.state.thread_id),
+                None,
+                TestCodexResponsesRequestKind::Turn,
+            ),
+            true,
+        )
+    };
+    let routed = request(&client)?;
+    assert_eq!(
+        routed.instructions,
+        "Keep working with the user.\nYou are careful."
+    );
+    assert_eq!(
+        serde_json::to_value(&routed.input)?[0]["content"][0]["text"],
+        "Follow the user's task."
+    );
+    assert_eq!(
+        prompt.base_instructions.text,
+        "You are Codex, an agent based on GPT-6. Keep working with the user.\nAs Codex, you are careful."
+    );
+
+    Arc::get_mut(&mut client.state)
+        .expect("test client should have unique session state")
+        .provider = create_model_provider(ModelProviderInfo::create_openai_provider(None), None);
+    let native = request(&client)?;
+    assert!(native.instructions.starts_with("You are Codex"));
+    assert!(
+        serde_json::to_value(&native.input)?[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("You are Codex")
+    );
+    Ok(())
+}
+
 fn test_model_provider() -> SharedModelProvider {
     test_model_client(SessionSource::Cli).state.provider.clone()
 }

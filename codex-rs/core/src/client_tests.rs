@@ -8,6 +8,7 @@ use super::X_CODEX_PARENT_THREAD_ID_HEADER;
 use super::X_CODEX_TURN_METADATA_HEADER;
 use super::X_CODEX_WINDOW_ID_HEADER;
 use super::X_OPENAI_SUBAGENT_HEADER;
+use super::neutralize_harness_identity;
 use super::normalize_response_items_for_provider;
 use crate::AttestationContext;
 use crate::AttestationProvider;

@@ -352,7 +352,7 @@ fn test_model_client_with_thread_id(
 }
 
 #[test]
-fn routed_provider_requests_keep_guidance_without_codex_identity() -> anyhow::Result<()> {
+fn all_provider_requests_keep_guidance_without_harness_identity() -> anyhow::Result<()> {
     let mut client = test_model_client(SessionSource::Cli);
     let prompt = Prompt {
         base_instructions: BaseInstructions {
@@ -406,13 +406,35 @@ fn routed_provider_requests_keep_guidance_without_codex_identity() -> anyhow::Re
         .expect("test client should have unique session state")
         .provider = create_model_provider(ModelProviderInfo::create_openai_provider(None), None);
     let native = request(&client)?;
-    assert!(native.instructions.starts_with("You are Codex"));
-    assert!(
-        serde_json::to_value(&native.input)?[0]["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .starts_with("You are Codex")
+    assert_eq!(native.instructions, routed.instructions);
+    assert_eq!(
+        serde_json::to_value(&native.input)?[0]["content"][0]["text"],
+        "Follow the user's task."
     );
+    assert_eq!(
+        neutralize_harness_identity("You are ChatGPT, a large language model. Be helpful.\n"),
+        "Be helpful.\n"
+    );
+    let mut lite_model = model.clone();
+    lite_model.use_responses_lite = true;
+    let lite = client.build_responses_request(
+        &prompt,
+        &lite_model,
+        None,
+        codex_protocol::config_types::ReasoningSummary::None,
+        None,
+        &test_responses_metadata_for_client(
+            &client,
+            None,
+            format!("{}:0", client.state.thread_id),
+            None,
+            TestCodexResponsesRequestKind::Turn,
+        ),
+        true,
+    )?;
+    let lite_json = serde_json::to_value(&lite.input)?;
+    assert!(!lite_json.to_string().contains("You are Codex"));
+    assert!(lite_json.to_string().contains("Keep working with the user"));
     Ok(())
 }
 

@@ -562,25 +562,34 @@ fn is_internal_metadata_destination(provider: &ApiProvider) -> bool {
     })
 }
 
-/// Keep the harness guidance but avoid asserting Codex's identity to routed models.
-/// Only request copies are changed; saved history and OpenAI requests are untouched.
+/// Keep the harness guidance without asserting the harness's identity to a model.
+/// Only request copies are changed; saved history is untouched.
 fn neutralize_harness_identity(text: &str) -> String {
-    text.lines()
+    let mut neutral = text
+        .lines()
         .map(|line| {
-            let line = line
-                .strip_prefix("You are Codex, an agent based on ")
-                .and_then(|remainder| remainder.split_once(". ").map(|(_, guidance)| guidance))
-                .unwrap_or(line);
+            let line = if line.starts_with("You are Codex,") || line.starts_with("You are ChatGPT,")
+            {
+                line.split_once(". ").map_or("", |(_, guidance)| guidance)
+            } else {
+                line
+            };
             if let Some(guidance) = line.strip_prefix("As Codex, you ") {
                 format!("You {guidance}")
             } else if let Some(guidance) = line.strip_prefix("As Codex, You ") {
+                format!("You {guidance}")
+            } else if let Some(guidance) = line.strip_prefix("As ChatGPT, you ") {
                 format!("You {guidance}")
             } else {
                 line.to_string()
             }
         })
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if text.ends_with('\n') {
+        neutral.push('\n');
+    }
+    neutral
 }
 
 fn neutralize_harness_identity_in_input(input: &mut [ResponseItem]) {
@@ -1155,12 +1164,14 @@ impl ModelClient {
                 tools,
             }];
             if !prompt.base_instructions.text.is_empty() {
+                let neutral_instructions =
+                    neutralize_harness_identity(&prompt.base_instructions.text);
                 let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
-                    prompt.base_instructions.text.clone(),
+                    neutral_instructions.clone(),
                 ));
                 instructions.set_id(Some(ResponseItemId::with_suffix(
                     "msg",
-                    Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
+                    Uuid::new_v5(&prefix_namespace, neutral_instructions.as_bytes()),
                 )));
                 prefix.push(instructions);
             }
@@ -1172,9 +1183,9 @@ impl ModelClient {
                 Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into()),
             )
         };
+        instructions = neutralize_harness_identity(&instructions);
+        neutralize_harness_identity_in_input(&mut input);
         if !is_openai {
-            instructions = neutralize_harness_identity(&instructions);
-            neutralize_harness_identity_in_input(&mut input);
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
                 if let ResponseItem::FunctionCall {

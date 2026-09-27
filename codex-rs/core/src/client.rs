@@ -1696,6 +1696,7 @@ impl ModelClientSession {
             }
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
+                self.client.state.provider.info(),
                 prompt.cyber_access_program,
             );
             self.client
@@ -1841,6 +1842,7 @@ impl ModelClientSession {
             }
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
+                self.client.state.provider.info(),
                 prompt.cyber_access_program,
             );
             let mut websocket_metadata = responses_metadata.clone();

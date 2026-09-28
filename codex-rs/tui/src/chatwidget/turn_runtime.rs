@@ -621,7 +621,11 @@ mod route_notice_tests {
             parse_model_route(
                 "◆ MODEL ROUTE · FAST → gpt-5.6-luna · low reasoning · confidence 92% · score -2"
             ),
-            Some(("gpt-5.6-luna".to_string(), None, Some(ReasoningEffortConfig::Low)))
+            Some((
+                "gpt-5.6-luna".to_string(),
+                None,
+                Some(ReasoningEffortConfig::Low)
+            ))
         );
     }
 

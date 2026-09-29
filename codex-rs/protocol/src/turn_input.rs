@@ -164,6 +164,8 @@ pub struct TurnStartOptions {
     /// Source classification for the caller that starts a new turn.
     /// Ignored when the submitted input steers an active turn.
     pub turn_trigger: Option<String>,
+    /// Routing-only goal identity and objective; never appended to user history.
+    pub goal_routing: Option<GoalRoutingContext>,
     /// Structured-output schema for a new turn. When steering, Core rejects
     /// the input if the active turn uses a different schema.
     pub final_output_json_schema: Option<Value>,
@@ -176,6 +178,13 @@ pub struct TurnStartOptions {
     /// Explicit cyber treatment for this turn. Omission preserves the backend's
     /// automatic behavior.
     pub cyber_access_program: Option<CyberAccessProgram>,
+}
+
+/// Objective supplied by the goal extension to the routing hook.
+#[derive(Clone, Debug)]
+pub struct GoalRoutingContext {
+    pub goal_id: String,
+    pub objective: String,
 }
 
 /// What Core did with input submitted through `start_or_steer_turn`.

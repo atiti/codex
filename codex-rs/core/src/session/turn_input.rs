@@ -138,6 +138,7 @@ impl PreparedTurnInputSettings {
     ) -> CodexResult<Option<Arc<TurnContext>>> {
         let TurnStartOptions {
             turn_trigger,
+            goal_routing,
             final_output_json_schema,
             service_tier,
             parent_turn_id,
@@ -178,6 +179,9 @@ impl PreparedTurnInputSettings {
         let Some((turn_context, settings_snapshot)) = turn_context else {
             return Ok(None);
         };
+        if let Some(goal_routing) = goal_routing {
+            turn_context.extension_data.insert(goal_routing);
+        }
         if let Some(turn_trigger) = turn_trigger {
             turn_context
                 .turn_metadata_state

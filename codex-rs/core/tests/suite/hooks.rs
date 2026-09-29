@@ -5958,3 +5958,120 @@ async fn post_tool_use_records_apply_patch_context_with_edit_alias() -> Result<(
 
     Ok(())
 }
+
+#[tokio::test]
+async fn goal_continuation_routes_objective_without_adding_user_message() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("goal-response"),
+            ev_assistant_message("goal-message", "working on the objective"),
+            ev_completed("goal-response"),
+        ]),
+    )
+    .await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "unused blocking prompt", "unused context")
+                .expect("write goal routing hook");
+            let path = home.join("user_prompt_submit_hook.py");
+            let mut script = fs::read_to_string(&path).expect("read hook");
+            script.push_str(
+                "else:\n    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'model': 'gpt-5.1-codex', 'reasoningEffort': 'high'}}))\n",
+            );
+            fs::write(path, script).expect("write routing output");
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config.features.enable(Feature::StepModelSwitching).expect("enable model switching");
+        });
+    let test = builder.build(&server).await?;
+    test.codex
+        .start_turn_if_idle(
+            TurnInputRequest::new(TurnInput::ResponseItem(responses::user_message_item(
+                "internal goal steering",
+            )))
+            .on_start(TurnStartOptions {
+                turn_trigger: Some("goal".to_string()),
+                goal_routing: Some(codex_protocol::turn_input::GoalRoutingContext {
+                    goal_id: "goal-1".to_string(),
+                    objective: "Design a zero-downtime database migration".to_string(),
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let hook_inputs = read_user_prompt_submit_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["goal_id"], "goal-1");
+    assert_eq!(
+        hook_inputs[0]["prompt"],
+        "Design a zero-downtime database migration"
+    );
+    let request = response.single_request();
+    assert_eq!(request.body_json()["model"], "gpt-5.1-codex");
+    assert_eq!(request.body_json()["reasoning"]["effort"], "high");
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .any(|text| text == "internal goal steering")
+    );
+    assert!(
+        request
+            .message_input_texts("user")
+            .iter()
+            .all(|text| !text.contains("zero-downtime"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn goal_continuation_can_be_blocked_before_sampling() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "exhausted goal", "goal capacity unavailable")
+                .expect("write goal capacity hook");
+        })
+        .with_config(trust_discovered_hooks);
+    let test = builder.build(&server).await?;
+    test.codex
+        .start_turn_if_idle(
+            TurnInputRequest::new(TurnInput::ResponseItem(responses::user_message_item(
+                "steering",
+            )))
+            .on_start(TurnStartOptions {
+                goal_routing: Some(codex_protocol::turn_input::GoalRoutingContext {
+                    goal_id: "goal-2".to_string(),
+                    objective: "exhausted goal".to_string(),
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert_eq!(
+        read_user_prompt_submit_hook_inputs(test.codex_home_path())?.len(),
+        1
+    );
+    assert!(
+        server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .iter()
+            .all(|request| !request.url.path().ends_with("/responses"))
+    );
+    Ok(())
+}

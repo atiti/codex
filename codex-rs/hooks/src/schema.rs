@@ -612,6 +612,9 @@ pub(crate) struct UserPromptSubmitCommandInput {
     pub requested_backend: Option<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub spawn_model_explicit: bool,
+    /// Present only for host-admitted goal continuations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<String>,
     /// Opaque ChatGPT account identity for local capacity affinity. Consumers must not display it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account_id: Option<String>,

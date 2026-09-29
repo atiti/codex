@@ -768,9 +768,13 @@ fn routing_prompt_for_pending_input(
                 .clone()
                 .unwrap_or_else(|| communication.content.clone())
         }
-        TurnInput::ResponseItem(_)
-        | TurnInput::FunctionCallOutput(_)
-        | TurnInput::InterAgentCommunication(_) => {
+        TurnInput::ResponseItem(_) => {
+            return turn_context
+                .extension_data
+                .get::<codex_protocol::turn_input::GoalRoutingContext>()
+                .map(|goal| goal.objective.clone());
+        }
+        TurnInput::FunctionCallOutput(_) | TurnInput::InterAgentCommunication(_) => {
             return None;
         }
     }
@@ -840,6 +844,14 @@ pub(crate) async fn inspect_pending_input(
         inherited_model_provider,
         requested_backend,
         spawn_model_explicit,
+        goal_id: if matches!(pending_input_item, TurnInput::ResponseItem(_)) {
+            turn_context
+                .extension_data
+                .get::<codex_protocol::turn_input::GoalRoutingContext>()
+                .map(|goal| goal.goal_id.clone())
+        } else {
+            None
+        },
         account_id,
         rate_limits,
         ordinary_usage_allowed,

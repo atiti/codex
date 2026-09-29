@@ -158,6 +158,10 @@
     "cwd": {
       "type": "string"
     },
+    "goal_id": {
+      "description": "Present only for host-admitted goal continuations.",
+      "type": "string"
+    },
     "hook_event_name": {
       "const": "UserPromptSubmit",
       "type": "string"

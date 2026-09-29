@@ -499,6 +499,7 @@ async fn schedule(runtime: &CommandHookRuntime, handler: ConfiguredHandler, cwd:
             inherited_model_provider: None,
             requested_backend: None,
             spawn_model_explicit: false,
+            goal_id: None,
             account_id: None,
             rate_limits: None,
             ordinary_usage_allowed: None,

@@ -302,7 +302,10 @@ async fn run_guardian_review_session_with_retry_before_deadline(
                 context.clone(),
                 GuardianReviewerIdentity {
                     name: None,
-                    auth_manager: context.turn().model_provider().auth_manager()
+                    auth_manager: context
+                        .turn()
+                        .model_provider()
+                        .auth_manager()
                         .or_else(|| Some(Arc::clone(&session.services.auth_manager))),
                 },
                 request.clone(),

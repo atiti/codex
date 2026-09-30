@@ -1044,7 +1044,7 @@ fn route_directive_prefix_is_not_recorded_as_user_task_text() {
             text_elements: Vec::new(),
         }],
         client_id: None,
-        acceptance_order: None,
+        metadata: Default::default(),
     };
 
     strip_text_prefix(&mut input, "@azure ".len());

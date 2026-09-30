@@ -559,16 +559,6 @@ fn response_items_equal_ignoring_internal_metadata(
     previous == current
 }
 
-/// Whether the resolved outbound Responses destination may receive internal tool metadata.
-fn is_internal_metadata_destination(provider: &ApiProvider) -> bool {
-    url::Url::parse(&provider.base_url).ok().is_some_and(|url| {
-        url.scheme() == "https"
-            && url.host_str().is_some_and(|host| {
-                host == "api.openai.com" || codex_http_client::is_allowed_chatgpt_host(host)
-            })
-    })
-}
-
 /// Keep the harness guidance without asserting the harness's identity to a model.
 /// Only request copies are changed; saved history is untouched.
 fn neutralize_harness_identity(text: &str) -> String {
@@ -864,6 +854,8 @@ impl ModelClient {
             event_sender: self.event_sender.clone(),
             http_client_factory: self.http_client_factory.clone(),
             restored_history: self.restored_history,
+            request_contributors: self.request_contributors.clone(),
+            executed_tool_calls: self.executed_tool_calls.clone(),
         };
         client.new_session()
     }

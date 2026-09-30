@@ -9,8 +9,8 @@ use crate::codex_thread::GuardianAuthorizationVersion;
 use codex_config::config_toml::CircuitBreakAction;
 use codex_guardian_reviewer::ReviewHost;
 use codex_protocol::approvals::GuardianReviewReason;
-use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::CodexErrorInfo;
+use codex_protocol::protocol::ErrorEvent;
 use codex_protocol::protocol::WarningEvent;
 
 pub(in crate::guardian) struct PreparedApproval {
@@ -141,12 +141,18 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
                 turn: Arc::clone(&turn),
                 reviewer_profiles: tokio::sync::Mutex::new(GuardianReviewerFallbackState {
                     active: GuardianReviewerIdentity {
-                        name: turn.extension_data.get::<GuardianReviewerProfiles>()
+                        name: turn
+                            .extension_data
+                            .get::<GuardianReviewerProfiles>()
                             .and_then(|profiles| profiles.current_name.clone()),
-                        auth_manager: turn.model_provider().auth_manager()
+                        auth_manager: turn
+                            .model_provider()
+                            .auth_manager()
                             .or_else(|| Some(Arc::clone(&session.services.auth_manager))),
                     },
-                    fallbacks: turn.extension_data.get::<GuardianReviewerProfiles>()
+                    fallbacks: turn
+                        .extension_data
+                        .get::<GuardianReviewerProfiles>()
                         .map(|profiles| profiles.fallbacks.iter().cloned().collect())
                         .unwrap_or_default(),
                 }),
@@ -270,26 +276,38 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         if matches!(
             &outcome,
             GuardianReviewOutcome::Error(GuardianReviewError::Session {
-                error_info: Some(CodexErrorInfo::UsageLimitExceeded), ..
+                error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+                ..
             })
         ) {
             let mut reviewer_profiles = prepared.reviewer_profiles.lock().await;
             while let Some(fallback) = reviewer_profiles.fallbacks.pop_front() {
-                let auth_manager = match codex_login::AuthManager::shared_from_config_for_codex_home(
-                    prepared.turn.config.as_ref(), fallback.codex_home,
-                    /*enable_codex_api_key_env*/ false,
-                ).await {
-                    Ok(auth_manager) => auth_manager,
-                    Err(error) => {
-                        tracing::warn!(profile = %fallback.name, %error, "could not load reviewer fallback profile");
-                        continue;
-                    }
-                };
-                if auth_manager.auth().await.is_none_or(|auth| !auth.is_chatgpt_auth()) {
+                let auth_manager =
+                    match codex_login::AuthManager::shared_from_config_for_codex_home(
+                        prepared.turn.config.as_ref(),
+                        fallback.codex_home,
+                        /*enable_codex_api_key_env*/ false,
+                    )
+                    .await
+                    {
+                        Ok(auth_manager) => auth_manager,
+                        Err(error) => {
+                            tracing::warn!(profile = %fallback.name, %error, "could not load reviewer fallback profile");
+                            continue;
+                        }
+                    };
+                if auth_manager
+                    .auth()
+                    .await
+                    .is_none_or(|auth| !auth.is_chatgpt_auth())
+                {
                     tracing::warn!(profile = %fallback.name, "reviewer fallback profile is not signed in");
                     continue;
                 }
-                let from_profile = reviewer_profiles.active.name.clone()
+                let from_profile = reviewer_profiles
+                    .active
+                    .name
+                    .clone()
                     .unwrap_or_else(|| "current".to_string());
                 reviewer_profiles.active = GuardianReviewerIdentity {
                     name: Some(fallback.name.clone()),

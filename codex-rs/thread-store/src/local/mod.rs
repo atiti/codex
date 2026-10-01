@@ -75,6 +75,7 @@ use crate::DeletedProject;
 use crate::ItemPage;
 use crate::ListItemsParams;
 use crate::ListProjectsParams;
+use crate::ListThreadAttachmentThreadsParams;
 use crate::ListThreadAttachmentsParams;
 use crate::ListThreadSectionsParams;
 use crate::ListThreadsParams;
@@ -103,6 +104,7 @@ use crate::StoredThread;
 use crate::StoredThreadHistory;
 use crate::StoredThreadSection;
 use crate::StoredThreadSectionsPage;
+use crate::ThreadAttachmentOwnerPage;
 use crate::ThreadAttachmentPage;
 use crate::ThreadMetadataPatch;
 use crate::ThreadOccurrenceSearchPage;
@@ -665,6 +667,15 @@ impl ThreadStore for LocalThreadStore {
         params: ListThreadAttachmentsParams,
     ) -> ThreadStoreFuture<'_, ThreadAttachmentPage> {
         Box::pin(async move { thread_attachments::list_thread_attachments(self, params).await })
+    }
+
+    fn list_thread_attachment_threads(
+        &self,
+        params: ListThreadAttachmentThreadsParams,
+    ) -> ThreadStoreFuture<'_, ThreadAttachmentOwnerPage> {
+        Box::pin(
+            async move { thread_attachments::list_thread_attachment_threads(self, params).await },
+        )
     }
 
     fn remove_thread_attachment(

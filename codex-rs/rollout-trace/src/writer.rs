@@ -58,8 +58,6 @@ impl TraceWriter {
     ) -> Result<Self> {
         let bundle_dir = bundle_dir.as_ref().to_path_buf();
         let payloads_dir = bundle_dir.join(PAYLOADS_DIR_NAME);
-        std::fs::create_dir_all(&payloads_dir)
-            .with_context(|| format!("create trace payload dir {}", payloads_dir.display()))?;
 
         let started_at_unix_ms = unix_time_ms();
         let manifest =
@@ -70,6 +68,8 @@ impl TraceWriter {
             .as_ref()
             .map(|quota| quota.reserve(manifest_bytes.len()))
             .transpose()?;
+        std::fs::create_dir_all(&payloads_dir)
+            .with_context(|| format!("create trace payload dir {}", payloads_dir.display()))?;
         std::fs::write(bundle_dir.join(MANIFEST_FILE_NAME), manifest_bytes)?;
 
         let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);

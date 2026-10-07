@@ -18,6 +18,8 @@ use tracing::trace_span;
 use tracing::warn;
 
 use crate::client::ModelClientSession;
+use crate::context_manager::estimate_item_token_count;
+use crate::context_manager::is_user_turn_boundary;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::RequestEffortUsage;
@@ -29,6 +31,7 @@ use codex_otel::STARTUP_PREWARM_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 
@@ -36,6 +39,37 @@ use codex_protocol::protocol::SubAgentSource;
 pub(crate) enum PrewarmInput {
     Base,
     History,
+}
+
+const STARTUP_PREWARM_HISTORY_MAX_TOKENS: usize = 8_000;
+
+fn truncate_startup_prewarm_history(history: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    if history.is_empty() {
+        return history;
+    }
+
+    let mut turn_starts = vec![0];
+    turn_starts.extend((1..history.len()).filter(|index| is_user_turn_boundary(&history[*index])));
+
+    let mut remaining_tokens = STARTUP_PREWARM_HISTORY_MAX_TOKENS;
+    let mut retained_start = history.len();
+    for (group_index, start) in turn_starts.iter().enumerate().rev() {
+        let end = turn_starts
+            .get(group_index + 1)
+            .copied()
+            .unwrap_or(history.len());
+        let group_tokens = history[*start..end]
+            .iter()
+            .map(|item| usize::try_from(estimate_item_token_count(item)).unwrap_or(usize::MAX))
+            .fold(0usize, usize::saturating_add);
+        if group_tokens > remaining_tokens {
+            break;
+        }
+        remaining_tokens -= group_tokens;
+        retained_start = *start;
+    }
+
+    history.into_iter().skip(retained_start).collect()
 }
 
 impl PrewarmInput {
@@ -425,7 +459,7 @@ async fn schedule_startup_prewarm_inner(
                 .services
                 .executed_tool_calls
                 .attach_to_prompt(&mut history, &mut HashMap::new());
-            history
+            truncate_startup_prewarm_history(history)
         }
     };
     let startup_prompt = build_prompt(
@@ -470,3 +504,7 @@ async fn schedule_startup_prewarm_inner(
     );
     Ok(client_session)
 }
+
+#[cfg(test)]
+#[path = "startup_prewarm_tests.rs"]
+mod tests;

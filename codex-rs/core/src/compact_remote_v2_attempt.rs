@@ -41,6 +41,21 @@ pub(super) async fn run_remote_compact_v2_attempt(
 ) -> CodexResult<RemoteCompactV2Attempt> {
     let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
+    // Standalone compaction has no routed turn session to carry provider ownership.
+    let mut owned_client_session = client_session.is_none().then(|| {
+        sess.services
+            .model_client
+            .new_session_for_foreign_provider_history(
+                &turn_context.model_provider_id(),
+                turn_context.model_provider(),
+                history.annotated_items(),
+            )
+            .unwrap_or_else(|| {
+                sess.services
+                    .model_client
+                    .new_session_for_provider(turn_context.model_provider())
+            })
+    });
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
     let base_instructions = sess.get_prompt_base_instructions().await;
     let (rewritten_outputs, estimated_deleted_tokens) =
@@ -101,10 +116,11 @@ pub(super) async fn run_remote_compact_v2_attempt(
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,
     }));
-    let mut owned_client_session = None;
     let client_session = match client_session {
         Some(client_session) => client_session,
-        None => owned_client_session.insert(sess.services.model_client.new_session()),
+        None => owned_client_session
+            .as_mut()
+            .expect("standalone compaction session"),
     };
     let compaction_output_result = run_remote_compaction_request_v2(
         sess,

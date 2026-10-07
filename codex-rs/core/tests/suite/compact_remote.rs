@@ -54,6 +54,9 @@ use wiremock::ResponseTemplate;
 #[path = "compact_remote_trimming.rs"]
 mod trimming;
 
+#[path = "compact_remote_provider_history.rs"]
+mod provider_history;
+
 const DUMMY_FUNCTION_NAME: &str = "test_tool";
 const TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const REMOTE_COMPACT_TURN_COMPLETE_TIMEOUT: Duration = Duration::from_secs(30);

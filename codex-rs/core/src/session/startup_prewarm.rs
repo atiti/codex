@@ -18,7 +18,6 @@ use tracing::trace_span;
 use tracing::warn;
 
 use crate::client::ModelClientSession;
-use crate::context_manager::estimate_item_token_count;
 use crate::context_manager::is_user_turn_boundary;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::INITIAL_SUBMIT_ID;
@@ -41,7 +40,7 @@ pub(crate) enum PrewarmInput {
     History,
 }
 
-const STARTUP_PREWARM_HISTORY_MAX_TOKENS: usize = 8_000;
+const STARTUP_PREWARM_HISTORY_MAX_BYTES: usize = 8_000;
 
 fn truncate_startup_prewarm_history(history: Vec<ResponseItem>) -> Vec<ResponseItem> {
     if history.is_empty() {
@@ -51,21 +50,19 @@ fn truncate_startup_prewarm_history(history: Vec<ResponseItem>) -> Vec<ResponseI
     let mut turn_starts = vec![0];
     turn_starts.extend((1..history.len()).filter(|index| is_user_turn_boundary(&history[*index])));
 
-    let mut remaining_tokens = STARTUP_PREWARM_HISTORY_MAX_TOKENS;
+    let mut remaining_bytes = STARTUP_PREWARM_HISTORY_MAX_BYTES;
     let mut retained_start = history.len();
     for (group_index, start) in turn_starts.iter().enumerate().rev() {
         let end = turn_starts
             .get(group_index + 1)
             .copied()
             .unwrap_or(history.len());
-        let group_tokens = history[*start..end]
-            .iter()
-            .map(|item| usize::try_from(estimate_item_token_count(item)).unwrap_or(usize::MAX))
-            .fold(0usize, usize::saturating_add);
-        if group_tokens > remaining_tokens {
+        let group_bytes = serde_json::to_vec(&history[*start..end])
+            .map_or(usize::MAX, |serialized| serialized.len());
+        if group_bytes > remaining_bytes {
             break;
         }
-        remaining_tokens -= group_tokens;
+        remaining_bytes -= group_bytes;
         retained_start = *start;
     }
 

@@ -173,10 +173,14 @@ async fn resume_warmup_filters_foreign_reasoning_before_sampling() -> Result<()>
     Ok(())
 }
 
-#[test_case(true; "provider switch")]
-#[test_case(false; "same provider")]
+#[test_case(true, false; "provider switch")]
+#[test_case(false, false; "same provider")]
+#[test_case(true, true; "legacy provider metadata absent")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resumed_sample_filters_only_foreign_provider_state(switch_provider: bool) -> Result<()> {
+async fn resumed_sample_filters_only_foreign_provider_state(
+    switch_provider: bool,
+    legacy_rollout: bool,
+) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = wiremock::MockServer::start().await;
     let mock = responses::mount_sse_sequence(
@@ -214,6 +218,26 @@ async fn resumed_sample_filters_only_foreign_provider_state(switch_provider: boo
         .clone()
         .context("rollout path")?;
     initial.codex.shutdown_and_wait().await?;
+    if legacy_rollout {
+        let mut lines = std::fs::read_to_string(&path)?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        for line in &mut lines {
+            if let Some(metadata) = line
+                .get_mut("metadata")
+                .and_then(serde_json::Value::as_object_mut)
+            {
+                metadata.remove("model_provider_id");
+            }
+        }
+        let rollout = lines
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<serde_json::Result<Vec<_>>>()?
+            .join("\n");
+        std::fs::write(&path, format!("{rollout}\n"))?;
+    }
     let resumed = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(move |config| {

@@ -6032,6 +6032,120 @@ async fn goal_continuation_routes_objective_without_adding_user_message() -> Res
     Ok(())
 }
 
+#[test_case::test_case(true; "applied route")]
+#[test_case::test_case(false; "rejected route")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
+    route_is_configured: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let default_server = start_mock_server().await;
+    let routed_server = start_mock_server().await;
+    let default_response = mount_sse_once(
+        &default_server,
+        sse(vec![
+            ev_response_created("default-route-response"),
+            ev_assistant_message("default-route-message", "route finished"),
+            ev_completed("default-route-response"),
+        ]),
+    )
+    .await;
+    let routed_response = mount_sse_once(
+        &routed_server,
+        sse(vec![
+            ev_response_created("routed-response"),
+            ev_assistant_message("routed-message", "route finished"),
+            ev_completed("routed-response"),
+        ]),
+    )
+    .await;
+    let provider_id = if route_is_configured {
+        "agentroute-test"
+    } else {
+        "missing-agentroute-test"
+    };
+    let route_provider = non_openai_model_provider(&routed_server);
+    let mut builder = test_codex()
+        .with_pre_build_hook(move |home| {
+            write_user_prompt_submit_hook(home, "never block this route test", "unused context")
+                .expect("write UserPromptSubmit route hook");
+            let hook_path = home.join("user_prompt_submit_hook.py");
+            let mut hook = fs::read_to_string(&hook_path).expect("read route hook");
+            let response = serde_json::to_string(&json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "model": "gpt-5.1-codex",
+                    "modelProvider": provider_id,
+                    "reasoningEffort": "high"
+                }
+            }))
+            .expect("serialize route output");
+            hook.push_str(&format!("else:\n    print(json.dumps({response}))\n"));
+            fs::write(hook_path, hook).expect("write route output");
+
+            let stop_script_path = home.join("agentroute_stop_hook.py");
+            let stop_log_path = home.join("stop_hook_log.jsonl");
+            let stop_script = format!(
+                "import json\nfrom pathlib import Path\nimport sys\n\npayload = json.load(sys.stdin)\nwith Path(r\"{}\").open(\"a\", encoding=\"utf-8\") as handle:\n    handle.write(json.dumps(payload) + \"\\n\")\n",
+                stop_log_path.display()
+            );
+            fs::write(&stop_script_path, stop_script).expect("write receipt hook");
+            let hooks_path = home.join("hooks.json");
+            let mut hooks: serde_json::Value =
+                serde_json::from_slice(&fs::read(&hooks_path).expect("read hooks.json"))
+                    .expect("parse hooks.json");
+            hooks["hooks"]["Stop"] = json!([{
+                "hooks": [{
+                    "type": "command",
+                    "command": format!("python3 {}", stop_script_path.display()),
+                    "statusMessage": "record AgentRoute receipt"
+                }]
+            }]);
+            fs::write(hooks_path, serde_json::to_vec(&hooks).expect("serialize hooks.json"))
+                .expect("write Stop receipt hook");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config
+                .features
+                .enable(Feature::StepModelSwitching)
+                .expect("enable model switching");
+            if route_is_configured {
+                config
+                    .model_providers
+                    .insert(provider_id.to_string(), route_provider);
+            }
+        });
+    let test = builder.build(&default_server).await?;
+
+    test.submit_turn("route this turn").await?;
+
+    let (request, expected_provider, expected_status) = if route_is_configured {
+        assert!(default_response.requests().is_empty());
+        (routed_response.single_request(), provider_id, "applied")
+    } else {
+        assert!(routed_response.requests().is_empty());
+        (default_response.single_request(), "openai", "rejected")
+    };
+    assert_eq!(request.body_json()["model"], "gpt-5.1-codex");
+    let stop_inputs = read_stop_hook_inputs(test.codex_home_path())?;
+    assert_eq!(stop_inputs.len(), 1);
+    let receipt = &stop_inputs[0]["agentroute_application"];
+    assert_eq!(receipt["status"], expected_status);
+    assert_eq!(receipt["requested"]["provider"], provider_id);
+    assert_eq!(receipt["requested"]["model"], "gpt-5.1-codex");
+    assert_eq!(receipt["actual"]["provider"], expected_provider);
+    if !route_is_configured {
+        assert!(
+            receipt["reason"]
+                .as_str()
+                .unwrap()
+                .contains("not configured")
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn goal_continuation_can_be_blocked_before_sampling() -> Result<()> {
     skip_if_no_network!(Ok(()));

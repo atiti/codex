@@ -196,6 +196,35 @@ fn final_request_boundary_drops_third_party_encrypted_state() {
 }
 
 #[test]
+fn final_request_boundary_drops_unattributed_encrypted_function_args() {
+    let provider = ModelProviderInfo::create_openai_provider(None);
+    let mut input = vec![ResponseItem::FunctionCall {
+        id: None,
+        name: "lookup".to_string(),
+        namespace: None,
+        arguments: "{}".to_string(),
+        encrypted_function_args: Some(vec!["provider-bound".to_string()]),
+        call_id: "call-unattributed".to_string(),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), true);
+
+    assert_eq!(
+        input,
+        vec![ResponseItem::FunctionCall {
+            id: None,
+            name: "lookup".to_string(),
+            namespace: None,
+            arguments: "{}".to_string(),
+            encrypted_function_args: None,
+            call_id: "call-unattributed".to_string(),
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
+}
+
+#[test]
 fn restricted_provider_downgrades_plaintext_agent_message_to_user_message() {
     let mut provider = ModelProviderInfo::default();
     provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);

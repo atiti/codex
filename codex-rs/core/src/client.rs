@@ -367,7 +367,8 @@ pub(crate) fn normalize_response_items_for_provider(
             let foreign = item
                 .id()
                 .is_some_and(|id| foreign_provider_state_ids.contains(id));
-            if foreign {
+            let unattributed = item.id().is_none() && strip_unattributed_provider_state;
+            if foreign || unattributed {
                 if let ResponseItem::FunctionCall {
                     encrypted_function_args,
                     ..
@@ -375,6 +376,8 @@ pub(crate) fn normalize_response_items_for_provider(
                 {
                     *encrypted_function_args = None;
                 }
+            }
+            if foreign {
                 item.set_id(None);
             }
         }

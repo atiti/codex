@@ -172,3 +172,74 @@ async fn resume_warmup_filters_foreign_reasoning_before_sampling() -> Result<()>
     ws.shutdown().await;
     Ok(())
 }
+
+#[test_case(true; "provider switch")]
+#[test_case(false; "same provider")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_sample_filters_only_foreign_provider_state(switch_provider: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = wiremock::MockServer::start().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "reasoning", "id": "rs_azure_resume", "summary": [],
+                    "encrypted_content": "AZURE_ONLY_RESUME_STATE"
+                }}),
+                responses::ev_assistant_message("msg-saved", "saved answer"),
+                responses::ev_completed("resp-saved"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("msg-resumed", "continued answer"),
+                responses::ev_completed("resp-resumed"),
+            ]),
+        ],
+    )
+    .await;
+    let initial = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider_id = "agentroute-azure".to_string();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    initial
+        .submit_turn("keep this resumed user context")
+        .await?;
+    let home = initial.home.clone();
+    let path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+    initial.codex.shutdown_and_wait().await?;
+    let resumed = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(move |config| {
+            if !switch_provider {
+                config.model_provider_id = "agentroute-azure".to_string();
+            }
+        })
+        .resume(&server, home, path)
+        .await?;
+
+    resumed.submit_turn("first sample after resume").await?;
+    resumed.codex.shutdown_and_wait().await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    let resumed_request = requests[1].body_json();
+    assert!(
+        resumed_request
+            .to_string()
+            .contains("first sample after resume")
+    );
+    assert_eq!(
+        resumed_request
+            .to_string()
+            .contains("AZURE_ONLY_RESUME_STATE"),
+        !switch_provider,
+    );
+    Ok(())
+}

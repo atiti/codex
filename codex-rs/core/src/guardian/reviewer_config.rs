@@ -54,11 +54,11 @@ pub fn build_guardian_review_session_config(
     {
         instructions.push('\n');
         instructions.push_str(
-            &GuardianConversationHistory {
-                prompt: guardian_config
+            &GuardianConversationHistory::new(
+                guardian_config
                     .guardian_conversation_history_prompt
                     .as_deref(),
-            }
+            )?
             .render(),
         );
     }

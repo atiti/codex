@@ -849,6 +849,7 @@ impl ModelClient {
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
             }),
             agent_identity_policy: self.agent_identity_policy,
+            api_key_cyber_access_programs: self.api_key_cyber_access_programs,
             prompt_cache_key_override: self.prompt_cache_key_override.clone(),
             codex_responses_headers: self.codex_responses_headers.clone(),
             event_sender: self.event_sender.clone(),

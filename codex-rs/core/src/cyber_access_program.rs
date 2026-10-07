@@ -3,10 +3,10 @@
 use codex_api::AccessPrograms;
 use codex_features::Feature;
 use codex_login::CodexAuth;
+use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_ID;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result;
-use codex_model_provider_info::ModelProviderInfo;
 use codex_protocol::turn_input::CyberAccessProgram;
 
 #[derive(Clone, Copy, Debug)]
@@ -80,8 +80,35 @@ mod tests {
         };
         let program = Some(CyberAccessProgram::DaybreakBlue);
 
-        assert!(for_auth(Some(&auth), &openai, program, ApiKeyCyberAccessPrograms::Enabled).unwrap().is_some());
-        assert!(for_auth(Some(&auth), &azure, program, ApiKeyCyberAccessPrograms::Enabled).unwrap().is_none());
-        assert!(for_auth(None, &openai, program, ApiKeyCyberAccessPrograms::Enabled).unwrap().is_none());
+        assert!(
+            for_auth(
+                Some(&auth),
+                &openai,
+                program,
+                ApiKeyCyberAccessPrograms::Enabled
+            )
+            .unwrap()
+            .is_some()
+        );
+        assert!(
+            for_auth(
+                Some(&auth),
+                &azure,
+                program,
+                ApiKeyCyberAccessPrograms::Enabled
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            for_auth(
+                /*auth*/ None,
+                &openai,
+                program,
+                ApiKeyCyberAccessPrograms::Enabled
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 }

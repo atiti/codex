@@ -340,7 +340,7 @@ impl Session {
                 .then(|| {
                     ToolName::new(
                         turn_context
-                            .provider
+                            .model_provider()
                             .capabilities()
                             .namespace_tools
                             .then(|| turn_context.config.multi_agent_v2.tool_namespace.clone())

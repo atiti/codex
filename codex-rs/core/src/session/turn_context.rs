@@ -548,7 +548,6 @@ impl TurnContext {
             .model_provider_id
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = provider_id;
-
     }
 
     /// Captures current model metadata without preparing a step.

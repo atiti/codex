@@ -1509,7 +1509,6 @@ async fn capture_current_model_fallback_step_context(
         || !turn_context.model_provider().info().is_openai()
         || (previous_turn_context.model_info().slug == turn_context.model_info().slug
             && previous_turn_context.cyber_access_program == turn_context.cyber_access_program)
-
     {
         return Ok(None);
     }

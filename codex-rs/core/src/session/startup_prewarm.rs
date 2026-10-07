@@ -308,6 +308,23 @@ async fn schedule_startup_prewarm_inner(
 ) -> CodexResult<ModelClientSession> {
     let prewarm_started_at = Instant::now();
     let mut client_session = session.services.model_client.new_session();
+    if matches!(input, PrewarmInput::History) {
+        // Resume warmup precedes UserPromptSubmit and must enforce ownership itself.
+        let history = session.clone_history().await;
+        let state = session.state.lock().await;
+        let config = &state.session_configuration;
+        if let Some(foreign_session) = session
+            .services
+            .model_client
+            .new_session_for_foreign_provider_history(
+                &config.original_config_do_not_use.model_provider_id,
+                Arc::clone(&config.provider),
+                history.annotated_items(),
+            )
+        {
+            client_session = foreign_session;
+        }
+    }
     let websocket_ready = client_session.is_websocket_prewarmed().await;
     // Count the decision before preparation can fail; fresh clients also need prewarm.
     session.services.session_telemetry.counter(

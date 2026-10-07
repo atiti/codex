@@ -3,7 +3,7 @@ name: test-tui
 description: Guide for testing Codex TUI interactively
 ---
 
-You can start and use Codex TUI to verify changes. 
+You can start and use Codex TUI to verify changes.
 
 Important notes:
 

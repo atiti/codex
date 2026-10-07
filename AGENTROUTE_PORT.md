@@ -1,49 +1,59 @@
-# AgentRoute 0.157 port candidate
+# AgentRoute integration on Codex 0.161.0
 
-Base: OpenAI `rust-v0.157.0`, commit
-`00c972ed5d6ff6499317fd41b7f23605b8e6850d`.
+Upstream base: OpenAI `rust-v0.161.0`, commit
+`979011409de0a60b52f179721948e65531d26144`.
 
-This is the stable-release candidate branch, not the moving `main` mirror and not a
-published AgentRoute binary release. The existing installed runtime is unchanged.
+AgentRoute's runtime pin uses Codex commit
+`e7c3db0015098c1aaca6c76d1e7b2b02b59501cd`, which contains the provider-history
+resume fix on top of the 0.161.0 port. The surrounding fork branch also carries
+CI and maintenance commits; they do not change the pinned runtime source.
 
-## Carried integrations
+## Resume compatibility fix
 
-- Prompt/subagent routing, reasoning and profile selection, provider-state isolation,
-  destination model metadata, compaction preservation, and route UI from runtime v40.
-- Recovery of interrupted custom tool calls without a debug-build panic.
-- Applied/rejected route receipts in Stop/SubagentStop hook payloads.
+A resumed thread can contain encrypted reasoning or compaction state created by a
+different model provider. Replaying that provider-owned state during Codex's resume
+warmup or standalone remote compaction can make the destination provider fail to
+decrypt or parse the request. The new provider-history helper identifies foreign
+encrypted state using the rollout's provider metadata and filters those item IDs
+through the existing mixed-provider session path. Ordinary conversation history
+and state owned by the active provider remain available to the request.
 
-The upstream release manifest is versioned 0.157.0 but its checked-in Cargo lockfile
-still uses 0.0.0 for workspace packages. This branch refreshes those package versions
-without changing external dependency versions. Bazel lock regeneration produced no diff.
-An obsolete downstream tool-metadata filter was removed: upstream already filters by
-resolved request destination for HTTP and WebSocket requests.
+The fix covers resume-history WebSocket warmup and standalone automatic or manual
+remote compaction. Regression tests switch from an AgentRoute Azure provider to the
+OpenAI provider and verify that foreign ciphertext is absent while user messages and
+the new provider's compaction checkpoint remain present.
 
-## Validation on macOS arm64
+Provider-owned function-call arguments are cleared even when the rollout item has no
+response-item ID. Resume prewarm retains only whole recent turns within an 8,000-token
+estimated history budget. Guardian's optional history instruction override is rejected
+above a 900-token estimated limit.
 
-- CLI compile check passed for the routing baseline.
-- 206 focused core tests passed, covering providers, compaction, hooks, turn-setting
-  changes, and interrupted custom-tool history recovery.
-- All 180 hook crate tests passed, including generated schema fixtures.
-- Two focused TUI tests passed: route notices remain transcript cells rather than
-  warnings, and the status line uses the routed provider.
-- `just fmt` and `just bazel-lock-update` completed successfully.
-- Scoped `just fix -p codex-core -p codex-hooks -p codex-tui` and the final
-  `cargo clippy -p codex-core --lib --locked` completed. Non-blocking style/argument-count
-  warnings remain; unrelated upstream autofixes were deliberately excluded.
+## Upstream compatibility notes
 
-Reproduce the focused tests from `codex-rs`:
+Codex 0.161.0 removes the stable app-server v2 `PluginSummary.extensions` field and
+its generated extension types. Existing app-server clients must stop relying on that
+metadata. It also removes `tui.prompt_suggestions`; existing config files continue to
+load, but that setting no longer has an effect.
 
-```sh
-just test -p codex-core --lib -E 'test(provider) or test(compact) or test(hook) or test(step_activation) or test(normalize_adds_missing_output_for_custom_tool_call)'
-just test -p codex-hooks --lib
-just test -p codex-tui --lib -E 'test(agentroute_route_notices) or test(status_line_model_uses_the_routed_turn_provider)'
-```
+## Validation recorded for this candidate
 
-## Remaining release gates
+- Resume warmup, automatic and manual provider-switch compaction, and WebSocket
+  resume tests: 4 passed.
+- Ordinary resumed sampling after a provider switch and same-provider resume: 2 passed.
+- Id-less encrypted function-call normalization and the prewarm/Guardian context
+  limits: 5 passed.
+- Provider ownership, same-provider reasoning continuation, compaction, and routed
+  guardian client tests: 6 passed.
+- `codex-app-server-protocol`: 319 passed, 1 skipped.
+- `codex-hooks`: 185 passed.
+- CLI, app-server, and TUI development build completed.
+- The ChatGPT-Routed 0.161.0 app bundle was built, signed, and validated; the
+  official Codex app was not modified.
+- AgentRoute Python suite: 446 passed, 1 skipped.
+- `just fmt` completed successfully with a temporary uv cache.
 
-The complete workspace test suite, live GPT/Azure/other-provider smoke tests, release
-artifact builds, signing/notarization, installer pin/patch-export migration, and Desktop
-compatibility have not been certified by these focused checks. Do not treat this branch
-as an instruction to replace a working installation. Follow the AgentRoute repository's
-release runbook before publishing binaries.
+The complete Codex workspace test suite and the user's Desktop resume acceptance
+remain separate checks. AgentRoute PR #65 is already merged; the 0.5.66 release and
+local installation still depend on merging the Codex 0.161.0 port. Before local
+installation, finish shared-server sessions and stop it gracefully so the new runtime
+can become the owner.

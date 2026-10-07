@@ -24,8 +24,8 @@ OpenAI provider and verify that foreign ciphertext is absent while user messages
 the new provider's compaction checkpoint remain present.
 
 Provider-owned function-call arguments are cleared even when the rollout item has no
-response-item ID. Resume prewarm retains only whole recent turns within an 8,000-token
-estimated history budget. Guardian's optional history instruction override is rejected
+response-item ID. Resume prewarm retains only whole recent turns within an 8,000-byte
+serialized history budget. Guardian's optional history instruction override is rejected
 above a 900-token estimated limit.
 
 ## Upstream compatibility notes
@@ -39,7 +39,10 @@ load, but that setting no longer has an effect.
 
 - Resume warmup, automatic and manual provider-switch compaction, and WebSocket
   resume tests: 4 passed.
-- Ordinary resumed sampling after a provider switch and same-provider resume: 2 passed.
+- Ordinary resumed sampling after a provider switch, same-provider resume, and legacy rollout
+  without provider metadata: 3 passed.
+- UserPromptSubmit provider routing to the selected endpoint and applied/rejected Stop receipts:
+  2 passed.
 - Id-less encrypted function-call normalization and the prewarm/Guardian context
   limits: 5 passed.
 - Provider ownership, same-provider reasoning continuation, compaction, and routed

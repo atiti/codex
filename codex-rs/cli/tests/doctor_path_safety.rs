@@ -103,10 +103,12 @@ wire_api = "responses"
                 "@echo helper ran>>\"%CODEX_TEST_HELPER_MARKER%\"\r\n@exit /b 0\r\n",
             )?;
         }
-        // Windows selects rg.exe explicitly, so rg.cmd cannot satisfy discovery.
+        // Windows selects these .exe paths explicitly; .cmd cannot satisfy discovery.
         // An invalid image still counts as found: doctor must not execute it.
         #[cfg(windows)]
-        std::fs::write(bin.join("rg.exe"), "not an executable image")?;
+        for executable in ["rg.exe", "git.exe"] {
+            std::fs::write(bin.join(executable), "not an executable image")?;
+        }
         let path = std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(
             &std::env::var_os("PATH").unwrap_or_default(),
         )))?;

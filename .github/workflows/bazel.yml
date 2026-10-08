@@ -20,7 +20,8 @@ jobs:
     # signal without putting PR latency back on the critical path. When
     # Code-mode unit tests run on every Bazel target. When authenticated RBE
     # is available, the Windows-cross shards exercise the source-built V8 path.
-    timeout-minutes: 120
+    # Standard hosted runners need time for a cold native build before all test shards run.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:

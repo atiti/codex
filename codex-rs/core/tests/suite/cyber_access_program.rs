@@ -72,6 +72,10 @@ async fn daybreak_model_pairs_program_on_actual_request(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn daybreak_hook_route_pairs_program_without_explicit_turn_setting() -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(
+        Ok(()),
+        "command hooks currently require a host-native shell"
+    );
     let server = responses::start_mock_server().await;
     let request = responses::mount_sse_once(
         &server,
@@ -82,17 +86,18 @@ async fn daybreak_hook_route_pairs_program_without_explicit_turn_setting() -> Re
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model("daybreak-route-start")
         .with_pre_build_hook(|home| {
-            let script = home.join("daybreak_route.py");
             let output = json!({"hookSpecificOutput": {
                 "hookEventName": "UserPromptSubmit",
                 "model": "gpt-daybreak-blue-latest"
             }});
-            std::fs::write(&script, format!("print({:?})\n", output.to_string()))
-                .expect("write Daybreak routing hook");
-            let python = if cfg!(windows) { "python" } else { "python3" };
+            let command = if cfg!(windows) {
+                format!("Write-Output '{output}'")
+            } else {
+                format!("printf '%s\\n' '{output}'")
+            };
             let hooks = json!({"hooks": {"UserPromptSubmit": [{"hooks": [{
                 "type": "command",
-                "command": format!("{python} \"{}\"", script.display())
+                "command": command
             }]}]}});
             std::fs::write(home.join("hooks.json"), hooks.to_string())
                 .expect("write Daybreak hook config");

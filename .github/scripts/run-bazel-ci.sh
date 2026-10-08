@@ -333,6 +333,12 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   fi
 
   if [[ $pass_windows_build_env -eq 1 ]]; then
+    if [[ -n "${VOICE_WINDOWS_BAZEL_REPOSITORY:-}" ]]; then
+      post_config_bazel_args+=(
+        "--inject_repository=voice_windows_tools=${VOICE_WINDOWS_BAZEL_REPOSITORY}"
+        "--//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools"
+      )
+    fi
     windows_action_env_vars=(
       INCLUDE
       LIB
@@ -347,6 +353,13 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
       WindowsSDKLibVersion
       WindowsSDKVersion
     )
+
+    # Native voice tool analysis reads fixed OS values from default_shell_env.
+    for env_var in SystemRoot PROCESSOR_ARCHITECTURE; do
+      if [[ -n "${!env_var:-}" ]]; then
+        post_config_bazel_args+=("--action_env=${env_var}=${!env_var}" "--host_action_env=${env_var}=${!env_var}")
+      fi
+    done
 
     for env_var in "${windows_action_env_vars[@]}"; do
       if [[ -n "${!env_var:-}" ]]; then

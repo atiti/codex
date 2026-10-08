@@ -251,8 +251,10 @@ fn final_request_boundary_drops_unattributed_encrypted_function_args() {
 
 #[test]
 fn restricted_provider_downgrades_plaintext_agent_message_to_user_message() {
-    let mut provider = ModelProviderInfo::default();
-    provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    let provider = ModelProviderInfo {
+        tool_compatibility: Some(ToolCompatibility::FunctionsAndApplyPatch),
+        ..Default::default()
+    };
     let mut input = vec![ResponseItem::AgentMessage {
         id: Some(ResponseItemId::with_suffix("amsg", "portable")),
         author: "/root".to_string(),
@@ -286,8 +288,10 @@ fn restricted_provider_downgrades_plaintext_agent_message_to_user_message() {
 
 #[test]
 fn restricted_provider_drops_encrypted_agent_message() {
-    let mut provider = ModelProviderInfo::default();
-    provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    let provider = ModelProviderInfo {
+        tool_compatibility: Some(ToolCompatibility::FunctionsAndApplyPatch),
+        ..Default::default()
+    };
     let mut input = vec![ResponseItem::AgentMessage {
         id: Some(ResponseItemId::with_suffix("amsg", "native")),
         author: "/root".to_string(),

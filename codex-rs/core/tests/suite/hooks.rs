@@ -6065,7 +6065,7 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
         "missing-agentroute-test"
     };
     let route_provider = non_openai_model_provider(&routed_server);
-    let mut builder = test_codex()
+    let mut builder = test_codex().with_model("gpt-5.5")
         .with_pre_build_hook(move |home| {
             write_user_prompt_submit_hook(home, "never block this route test", "unused context")
                 .expect("write UserPromptSubmit route hook");
@@ -6074,7 +6074,7 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
             let response = serde_json::to_string(&json!({
                 "hookSpecificOutput": {
                     "hookEventName": "UserPromptSubmit",
-                    "model": "gpt-5.1-codex",
+                    "model": "gpt-5.5",
                     "modelProvider": provider_id,
                     "reasoningEffort": "high"
                 }
@@ -6127,19 +6127,19 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
         assert!(routed_response.requests().is_empty());
         (default_response.single_request(), "openai", "rejected")
     };
-    assert_eq!(request.body_json()["model"], "gpt-5.1-codex");
+    assert_eq!(request.body_json()["model"], "gpt-5.5");
     let stop_inputs = read_stop_hook_inputs(test.codex_home_path())?;
     assert_eq!(stop_inputs.len(), 1);
     let receipt = &stop_inputs[0]["agentroute_application"];
     assert_eq!(receipt["status"], expected_status);
     assert_eq!(receipt["requested"]["provider"], provider_id);
-    assert_eq!(receipt["requested"]["model"], "gpt-5.1-codex");
+    assert_eq!(receipt["requested"]["model"], "gpt-5.5");
     assert_eq!(receipt["actual"]["provider"], expected_provider);
     if !route_is_configured {
         assert!(
             receipt["reason"]
                 .as_str()
-                .unwrap()
+                .expect("rejected route should explain its reason")
                 .contains("not configured")
         );
     }

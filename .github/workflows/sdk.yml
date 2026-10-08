@@ -35,7 +35,8 @@ jobs:
 
   sdks:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    # Fork CI builds the CLI and code-mode host without the upstream remote cache.
+    timeout-minutes: 40
     environment:
       name: bazel
       deployment: false

@@ -85,7 +85,7 @@ mod guardian_subagent_notification_tests;
 
 const SPAWN_CALL_ID: &str = "spawn-call-1";
 const MULTI_AGENT_V1_NAMESPACE: &str = "multi_agent_v1";
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "agentroute_collaboration";
 const TURN_0_FORK_PROMPT: &str = "seed fork context";
 const TURN_1_PROMPT: &str = "spawn a child and continue";
 const TURN_2_NO_WAIT_PROMPT: &str = "follow up without wait";
@@ -2388,25 +2388,12 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         ),
         expected_settings,
     );
-    let content = if plaintext {
-        vec![json!({
-            "type": "input_text",
-            "text": format!(
-                "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n{message}"
-            ),
-        })]
-    } else {
-        vec![
-            json!({
-                "type": "input_text",
-                "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n",
-            }),
-            json!({
-                "type": "encrypted_content",
-                "encrypted_content": message,
-            }),
-        ]
-    };
+    let content = vec![json!({
+        "type": "input_text",
+        "text": format!(
+            "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\n{message}"
+        ),
+    })];
     assert_eq!(
         strip_response_item_ids_from_json(strip_metadata_from_json(Value::Array(
             child_request.inputs_of_type("agent_message"),
@@ -2423,7 +2410,7 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
             !child_request
                 .body_json()
                 .to_string()
-                .contains("\"name\":\"collaboration\""),
+                .contains(&format!("\"name\":\"{MULTI_AGENT_V2_NAMESPACE}__")),
             "leaf workers must not receive collaboration tools",
         );
     }
@@ -2449,7 +2436,7 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
             tool_call_metadata(parent_request.function_call_output(SPAWN_CALL_ID)),
             json!({
                 "executed_tool_calls": [{
-                    "name": "collaboration__spawn_agent",
+                    "name": "agentroute_collaboration__spawn_agent",
                     "arguments": serde_json::from_str::<Value>(&spawn_args)?,
                 }],
                 "tool_calls_complete": true,
@@ -2482,7 +2469,7 @@ async fn multi_agent_v2_spawn_sends_agent_message_to_child(
         .expect("spawn send event");
     assert!(send.contains(&format!("sender_thread_id={root_thread_id}")));
     assert!(send.contains(&format!("receiver_thread_id={child_thread_id}")));
-    let logged_message = if plaintext { "[plaintext]" } else { message };
+    let logged_message = "[plaintext]";
     assert!(send.contains(&format!("content=\"{logged_message}\"")));
 
     let communication_id = log_field(send, "communication_id").expect("communication ID");

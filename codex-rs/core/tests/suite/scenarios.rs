@@ -967,7 +967,7 @@ async fn multi_agent_catalog_parameters() -> Result<()> {
                 ev_response_created("agents-response"),
                 ev_function_call_with_namespace(
                     "agents-call",
-                    "collaboration",
+                    "agentroute_collaboration",
                     "list_agents",
                     r#"{"path_prefix":"/root"}"#,
                 ),
@@ -1044,7 +1044,7 @@ async fn astra_settings_release_check_with_direct_and_code_mode_tools() -> Resul
         vec![
             sse(vec![
                 ev_response_created("agents-response"),
-                ev_function_call_with_namespace("agents-call", "collaboration", "list_agents", "{}"),
+                ev_function_call_with_namespace("agents-call", "agentroute_collaboration", "list_agents", "{}"),
                 ev_completed("agents-response"),
             ]),
             sse(vec![
@@ -1830,7 +1830,7 @@ async fn guardian_checkpoint_migration_request_history() -> Result<()> {
     use super::guardian_checkpoint_migration::migration_scenario;
     let requests = migration_scenario().await?;
     let mut snapshot = context_snapshot::format_request_history_snapshot(
-        "An old checkpoint retains a user restriction, assistant questions, and a verified answer. Incompatible automatic compaction keeps legacy review across restart with its saved answer; compatible manual compaction immediately activates thread-owned review.",
+        "An ownership-unknown legacy checkpoint is omitted and rebuilt by the current provider. Restrictions and verified answers survive model-hash changes, compaction, and restart in thread-owned review. Mocked checkpoints verify transport, not backend decryption.",
         &requests,
         &ContextSnapshotOptions::default()
             .rewrite_known_segments()

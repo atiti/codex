@@ -1348,7 +1348,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // mock responses from the model
 
-    let reasoning_response_1 = ev_reasoning_item("m1", &["I will create a react app"], &[]);
+    let reasoning_response_1 = ev_reasoning_item("encitem_m1", &["I will create a react app"], &[]);
     let encrypted_content_1 = reasoning_response_1["item"]["encrypted_content"]
         .as_str()
         .unwrap();
@@ -1366,7 +1366,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r2", token_count_used_after_compaction),
     ]);
 
-    let reasoning_response_2 = ev_reasoning_item("m3", &["I will create a node app"], &[]);
+    let reasoning_response_2 = ev_reasoning_item("encitem_m3", &["I will create a node app"], &[]);
     let encrypted_content_2 = reasoning_response_2["item"]["encrypted_content"]
         .as_str()
         .unwrap();
@@ -1384,14 +1384,15 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r4", token_count_used_after_compaction),
     ]);
 
-    let reasoning_response_3 = ev_reasoning_item("m6", &["I will create a python app"], &[]);
+    let reasoning_response_3 =
+        ev_reasoning_item("encitem_m6", &["I will create a python app"], &[]);
     let encrypted_content_3 = reasoning_response_3["item"]["encrypted_content"]
         .as_str()
         .unwrap();
 
     // third chunk of work
     let model_reasoning_response_3_sse = sse(vec![
-        ev_reasoning_item("m6", &["I will create a python app"], &[]),
+        ev_reasoning_item("encitem_m6", &["I will create a python app"], &[]),
         ev_exec_command_call("r6-shell", "echo make-python"),
         ev_completed_with_tokens("r6", token_count_used),
     ]);

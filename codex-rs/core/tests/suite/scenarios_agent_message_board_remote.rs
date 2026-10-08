@@ -137,13 +137,13 @@ async fn remote_board_uses_the_existing_tools_and_session_identity() -> anyhow::
             responses::sse(vec![
                 responses::ev_function_call_with_namespace(
                     "remote-post",
-                    "collaboration",
+                    "agentroute_collaboration",
                     "post",
                     &json!({"new_channel_name":"design", "text":"A remote decision."}).to_string(),
                 ),
                 responses::ev_function_call_with_namespace(
                     "await-notification",
-                    "collaboration",
+                    "agentroute_collaboration",
                     "wait_agent",
                     "{}",
                 ),

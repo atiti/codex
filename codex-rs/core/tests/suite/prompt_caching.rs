@@ -298,7 +298,7 @@ async fn prompt_tools_are_consistent_across_requests(
             .message_input_texts("developer")
             .join("\n");
         if custom_instructions || expected_update_plan_enabled {
-            assert!(developer_text.contains(&mode_instructions));
+            assert!(developer_text.contains(&mode_instructions.replace("\r\n", "\n")));
         } else {
             assert!(!developer_text.contains("update_plan"));
             assert!(developer_text.contains("Plan Mode (Conversational)"));

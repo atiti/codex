@@ -553,12 +553,18 @@ async fn fresh_startup_reads_destination_and_cleared_model_uses_catalog() -> Res
         let (mut app, _, _) = make_test_app_with_channels().await;
         app.chat_widget.handle_thread_session_quiet(started.session);
         if !remote {
-            let rendered = render_bottom_popup(&app.chat_widget, /*width*/ 80)
-                .replace(&destination.path().display().to_string(), "<PROJECT>");
+            // Render the complete temporary path before normalizing it for the snapshot.
+            let project_path = crate::status::format_directory_display(
+                destination.path(),
+                /*max_width*/ None,
+            );
+            let width = u16::try_from(project_path.len() + 80)?;
+            let rendered =
+                render_bottom_popup(&app.chat_widget, width).replace(&project_path, "<PROJECT>");
             insta::assert_snapshot!(rendered, @"
             › Ask Codex to do anything
 
-              GPT-6.1-Sol · openai · high · /var/folders/2t/v9lmpqmj3tg7ggv2pv4p38lh0000gn/…
+              GPT-6.1-Sol · openai · high · <PROJECT>
             ");
         }
         let expected_cwd = if override_cwd {

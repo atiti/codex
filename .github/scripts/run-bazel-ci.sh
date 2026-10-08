@@ -439,7 +439,8 @@ else
   if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     # Bazel's output tree already reuses actions within a job. A second disk cache
     # duplicates large Rust/V8 artifacts and exhausts ephemeral hosted runners.
-    bazel_run_args+=(--disk_cache=)
+    # Bound concurrent fixture copies and Wine prefix bootstraps as well.
+    bazel_run_args+=(--disk_cache= --local_test_jobs=2)
   fi
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then

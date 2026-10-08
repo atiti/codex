@@ -1243,9 +1243,18 @@ async fn unified_exec_wait_status_renders_command_in_single_details_row_snapshot
     terminal_interaction(&mut chat, "call-wait-ui-stdin", "proc-ui", "");
 
     let rendered = render_bottom_popup(&chat, /*width*/ 48);
+    let snapshot = normalize_snapshot_paths(rendered);
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        assert_chatwidget_snapshot!(
+            "unified_exec_wait_status_renders_command_in_single_details_row",
+            snapshot
+        );
+    });
+    #[cfg(not(target_os = "windows"))]
     assert_chatwidget_snapshot!(
         "unified_exec_wait_status_renders_command_in_single_details_row",
-        normalize_snapshot_paths(rendered)
+        snapshot
     );
 }
 

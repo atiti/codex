@@ -3031,6 +3031,8 @@ async fn annotated_history_uses_explicit_model_without_a_step(
             .mcp_attribution_snapshot(),
     );
     for envelope in &mut expected {
+        envelope.metadata.get_or_insert_default().model_provider_id =
+            Some(turn_context.model_provider_id());
         envelope
             .metadata
             .get_or_insert_default()

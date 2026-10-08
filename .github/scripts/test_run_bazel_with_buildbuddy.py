@@ -37,6 +37,7 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                 executable.chmod(0o700)
             env = os.environ.copy()
             env.update(
+                GITHUB_ACTIONS="true",
                 RUNNER_OS="Windows",
                 SYSTEMROOT=r"C:\Windows",
                 PROCESSOR_ARCHITECTURE="AMD64",
@@ -67,8 +68,16 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                         capture_output=True,
                         text=True,
                     )
-                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(
+                        result.returncode, 0, f"{result.stdout}\n{result.stderr}"
+                    )
                     args = json.loads(arguments.read_text(encoding="utf-8"))
+                    self.assertEqual("--disk_cache=" in args, not remote)
+                    self.assertEqual("--config=ci-windows-tests" in args, not remote)
+                    self.assertEqual("--local_test_jobs=2" in args, not remote)
+                    self.assertEqual(
+                        "--test_env=RUST_TEST_THREADS=1" in args, not remote
+                    )
                     native_flags = {
                         "--repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0",
                         "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain",

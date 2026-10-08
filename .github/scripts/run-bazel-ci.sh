@@ -355,11 +355,18 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     )
 
     # Native voice tool analysis reads fixed OS values from default_shell_env.
-    for env_var in SystemRoot PROCESSOR_ARCHITECTURE; do
-      if [[ -n "${!env_var:-}" ]]; then
-        post_config_bazel_args+=("--action_env=${env_var}=${!env_var}" "--host_action_env=${env_var}=${!env_var}")
-      fi
-    done
+    # Git Bash exposes the inherited Windows SystemRoot as uppercase SYSTEMROOT.
+    windows_system_root="${SystemRoot:-${SYSTEMROOT:-${WINDIR:-}}}"
+    if [[ -z "$windows_system_root" || -z "${PROCESSOR_ARCHITECTURE:-}" ]]; then
+      echo "Windows Bazel CI requires the runner's system root and host architecture." >&2
+      exit 1
+    fi
+    post_config_bazel_args+=(
+      "--action_env=SystemRoot=${windows_system_root}"
+      "--host_action_env=SystemRoot=${windows_system_root}"
+      "--action_env=PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE}"
+      "--host_action_env=PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE}"
+    )
 
     for env_var in "${windows_action_env_vars[@]}"; do
       if [[ -n "${!env_var:-}" ]]; then

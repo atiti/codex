@@ -1,5 +1,4 @@
 use super::*;
-use crate::agent::api::AgentControl;
 use crate::agent::api::AgentInput;
 use crate::agent::api::SpawnRequest;
 use crate::agent::child_config::SpawnConfigOptions;
@@ -195,8 +194,7 @@ async fn handle_spawn_agent(
         };
     let (spawned_agent, agent_snapshot) = session
         .services
-        .local_agent_runtime
-        .control(session.session_id())
+        .agent_control
         .spawn(SpawnRequest {
             caller: session.thread_id,
             config,

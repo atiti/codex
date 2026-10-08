@@ -74,7 +74,9 @@ fn install_startup_libraries(runtime: &Path) -> Result<()> {
     fs::create_dir_all(&destination)?;
     for entry in fs::read_dir(source.join(libraries))? {
         let entry = entry?;
-        if entry.path().is_file() {
+        // Windows keeps startup DLLs and plugins in the same directory. Leave
+        // one required plugin out so this remains an incomplete runtime fixture.
+        if entry.path().is_file() && entry.file_name() != "gstopus.dll" {
             fs::copy(entry.path(), destination.join(entry.file_name()))?;
         }
     }
@@ -119,7 +121,7 @@ async fn installed_client_rejects_mixed_builds_and_missing_helper() -> Result<()
         .close()
         .await?;
     assert!(VoiceHost::connect(&package, "wrong-build").await.is_err());
-    // Startup libraries permit handshakes; the missing runtime receipt prevents readiness.
+    // Startup libraries permit handshakes; a missing required plugin prevents readiness.
     let host = VoiceHost::connect(&package, &build_commit().await?).await?;
     assert!(host.initialize_runtime().await.is_err());
     // The same executable elsewhere in the package must not become a fallback.

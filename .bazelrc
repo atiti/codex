@@ -41,6 +41,9 @@ common:windows --test_env=WINDIR
 # 2 MiB stack can be too small for large async test futures on Windows CI; see
 # https://github.com/openai/codex/pull/19067 for the motivating failure.
 common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
+# Windows debug TUI test futures exceed the common 8 MiB libtest stack.
+# Tokio's test macro pins the outer future on that thread, not a worker stack.
+common:windows --test_env=RUST_MIN_STACK=33554432 # 32 MiB
 
 common --test_output=errors
 common --nobuild_runfile_links

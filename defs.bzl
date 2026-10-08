@@ -291,9 +291,6 @@ def codex_rust_crate(
             native test's timeout, tags, and shard count.
     """
     test_env = {
-        # Match Cargo full-CI: large async test futures overflow Rust's default
-        # 2 MiB libtest thread stack, especially on Windows debug builds.
-        "RUST_MIN_STACK": "8388608",
         # The launcher resolves an absolute workspace root at runtime so
         # manifest-only platforms like macOS still point Insta at the real
         # `codex-rs` checkout.

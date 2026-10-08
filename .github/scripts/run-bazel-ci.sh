@@ -324,6 +324,10 @@ if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  # Give workspace-status.cmd the checked-out source revision explicitly. Git
+  # may not be on Bazel's reduced Windows client PATH.
+  STABLE_GIT_COMMIT="$(git rev-parse --verify HEAD)"
+  export STABLE_GIT_COMMIT
   pass_windows_build_env=1
   if [[ $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then
     # Remote build actions execute on Linux RBE workers. Passing the Windows

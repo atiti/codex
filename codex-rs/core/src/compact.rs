@@ -173,6 +173,7 @@ pub(crate) async fn run_compact_task(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
@@ -301,6 +302,7 @@ async fn run_compact_task_inner_impl(
             input: turn_input,
             base_instructions: sess.get_prompt_base_instructions().await,
             cyber_access_program: turn_context.cyber_access_program,
+            model_provider_id: Some(turn_context.model_provider_id()),
             ..Default::default()
         };
         let responses_metadata = sess

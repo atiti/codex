@@ -13,6 +13,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use codex_history::CodexHarnessMetadata;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::TokenUsage;
@@ -104,6 +105,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         output_schema: None,
         output_schema_strict: true,
         cyber_access_program: turn_context.cyber_access_program,
+        model_provider_id: Some(turn_context.model_provider_id()),
     };
 
     let mut responses_metadata = sess
@@ -120,7 +122,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         Some(client_session) => client_session,
         None => owned_client_session
             .as_mut()
-            .expect("standalone compaction session"),
+            .ok_or_else(|| CodexErr::Fatal("Missing standalone compaction session".to_owned()))?,
     };
     let compaction_output_result = run_remote_compaction_request_v2(
         sess,

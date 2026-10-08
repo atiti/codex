@@ -1,4 +1,4 @@
-//! Forward explicit programs while leaving entitlement and model policy to the server.
+//! Pair ChatGPT Daybreak model requests with their program, leaving entitlement to the server.
 
 use codex_api::AccessPrograms;
 use codex_features::Feature;
@@ -38,21 +38,29 @@ pub(crate) fn for_provider(
 pub(crate) fn for_auth(
     auth: Option<&CodexAuth>,
     provider: &ModelProviderInfo,
+    model: &str,
+    provider_id: Option<&str>,
     program: Option<CyberAccessProgram>,
     policy: ApiKeyCyberAccessPrograms,
 ) -> Result<Option<AccessPrograms>> {
     if !provider.is_openai() {
         return Ok(None);
     }
-    let Some(program) = program else {
-        return Ok(None);
-    };
     let Some(auth) = auth else {
         return Ok(None);
     };
     if auth.is_chatgpt_auth() {
-        return Ok(Some(program.into()));
+        // A routing hook can select this model after the turn's explicit program was captured.
+        // Resolve against the actual request model so ordinary subsequent turns do not inherit it.
+        let program = program.or_else(|| {
+            (provider_id == Some(OPENAI_PROVIDER_ID) && model == "gpt-daybreak-blue-latest")
+                .then_some(CyberAccessProgram::DaybreakBlue)
+        });
+        return Ok(program.map(Into::into));
     }
+    let Some(program) = program else {
+        return Ok(None);
+    };
     if !auth.is_api_key_auth() {
         return Ok(None);
     }
@@ -84,6 +92,8 @@ mod tests {
             for_auth(
                 Some(&auth),
                 &openai,
+                "gpt-5.1",
+                Some(OPENAI_PROVIDER_ID),
                 program,
                 ApiKeyCyberAccessPrograms::Enabled
             )
@@ -94,6 +104,8 @@ mod tests {
             for_auth(
                 Some(&auth),
                 &azure,
+                "gpt-daybreak-blue-latest",
+                Some("azure"),
                 program,
                 ApiKeyCyberAccessPrograms::Enabled
             )
@@ -104,6 +116,8 @@ mod tests {
             for_auth(
                 /*auth*/ None,
                 &openai,
+                "gpt-daybreak-blue-latest",
+                Some(OPENAI_PROVIDER_ID),
                 program,
                 ApiKeyCyberAccessPrograms::Enabled
             )

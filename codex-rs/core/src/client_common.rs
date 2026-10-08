@@ -40,6 +40,8 @@ pub struct Prompt {
     pub output_schema_strict: bool,
 
     pub(crate) cyber_access_program: Option<codex_protocol::turn_input::CyberAccessProgram>,
+    /// Actual destination identity; absent identity disables inferred subscription programs.
+    pub(crate) model_provider_id: Option<String>,
 }
 
 impl Default for Prompt {
@@ -52,6 +54,7 @@ impl Default for Prompt {
             output_schema: None,
             output_schema_strict: true,
             cyber_access_program: None,
+            model_provider_id: None,
         }
     }
 }

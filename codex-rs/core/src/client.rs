@@ -2005,6 +2005,8 @@ impl ModelClientSession {
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
                 self.client.state.provider.info(),
+                &request.model,
+                prompt.model_provider_id.as_deref(),
                 prompt.cyber_access_program,
                 self.client.api_key_cyber_access_programs,
             )?;
@@ -2169,6 +2171,8 @@ impl ModelClientSession {
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
                 self.client.state.provider.info(),
+                &request.model,
+                prompt.model_provider_id.as_deref(),
                 prompt.cyber_access_program,
                 self.client.api_key_cyber_access_programs,
             )?;

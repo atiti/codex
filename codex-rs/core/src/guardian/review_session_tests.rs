@@ -474,18 +474,20 @@ async fn encrypted_parent_compaction_requires_original_item_id(mode: GuardianCon
     };
 
     let mut history = ContextManager::new();
-    history.replace_annotated(vec![ResponseItemEnvelope {
-        item: item.clone(),
+    let expected = ResponseItemEnvelope {
+        item,
         metadata: Some(CodexHarnessMetadata {
             compaction_model_hash: Some("compatible".to_owned()),
+            model_provider_id: Some("openai".to_owned()),
             ..Default::default()
         }),
-    }]);
+    };
+    history.replace_annotated(vec![expected.clone()]);
     assert_eq!(
         policy
             .parent_compaction(&history)
             .expect("valid checkpoint"),
-        Some(item)
+        Some(expected)
     );
     // The latest unusable checkpoint must not fall back to the older valid one.
     let mut items = history.annotated_items().to_vec();

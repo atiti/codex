@@ -148,8 +148,10 @@ fn openai_prompt_drops_third_party_plaintext_reasoning() {
 
 #[test]
 fn restricted_provider_prompt_keeps_only_portable_custom_tools() {
-    let mut provider = ModelProviderInfo::default();
-    provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    let provider = ModelProviderInfo {
+        tool_compatibility: Some(ToolCompatibility::FunctionsAndApplyPatch),
+        ..Default::default()
+    };
     let custom_call = |name: &str, call_id: &str| ResponseItem::CustomToolCall {
         id: Some(ResponseItemId::with_suffix("ctc", call_id)),
         status: Some("completed".to_string()),

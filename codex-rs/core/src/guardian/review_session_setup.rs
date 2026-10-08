@@ -12,7 +12,7 @@ pub struct PreparedGuardianContext {
     reviewer_auth_manager: Option<Arc<codex_login::AuthManager>>,
     context_policy: ReviewContextPolicy,
     key: GuardianReviewSessionReuseKey,
-    parent_compaction: Option<ResponseItem>,
+    parent_compaction: Option<codex_history::ResponseItemEnvelope>,
     pub history_reset: CancellationToken,
 }
 
@@ -95,7 +95,7 @@ impl PreparedGuardianContext {
         let initial_history = history.map(|history| history.initial_history).or_else(|| {
             self.parent_compaction
                 .clone()
-                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())]))
+                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item)]))
         });
         let mut config = self.config.clone();
         config.model_provider.supports_websockets &= self

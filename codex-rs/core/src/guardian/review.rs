@@ -208,6 +208,7 @@ pub(super) async fn guardian_review_session_config(
 /// context. It may still reuse the parent's managed-network allowlist for
 /// read-only checks, but it intentionally runs without inherited exec-policy
 /// rules.
+#[allow(clippy::too_many_arguments)]
 async fn run_guardian_review_session_before_deadline(
     session: Arc<Session>,
     context: GuardianReviewContext,

@@ -18,6 +18,7 @@ use crate::feedback_tags;
 use crate::hook_runtime::HookRuntimeOutcome;
 use crate::hook_runtime::drain_async_hook_results;
 use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::inspect_pending_session_start_hooks;
 use crate::hook_runtime::record_additional_contexts;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
@@ -184,7 +185,17 @@ pub(crate) async fn run_turn(
     // encrypted reasoning owned by the previous provider, and compaction is itself a model request.
     // Waiting until after compaction to install the mixed-provider client session can therefore
     // fail before the routed turn gets its first ordinary sample.
-    let hook_outcomes = inspect_input_hooks(&sess, &turn_context, &input).await;
+    let session_start_outcome = inspect_pending_session_start_hooks(&sess, &turn_context).await;
+    if session_start_outcome.should_stop {
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            session_start_outcome.additional_contexts,
+        )
+        .await;
+        return Ok(None);
+    }
+    let mut hook_outcomes = inspect_input_hooks(&sess, &turn_context, &input).await;
     let active_provider_id = turn_context.model_provider_id();
     let history = sess.clone_history().await;
     let explicit_strip_provider_state = hook_outcomes
@@ -239,15 +250,23 @@ pub(crate) async fn run_turn(
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if let Err(err) = run_pre_sampling_compact(
+    let compaction_result = run_pre_sampling_compact(
         &sess,
         &turn_context,
         &mut client_session,
         strip_provider_state,
         &cancellation_token,
     )
-    .await
-    {
+    .await;
+    // Run startup hooks before routing, but inject their context after compaction so a resumed
+    // turn cannot lose it. Hooks with external side effects are never rerun for reinjection.
+    record_additional_contexts(
+        &sess,
+        &turn_context,
+        session_start_outcome.additional_contexts,
+    )
+    .await;
+    if let Err(err) = compaction_result {
         // Compaction runs before the new input is recorded, so preserve it on every failure.
         record_inputs_with_hook_outcomes(
             &sess,
@@ -389,6 +408,11 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return Ok(None);
     }
+    let had_pending_guardian_input = sess
+        .services
+        .thread_extension_data
+        .get::<crate::guardian::PendingReviewContext>()
+        .is_some();
     if crate::guardian::is_basic_session_source(&turn_context.session_source)
         && let Err(error) = crate::guardian::finalize_guardian_input(
             &sess,
@@ -430,6 +454,16 @@ pub(crate) async fn run_turn(
             codex_guardian_context::HistoryTruncation::Allow,
         )
         .await?;
+    }
+    // Guardian finalization can expand its validated marker into native messages and text.
+    // Record every admitted segment, preserving the marker hook's stop decision and emitting
+    // its additional context once. Generated evidence must not run user hooks again.
+    if had_pending_guardian_input && let [marker_outcome] = hook_outcomes.as_slice() {
+        let should_stop = marker_outcome.should_stop;
+        hook_outcomes.resize_with(input.len(), || HookRuntimeOutcome {
+            should_stop,
+            ..Default::default()
+        });
     }
     let mut can_drain_pending_input = input.is_empty();
     if record_inputs_with_hook_outcomes(

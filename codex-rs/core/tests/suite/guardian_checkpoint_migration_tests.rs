@@ -289,8 +289,20 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
         GuardianContextMode::Legacy
     );
     let mut all_requests = answer.requests();
+    // The legacy checkpoint has no recorded provider. Rebuild it through the current provider
+    // before exercising a model-hash transition; never infer ownership for the old ciphertext.
+    let rebuild = responses::mount_sse_once(&server, compact("cmp_legacy_rebuilt")).await;
+    thread.submit(Op::Compact).await?;
+    finish_turn(&thread).await;
+    all_requests.extend(rebuild.requests());
+    assert!(all_requests.iter().all(|request| {
+        !request
+            .body_json()
+            .to_string()
+            .contains("opaque checkpoint")
+    }));
 
-    // Automatic compaction uses the previous model, whose checkpoint the new reviewer cannot read.
+    // Automatic compaction records the previous model hash; the backend validates cross-model reuse.
     let compaction = responses::mount_sse_sequence(
         &server,
         vec![
@@ -321,10 +333,10 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
                 .latest_compaction()
                 .and_then(|checkpoint| checkpoint.model_hash)
         ),
-        (GuardianContextMode::Legacy, Some("previous-model")),
+        (GuardianContextMode::ThreadOwned, Some("previous-model")),
     );
 
-    // A real restart must preserve legacy review and the persisted answer for a mismatched hash.
+    // A restart preserves owned context and the answer even when advertised model hashes differ.
     let incompatible_history = saved_history(&test, &thread).await?;
     let thread = resume(&test, &thread, incompatible_history).await?;
     for (call_id, checkpoint) in [("resumed", None), ("after", Some("cmp_migrated"))] {
@@ -338,11 +350,7 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
             GuardianContextMode::from_history(
                 thread.conversation_history_snapshot().await.as_ref()
             ),
-            if checkpoint.is_some() {
-                GuardianContextMode::ThreadOwned
-            } else {
-                GuardianContextMode::Legacy
-            },
+            GuardianContextMode::ThreadOwned,
         );
         let followup = responses::mount_sse_sequence(
             &server,
@@ -374,7 +382,16 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
             }]))
             .await?;
         finish_turn(&thread).await;
-        all_requests.extend(followup.requests());
+        let requests = followup.requests();
+        assert_eq!(requests[1].body_json()["model"], "gpt-5.6-luna");
+        let expected_checkpoint = checkpoint.unwrap_or("cmp_previous_model");
+        assert!(
+            requests[1]
+                .input()
+                .iter()
+                .any(|item| item["type"] == "compaction" && item["id"] == expected_checkpoint)
+        );
+        all_requests.extend(requests);
     }
     let after_compaction = saved_history(&test, &thread).await?;
     let expected_answer = VerifiedAnswer {

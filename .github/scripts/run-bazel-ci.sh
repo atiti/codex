@@ -351,6 +351,12 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   fi
 
   if [[ $pass_windows_build_env -eq 1 ]]; then
+    # LLVM's Windows C toolchain emits GNU objects. Host Rust proc macros use MSVC;
+    # select native C compilation only for targets carrying that ABI constraint.
+    post_config_bazel_args+=(
+      "--repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0"
+      "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain"
+    )
     if [[ -n "${VOICE_WINDOWS_BAZEL_REPOSITORY:-}" ]]; then
       post_config_bazel_args+=(
         "--inject_repository=voice_windows_tools=${VOICE_WINDOWS_BAZEL_REPOSITORY}"

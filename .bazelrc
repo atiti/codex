@@ -17,6 +17,12 @@ build:windows --workspace_status_command=./scripts/workspace-status.cmd
 # Runfiles strategy rationale: codex-rs/utils/cargo-bin/README.md
 common --noenable_runfiles
 
+# Rust's libtest harness runs test bodies on std-spawned threads. The default
+# 2 MiB stack can be too small for large async test futures on Windows CI; see
+# https://github.com/openai/codex/pull/19067 for the motivating failure.
+# Keep the default before platform expansion so Windows can override it.
+common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
+
 common --enable_platform_specific_config
 common:linux --host_platform=//:local_linux
 common:windows --host_platform=//:local_windows
@@ -37,10 +43,6 @@ common:macos --strategy=CcConfigureMakeRule=remote,sandboxed,local
 common:windows --test_env=SYSTEMROOT
 common:windows --test_env=COMSPEC
 common:windows --test_env=WINDIR
-# Rust's libtest harness runs test bodies on std-spawned threads. The default
-# 2 MiB stack can be too small for large async test futures on Windows CI; see
-# https://github.com/openai/codex/pull/19067 for the motivating failure.
-common --test_env=RUST_MIN_STACK=8388608 # 8 MiB
 # Windows debug TUI test futures exceed the common 8 MiB libtest stack.
 # Tokio's test macro pins the outer future on that thread, not a worker stack.
 common:windows --test_env=RUST_MIN_STACK=33554432 # 32 MiB

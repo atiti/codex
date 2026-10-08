@@ -144,6 +144,8 @@ jobs:
           - 4
     runs-on: windows-latest
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm shard ${{ matrix.shard }}/4
+    env:
+      BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA: "1"
     environment:
       name: bazel
       deployment: false
@@ -259,6 +261,8 @@ jobs:
     timeout-minutes: 40
     runs-on: windows-latest
     name: Bazel test on windows-latest for x86_64-pc-windows-msvc (native main)
+    env:
+      BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA: "1"
     environment:
       name: bazel
       deployment: false
@@ -348,6 +352,8 @@ jobs:
             target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
+    env:
+      BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA: ${{ startsWith(matrix.target, 'x86_64-pc-windows') && '1' || '' }}
     environment:
       name: bazel
       deployment: false
@@ -444,6 +450,8 @@ jobs:
             target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}
+    env:
+      BAZEL_MSVC_RUNTIME_VISUAL_STUDIO_EULA: ${{ startsWith(matrix.target, 'x86_64-pc-windows') && '1' || '' }}
     environment:
       name: bazel
       deployment: false

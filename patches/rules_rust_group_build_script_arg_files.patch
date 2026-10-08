@@ -10,3 +10,153 @@ diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
 +    # command-line length without changing the files or their order.
 +    process_wrapper_flags.add_all("--arg-file", build_flags_files)
  
+diff --git a/rust/private/rustc.bzl b/rust/private/rustc.bzl
+--- a/rust/private/rustc.bzl
++++ b/rust/private/rustc.bzl
+@@ -1121,6 +1121,9 @@
+ 
+     # Wrapper args first
+     process_wrapper_flags = ctx.actions.args()
++    if "windows" in toolchain.exec_triple.str:
++        process_wrapper_flags.set_param_file_format("multiline")
++        process_wrapper_flags.use_param_file("@%s", use_always = True)
+ 
+     for build_env_file in build_env_files:
+         process_wrapper_flags.add("--env-file", build_env_file)
+diff --git a/util/process_wrapper/options.rs b/util/process_wrapper/options.rs
+--- a/util/process_wrapper/options.rs
++++ b/util/process_wrapper/options.rs
+@@ -22,6 +22,32 @@
+             Self::Generic(s) => write!(f, "{s}"),
+         }
+     }
++}
++
++// Bazel spills wrapper flags on Windows. Child rustc @files retain their existing handling.
++fn expand_wrapper_param_files(
++    argv: Vec<String>,
++    mut read_file: impl FnMut(&str) -> Result<String, OptionError>,
++) -> Result<Vec<String>, OptionError> {
++    let mut expanded = Vec::new();
++    let mut before_separator = true;
++    for (index, arg) in argv.into_iter().enumerate() {
++        if index != 0 && before_separator && arg.starts_with('@') {
++            // Multiline Args encode each complete argument without shell escaping.
++            for value in read_file(&arg[1..])?.lines() {
++                if value == "--" {
++                    before_separator = false;
++                }
++                expanded.push(value.to_owned());
++            }
++        } else {
++            if index != 0 && arg == "--" {
++                before_separator = false;
++            }
++            expanded.push(arg);
++        }
++    }
++    Ok(expanded)
+ }
+ 
+ #[derive(Debug)]
+@@ -137,7 +163,10 @@
+     );
+ 
+     let mut child_args = match flags
+-        .parse(env::args().collect())
++        .parse(expand_wrapper_param_files(env::args().collect(), |path| {
++            std::fs::read_to_string(path)
++                .map_err(|error| OptionError::Generic(format!("read wrapper arguments {path}: {error}")))
++        })?)
+         .map_err(OptionError::FlagError)?
+     {
+         ParseOutcome::Help(help) => {
+@@ -522,6 +551,88 @@
+     use super::*;
+ 
+     #[test]
++    fn wrapper_param_file_preserves_multiline_arguments_and_child_files() {
++        let argv = vec!["wrapper", "@wrapper.params", "--", "rustc", "@rustc.params"]
++            .into_iter()
++            .map(str::to_owned)
++            .collect();
++        let expanded = expand_wrapper_param_files(argv, |path| {
++            assert_eq!(path, "wrapper.params");
++            Ok(
++                "--subst\r\nOUT=C:\\path with spaces\\\r\n--env-file\r\n\"quoted path\"\r\n"
++                    .to_owned(),
++            )
++        })
++        .unwrap();
++        assert_eq!(
++            expanded,
++            vec![
++                "wrapper",
++                "--subst",
++                "OUT=C:\\path with spaces\\",
++                "--env-file",
++                "\"quoted path\"",
++                "--",
++                "rustc",
++                "@rustc.params"
++            ]
++        );
++    }
++
++    #[test]
++    fn wrapper_param_file_separator_keeps_child_response_file_literal() {
++        let argv = vec![
++            "wrapper".to_owned(),
++            "@wrapper.params".to_owned(),
++            "@child.params".to_owned(),
++        ];
++        let expanded = expand_wrapper_param_files(argv, |path| {
++            assert_eq!(path, "wrapper.params");
++            Ok("--\nrustc\n@nested-child.params\n".to_owned())
++        })
++        .unwrap();
++        assert_eq!(
++            expanded,
++            vec![
++                "wrapper",
++                "--",
++                "rustc",
++                "@nested-child.params",
++                "@child.params"
++            ]
++        );
++    }
++
++    #[test]
++    fn inline_wrapper_arguments_do_not_read_files() {
++        let argv = vec![
++            "wrapper",
++            "--env-file",
++            "env file",
++            "--",
++            "rustc",
++            "@child.params",
++        ]
++        .into_iter()
++        .map(str::to_owned)
++        .collect::<Vec<_>>();
++        let expanded =
++            expand_wrapper_param_files(argv.clone(), |_| panic!("unexpected file read")).unwrap();
++        assert_eq!(expanded, argv);
++    }
++
++    #[test]
++    fn unreadable_wrapper_param_file_returns_error() {
++        let error = expand_wrapper_param_files(
++            vec!["wrapper".to_owned(), "@missing.params".to_owned()],
++            |_| Err(OptionError::Generic("missing param file".to_owned())),
++        )
++        .unwrap_err();
++        assert_eq!(error.to_string(), "missing param file");
++    }
++
++
++    #[test]
+     fn test_enforce_allow_features_flag_user_didnt_say() {
+         let args = vec!["rustc".to_string()];
+         let subst_mappings: Vec<(String, String)> = vec![];

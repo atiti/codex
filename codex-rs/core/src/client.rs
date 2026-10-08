@@ -368,14 +368,13 @@ pub(crate) fn normalize_response_items_for_provider(
                 .id()
                 .is_some_and(|id| foreign_provider_state_ids.contains(id));
             let unattributed = item.id().is_none() && strip_unattributed_provider_state;
-            if foreign || unattributed {
-                if let ResponseItem::FunctionCall {
+            if (foreign || unattributed)
+                && let ResponseItem::FunctionCall {
                     encrypted_function_args,
                     ..
                 } = item
-                {
-                    *encrypted_function_args = None;
-                }
+            {
+                *encrypted_function_args = None;
             }
             if foreign {
                 item.set_id(/*new_id*/ None);
@@ -690,7 +689,45 @@ impl ModelClient {
         workspace_routing: WorkspaceRoutingContext,
         request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
     ) -> Self {
-        let model_provider = create_model_provider(provider_info, auth_manager);
+        Self::new_with_shared_provider(
+            create_model_provider(provider_info, auth_manager),
+            agent_identity_policy,
+            thread_id,
+            session_source,
+            originator,
+            model_verbosity,
+            content_item_kinds_enabled,
+            reasoning_effort_override_enabled,
+            enable_request_compression,
+            include_timing_metrics,
+            beta_features_header,
+            concurrent_reasoning_summaries_enabled,
+            attestation_provider,
+            http_client_factory,
+            workspace_routing,
+            request_contributors,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new_with_shared_provider(
+        model_provider: SharedModelProvider,
+        agent_identity_policy: AgentIdentityAuthPolicy,
+        thread_id: ThreadId,
+        session_source: SessionSource,
+        originator: String,
+        model_verbosity: Option<VerbosityConfig>,
+        content_item_kinds_enabled: bool,
+        reasoning_effort_override_enabled: bool,
+        enable_request_compression: bool,
+        include_timing_metrics: bool,
+        beta_features_header: Option<String>,
+        concurrent_reasoning_summaries_enabled: bool,
+        attestation_provider: Option<Arc<dyn AttestationProvider>>,
+        http_client_factory: HttpClientFactory,
+        workspace_routing: WorkspaceRoutingContext,
+        request_contributors: Vec<Arc<dyn codex_extension_api::ModelRequestContributor>>,
+    ) -> Self {
         let codex_api_key_env_enabled = model_provider
             .auth_manager()
             .as_ref()
@@ -817,10 +854,19 @@ impl ModelClient {
         }
     }
 
-    /// Creates a turn-scoped client session for a provider selected after the
-    /// Codex thread was started. Provider-specific websocket, sticky-routing,
-    /// authentication fallback, and incremental request state start empty.
+    /// Reuses this client's streaming state when the exact provider is retained,
+    /// or isolates state for a provider selected after the Codex thread started.
     pub fn new_session_for_provider(&self, provider: SharedModelProvider) -> ModelClientSession {
+        if Arc::ptr_eq(&provider, &self.state.provider) {
+            return self.new_session();
+        }
+        self.new_isolated_session_for_provider(provider)
+    }
+
+    fn new_isolated_session_for_provider(
+        &self,
+        provider: SharedModelProvider,
+    ) -> ModelClientSession {
         let codex_api_key_env_enabled = provider
             .auth_manager()
             .as_ref()
@@ -869,7 +915,7 @@ impl ModelClient {
         provider: SharedModelProvider,
         foreign_provider_state_ids: HashSet<ResponseItemId>,
     ) -> ModelClientSession {
-        let mut session = self.new_session_for_provider(provider);
+        let mut session = self.new_isolated_session_for_provider(provider);
         session.foreign_provider_state_ids = foreign_provider_state_ids;
         session.strip_unattributed_provider_state = true;
         session
@@ -1667,7 +1713,12 @@ impl ModelClientSession {
             return None;
         }
 
-        let response_items = &last_response.items_added;
+        let mut response_items = last_response.items_added.clone();
+        self.client.prepare_response_items_for_request(
+            &mut response_items,
+            &self.foreign_provider_state_ids,
+            self.strip_unattributed_provider_state,
+        );
         let previous_items_len = previous_request
             .input
             .len()
@@ -1678,7 +1729,7 @@ impl ModelClientSession {
             trace!("incremental request failed, incompatible request length");
             return None;
         };
-        let previous_items = previous_request.input.iter().chain(response_items);
+        let previous_items = previous_request.input.iter().chain(&response_items);
         if !previous_items
             .zip(request_items_to_compare)
             .all(|(previous, current)| {

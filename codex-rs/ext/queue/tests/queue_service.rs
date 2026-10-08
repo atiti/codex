@@ -151,6 +151,7 @@ fn install_registered_queue(
 }
 
 fn write_rejecting_prompt_hook(home: &Path) {
+    let python = if cfg!(windows) { "python" } else { "python3" };
     let script_path = home.join("queue_prompt_hook.py");
     let log_path = home.join("queue_prompt_hook.log");
     let script = format!(
@@ -173,7 +174,7 @@ if payload["prompt"] == "blocked":
             "UserPromptSubmit": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("python3 {}", script_path.display()),
+                    "command": format!("{python} \"{}\"", script_path.display()),
                 }]
             }]
         }

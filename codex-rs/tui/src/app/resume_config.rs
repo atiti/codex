@@ -116,7 +116,7 @@ impl App {
         let resumed_thread =
             if crate::agentroute_local_server::project_trust_host(&self.app_server_target)
                 == crate::config_update::ProjectTrustHost::Local
-                && self.app_server_target.uses_remote_workspace()
+                && !matches!(self.app_server_target, AppServerTarget::Embedded)
             {
                 Some(
                     app_server

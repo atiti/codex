@@ -72,6 +72,8 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
                     native_flags = {
                         "--repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0",
                         "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain",
+                        "--features=static_link_msvcrt",
+                        "--host_features=static_link_msvcrt",
                     }
                     self.assertEqual(
                         native_flags.intersection(args),

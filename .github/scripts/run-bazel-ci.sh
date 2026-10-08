@@ -353,6 +353,8 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
     post_config_bazel_args+=(
       "--repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0"
       "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain"
+      "--features=static_link_msvcrt"
+      "--host_features=static_link_msvcrt"
     )
     if [[ -n "${VOICE_WINDOWS_BAZEL_REPOSITORY:-}" ]]; then
       post_config_bazel_args+=(

@@ -649,13 +649,16 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
+    // Picker fixtures exercise local task state and must not sync the public catalog.
+    let mut config = config.clone();
+    config.features.disable(Feature::Plugins)?;
     let mut target = AppServerTarget::Embedded;
-    let mut state_db = init_state_db_for_app_server_target(config, &target).await?;
+    let mut state_db = init_state_db_for_app_server_target(&config, &target).await?;
     let app_server = start_app_server(
         &mut target,
         Arg0DispatchPaths::default(),
         config.clone(),
-        Vec::new(),
+        vec![("features.plugins".to_string(), toml::Value::Boolean(false))],
         LoaderOverrides::without_managed_config_for_tests(),
         /*strict_config*/ false,
         CloudConfigBundleLoader::default(),
@@ -2686,14 +2689,16 @@ requires_openai_auth = {requires_openai_auth}
     }
 
     pub(crate) async fn start_test_embedded_app_server(
-        config: Config,
+        mut config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
+        // These fixtures use local RPCs; plugin synchronization has its own coverage.
+        config.features.disable(Feature::Plugins)?;
         let state_db =
             init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await?;
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
-            Vec::new(),
+            vec![("features.plugins".to_string(), toml::Value::Boolean(false))],
             LoaderOverrides::default(),
             /*strict_config*/ false,
             CloudConfigBundleLoader::default(),

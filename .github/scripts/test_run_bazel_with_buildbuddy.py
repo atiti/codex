@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -12,6 +13,77 @@ import run_bazel_with_buildbuddy
 
 
 class RunBazelWithBuildBuddyTest(unittest.TestCase):
+    @unittest.skipUnless(
+        os.name == "posix" and shutil.which("bash"), "requires POSIX stubs"
+    )
+    def test_windows_wrapper_uses_native_host_c_only_without_remote_execution(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            arguments = root / "arguments.json"
+            bazel = root / "bazel"
+            bazel.write_text(
+                f"#!{sys.executable}\nimport json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['TEST_BAZEL_ARGUMENTS']).write_text(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            command = root / "cmd.exe"
+            command.write_text(
+                '#!/bin/sh\nprintf "%s %s\\n" "$4" "$5"\n', encoding="utf-8"
+            )
+            for executable in (bazel, command):
+                executable.chmod(0o700)
+            env = os.environ.copy()
+            env.update(
+                RUNNER_OS="Windows",
+                SYSTEMROOT=r"C:\Windows",
+                PROCESSOR_ARCHITECTURE="AMD64",
+                CODEX_BAZEL_WINDOWS_PATH=r"C:\Windows\system32",
+                CODEX_BAZEL_BIN=str(bazel),
+                TEST_BAZEL_ARGUMENTS=str(arguments),
+                PATH=f"{root}{os.pathsep}{env['PATH']}",
+            )
+            wrapper = Path(__file__).with_name("run-bazel-ci.sh")
+            for remote in (False, True):
+                with self.subTest(remote=remote):
+                    env.pop("BUILDBUDDY_API_KEY", None)
+                    if remote:
+                        env["BUILDBUDDY_API_KEY"] = "synthetic-test-key"
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            str(wrapper),
+                            "--windows-cross-compile",
+                            "--",
+                            "build",
+                            "--",
+                            "//:test",
+                        ],
+                        cwd=wrapper.parent.parent.parent,
+                        env=env,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    args = json.loads(arguments.read_text(encoding="utf-8"))
+                    native_flags = {
+                        "--repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0",
+                        "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain",
+                    }
+                    self.assertEqual(
+                        native_flags.intersection(args),
+                        set() if remote else native_flags,
+                    )
+                    self.assertIn(
+                        "--host_platform=//:rbe"
+                        if remote
+                        else "--host_platform=//:local_windows_msvc",
+                        args,
+                    )
+
     def github_env(
         self,
         temp_dir: str,

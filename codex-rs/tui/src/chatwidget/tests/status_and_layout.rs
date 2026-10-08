@@ -4137,7 +4137,9 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.2 xhigh · Context 0% used · {test_cwd}"))
+        Some(format!(
+            "gpt-5.2 · openai · xhigh · Context 0% used · {test_cwd}"
+        ))
     );
 }
 

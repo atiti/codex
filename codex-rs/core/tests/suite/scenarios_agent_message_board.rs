@@ -61,7 +61,12 @@ impl codex_core::TimeProvider for BoardClock {
 
 fn tool(call: &str, name: &str, arguments: Value) -> String {
     sse(vec![
-        ev_function_call_with_namespace(call, "collaboration", name, &arguments.to_string()),
+        ev_function_call_with_namespace(
+            call,
+            "agentroute_collaboration",
+            name,
+            &arguments.to_string(),
+        ),
         ev_completed(call),
     ])
 }
@@ -119,7 +124,7 @@ async fn board_requires_persistent_v2_runtime(
     assert!(
         responses::namespace_child_tool(
             &mock.single_request().body_json(),
-            "collaboration",
+            "agentroute_collaboration",
             "post"
         )
         .is_none()
@@ -164,8 +169,12 @@ async fn board_post_and_reads_reach_model_context_without_self_notices(
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
     assert!(
-        responses::namespace_child_tool(&requests[0].body_json(), "collaboration", "post")
-            .is_some()
+        responses::namespace_child_tool(
+            &requests[0].body_json(),
+            "agentroute_collaboration",
+            "post"
+        )
+        .is_some()
     );
     let output = requests[1]
         .function_call_output_text("post-decision")
@@ -613,7 +622,7 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
                 gate: None,
                 body: sse(vec![ev_function_call_with_namespace(
                     "spawn-worker",
-                    "collaboration",
+                    "agentroute_collaboration",
                     "spawn_agent",
                     &json!({"task_name":"worker","message":"Say ready.","fork_turns":"none"})
                         .to_string(),
@@ -625,7 +634,7 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
                 body: sse(vec![
                     ev_function_call_with_namespace(
                         "settle-worker",
-                        "collaboration",
+                        "agentroute_collaboration",
                         "wait_agent",
                         "{}",
                     ),
@@ -827,7 +836,8 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
         let request: Value = serde_json::from_slice(body)?;
         for name in ["send_message", "followup_task"] {
             assert_eq!(
-                responses::namespace_child_tool(&request, "collaboration", name).is_some(),
+                responses::namespace_child_tool(&request, "agentroute_collaboration", name)
+                    .is_some(),
                 !disable_direct_message,
                 "{name}",
             );
@@ -840,7 +850,8 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
             "post",
         ] {
             assert!(
-                responses::namespace_child_tool(&request, "collaboration", name).is_some(),
+                responses::namespace_child_tool(&request, "agentroute_collaboration", name)
+                    .is_some(),
                 "{name}"
             );
         }

@@ -162,7 +162,7 @@ pub(crate) async fn run_compact_task(
         sess.clone(),
         turn_context,
         &mut client_session,
-        None,
+        /*request_step_context*/ None,
         input,
         InitialContextInjection::DoNotInject,
         CompactionTrigger::Manual,

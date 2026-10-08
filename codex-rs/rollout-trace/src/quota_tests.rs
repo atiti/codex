@@ -10,17 +10,17 @@ fn multiple_writers_share_a_budget_and_disabled_capture_stops() -> anyhow::Resul
         limit: 10,
         enabled_file: Some(enabled.clone()),
     };
-    drop(quota.reserve(6)?);
+    drop(quota.reserve(/*bytes*/ 6)?);
     let another = TraceQuota {
         root: temp.path().to_path_buf(),
         limit: 10,
         enabled_file: None,
     };
-    assert!(another.reserve(5).is_err());
-    drop(another.reserve(4)?);
-    assert!(quota.reserve(1).is_err());
+    assert!(another.reserve(/*bytes*/ 5).is_err());
+    drop(another.reserve(/*bytes*/ 4)?);
+    assert!(quota.reserve(/*bytes*/ 1).is_err());
     std::fs::remove_file(enabled)?;
-    assert!(quota.reserve(0).is_err());
+    assert!(quota.reserve(/*bytes*/ 0).is_err());
     Ok(())
 }
 
@@ -33,7 +33,7 @@ fn existing_files_count_when_budget_is_missing() -> anyhow::Result<()> {
         limit: 8,
         enabled_file: None,
     };
-    assert!(quota.reserve(3).is_err());
-    drop(quota.reserve(2)?);
+    assert!(quota.reserve(/*bytes*/ 3).is_err());
+    drop(quota.reserve(/*bytes*/ 2)?);
     Ok(())
 }

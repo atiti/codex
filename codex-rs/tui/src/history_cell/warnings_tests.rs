@@ -108,5 +108,5 @@ fn agentroute_route_notices_are_transcript_cells_not_warnings() {
 
     assert_eq!(warning_count(&cells), 0);
     assert!(warning_entries(&cells).is_empty());
-    assert!(!notice.display_lines(100).is_empty());
+    assert!(!notice.display_lines(/*width*/ 100).is_empty());
 }

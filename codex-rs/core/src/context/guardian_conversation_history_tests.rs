@@ -6,7 +6,7 @@ use codex_utils_string::approx_token_count;
 
 #[test]
 fn guardian_history_prompt_default_fits_its_context_budget() {
-    let fragment = GuardianConversationHistory::new(None).expect("default prompt fits");
+    let fragment = GuardianConversationHistory::new(/*prompt*/ None).expect("default prompt fits");
 
     assert_eq!(fragment.prompt, DEFAULT_GUARDIAN_HISTORY_PROMPT);
     assert!(approx_token_count(fragment.prompt) <= MAX_GUARDIAN_HISTORY_PROMPT_TOKENS);

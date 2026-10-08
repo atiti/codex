@@ -378,7 +378,7 @@ pub(crate) fn normalize_response_items_for_provider(
                 }
             }
             if foreign {
-                item.set_id(None);
+                item.set_id(/*new_id*/ None);
             }
         }
     }
@@ -428,7 +428,7 @@ pub(crate) fn normalize_response_items_for_provider(
                     item,
                     ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
                 ) {
-                    item.set_id(None);
+                    item.set_id(/*new_id*/ None);
                 }
             }
         }
@@ -443,7 +443,7 @@ pub(crate) fn normalize_response_items_for_provider(
             });
             for item in input.iter_mut() {
                 if item.id().is_some_and(|id| !id.is_prefixed()) {
-                    item.set_id(None);
+                    item.set_id(/*new_id*/ None);
                 }
             }
         }
@@ -475,7 +475,7 @@ pub(crate) fn normalize_response_items_for_provider(
                     ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
                 );
                 if !preserve_affinity_id {
-                    item.set_id(None);
+                    item.set_id(/*new_id*/ None);
                 }
             }
         }

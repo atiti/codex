@@ -99,7 +99,7 @@ fn compaction_survives_same_provider_but_not_provider_or_account_switch() {
     };
     let mut restricted = azure.clone();
     restricted.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
-    let openai = ModelProviderInfo::create_openai_provider(None);
+    let openai = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     for provider in [azure, restricted, openai] {
         for checkpoint in [
             ResponseItem::Compaction {
@@ -131,24 +131,36 @@ fn compaction_survives_same_provider_but_not_provider_or_account_switch() {
                     mixed_history,
                 );
                 assert_eq!(input.len(), 1);
-                input[0].set_id(None);
+                input[0].set_id(/*new_id*/ None);
                 let mut expected = checkpoint.clone();
-                expected.set_id(None);
+                expected.set_id(/*new_id*/ None);
                 assert_eq!(input, vec![expected]);
             }
             // Provider/profile switches mark the prior checkpoint as foreign.
             let mut input = vec![checkpoint.clone()];
             let foreign = HashSet::from([checkpoint.id().unwrap().clone()]);
-            normalize_response_items_for_provider(&mut input, &provider, &foreign, true);
+            normalize_response_items_for_provider(
+                &mut input, &provider, &foreign, /*strip_unattributed_provider_state*/ true,
+            );
             assert!(input.is_empty());
 
             let mut unattributed = checkpoint;
-            unattributed.set_id(None);
+            unattributed.set_id(/*new_id*/ None);
             let mut input = vec![unattributed.clone()];
-            normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+            normalize_response_items_for_provider(
+                &mut input,
+                &provider,
+                &HashSet::new(),
+                /*strip_unattributed_provider_state*/ false,
+            );
             assert_eq!(input, vec![unattributed.clone()]);
             let mut input = vec![unattributed];
-            normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), true);
+            normalize_response_items_for_provider(
+                &mut input,
+                &provider,
+                &HashSet::new(),
+                /*strip_unattributed_provider_state*/ true,
+            );
             assert!(input.is_empty());
         }
     }
@@ -181,10 +193,15 @@ fn final_request_boundary_drops_third_party_encrypted_state() {
         function_call.clone(),
     ];
 
-    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ false,
+    );
 
     let mut expected = function_call;
-    expected.set_id(None);
+    expected.set_id(/*new_id*/ None);
     if let ResponseItem::FunctionCall {
         encrypted_function_args,
         ..
@@ -197,7 +214,7 @@ fn final_request_boundary_drops_third_party_encrypted_state() {
 
 #[test]
 fn final_request_boundary_drops_unattributed_encrypted_function_args() {
-    let provider = ModelProviderInfo::create_openai_provider(None);
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     let mut input = vec![ResponseItem::FunctionCall {
         id: None,
         name: "lookup".to_string(),
@@ -208,7 +225,12 @@ fn final_request_boundary_drops_unattributed_encrypted_function_args() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), true);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ true,
+    );
 
     assert_eq!(
         input,
@@ -238,7 +260,12 @@ fn restricted_provider_downgrades_plaintext_agent_message_to_user_message() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ false,
+    );
 
     assert_eq!(
         input,
@@ -268,7 +295,12 @@ fn restricted_provider_drops_encrypted_agent_message() {
         internal_chat_message_metadata_passthrough: None,
     }];
 
-    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ false,
+    );
 
     assert!(input.is_empty());
 }
@@ -286,7 +318,12 @@ fn mixed_provider_history_drops_encrypted_state_even_for_openai_destination() {
     }];
 
     let foreign_ids = HashSet::from([ResponseItemId::with_suffix("rs", "foreign")]);
-    normalize_response_items_for_provider(&mut input, &provider, &foreign_ids, true);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &foreign_ids,
+        /*strip_unattributed_provider_state*/ true,
+    );
 
     assert!(input.is_empty());
 }
@@ -322,7 +359,7 @@ fn mixed_provider_history_preserves_destination_reasoning_across_tool_continuati
         &mut input,
         &provider,
         &HashSet::from([foreign_id]),
-        true,
+        /*strip_unattributed_provider_state*/ true,
     );
 
     assert_eq!(input, vec![destination_reasoning]);
@@ -402,17 +439,17 @@ fn all_provider_requests_keep_guidance_without_harness_identity() -> anyhow::Res
         client.build_responses_request(
             &prompt,
             &model,
-            None,
+            /*effort*/ None,
             codex_protocol::config_types::ReasoningSummary::None,
-            None,
+            /*service_tier*/ None,
             &test_responses_metadata_for_client(
                 client,
-                None,
+                /*turn_id*/ None,
                 format!("{}:0", client.state.thread_id),
-                None,
+                /*parent_thread_id*/ None,
                 TestCodexResponsesRequestKind::Turn,
             ),
-            true,
+            /*include_internal*/ true,
         )
     };
     let routed = request(&client)?;
@@ -431,7 +468,10 @@ fn all_provider_requests_keep_guidance_without_harness_identity() -> anyhow::Res
 
     Arc::get_mut(&mut client.state)
         .expect("test client should have unique session state")
-        .provider = create_model_provider(ModelProviderInfo::create_openai_provider(None), None);
+        .provider = create_model_provider(
+        ModelProviderInfo::create_openai_provider(/*base_url*/ None),
+        /*auth_manager*/ None,
+    );
     let native = request(&client)?;
     assert_eq!(native.instructions, routed.instructions);
     assert_eq!(
@@ -447,17 +487,17 @@ fn all_provider_requests_keep_guidance_without_harness_identity() -> anyhow::Res
     let lite = client.build_responses_request(
         &prompt,
         &lite_model,
-        None,
+        /*effort*/ None,
         codex_protocol::config_types::ReasoningSummary::None,
-        None,
+        /*service_tier*/ None,
         &test_responses_metadata_for_client(
             &client,
-            None,
+            /*turn_id*/ None,
             format!("{}:0", client.state.thread_id),
-            None,
+            /*parent_thread_id*/ None,
             TestCodexResponsesRequestKind::Turn,
         ),
-        true,
+        /*include_internal*/ true,
     )?;
     let lite_json = serde_json::to_value(&lite.input)?;
     assert!(!lite_json.to_string().contains("You are Codex"));

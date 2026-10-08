@@ -16,6 +16,52 @@ class RunBazelWithBuildBuddyTest(unittest.TestCase):
     @unittest.skipUnless(
         os.name == "posix" and shutil.which("bash"), "requires POSIX stubs"
     )
+    def test_hosted_native_test_concurrency_is_scoped_to_local_ci(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            arguments = root / "arguments.json"
+            bazel = root / "bazel"
+            bazel.write_text(
+                f"#!{sys.executable}\nimport json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['TEST_BAZEL_ARGUMENTS']).write_text(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            bazel.chmod(0o700)
+            wrapper = Path(__file__).with_name("run-bazel-ci.sh")
+            for platform in ("Linux", "macOS"):
+                for hosted, remote in ((True, False), (True, True), (False, False)):
+                    with self.subTest(platform=platform, hosted=hosted, remote=remote):
+                        env = os.environ.copy()
+                        env.pop("BUILDBUDDY_API_KEY", None)
+                        env.update(
+                            RUNNER_OS=platform,
+                            GITHUB_ACTIONS="true" if hosted else "false",
+                            CODEX_BAZEL_BIN=str(bazel),
+                            TEST_BAZEL_ARGUMENTS=str(arguments),
+                        )
+                        if remote:
+                            env["BUILDBUDDY_API_KEY"] = "synthetic-test-key"
+                        result = subprocess.run(
+                            ["bash", str(wrapper), "--", "test", "--", "//:test"],
+                            cwd=wrapper.parent.parent.parent,
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            result.returncode, 0, result.stdout + result.stderr
+                        )
+                        args = json.loads(arguments.read_text(encoding="utf-8"))
+                        self.assertEqual(
+                            "--local_test_jobs=2" in args, hosted and not remote
+                        )
+                        self.assertEqual("--disk_cache=" in args, hosted and not remote)
+
+    @unittest.skipUnless(
+        os.name == "posix" and shutil.which("bash"), "requires POSIX stubs"
+    )
     def test_windows_wrapper_uses_native_host_c_only_without_remote_execution(
         self,
     ) -> None:

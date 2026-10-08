@@ -327,10 +327,21 @@ if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
-  # Give workspace-status.cmd the checked-out source revision explicitly. Git
-  # may not be on Bazel's reduced Windows client PATH.
+  # Resolve the checked-out revision before Bazel's reduced Windows environment.
   STABLE_GIT_COMMIT="$(git rev-parse --verify HEAD)"
   export STABLE_GIT_COMMIT
+  if [[ ! "$STABLE_GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Windows workspace status requires the checked-out Git revision." >&2
+    exit 1
+  fi
+  windows_status_command="cmd.exe /d /c echo STABLE_GIT_COMMIT $STABLE_GIT_COMMIT"
+  windows_status_output="$(MSYS2_ARG_CONV_EXCL='*' cmd.exe /d /c echo STABLE_GIT_COMMIT "$STABLE_GIT_COMMIT" | tr -d '\r')"
+  if [[ "$windows_status_output" != "STABLE_GIT_COMMIT $STABLE_GIT_COMMIT" ]]; then
+    echo "Windows workspace status did not emit the checked-out revision." >&2
+    exit 1
+  fi
+  # Supply the native command after rc/config options; receipts still consume ctx.info_file.
+  post_config_bazel_args+=("--workspace_status_command=$windows_status_command")
   pass_windows_build_env=1
   if [[ $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then
     # Remote build actions execute on Linux RBE workers. Passing the Windows

@@ -5291,6 +5291,7 @@ dependencies = [
  "codex-otel",
  "codex-protocol",
  "codex-utils-absolute-path",
+ "codex-utils-cargo-bin",
  "codex-utils-process",
  "codex-utils-pty",
  "codex-utils-string",

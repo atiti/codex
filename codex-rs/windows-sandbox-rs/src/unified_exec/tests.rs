@@ -740,6 +740,25 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
     runtime.block_on(async move {
         // Keep writable roots out of USERPROFILE exclusions such as AppData.
         let test_root = TempDir::new_in(sandbox_cwd()).expect("create legacy delete test root");
+        // The legacy token retains Everyone/logon SIDs. A CI checkout can grant those
+        // inherited mutation rights, so give this disposable fixture an owner-only DACL.
+        // Production sandbox code still has to grant every writable root and protect .git.
+        let fixture_acl = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r#"$ErrorActionPreference = 'Stop'; $path = $env:DELETE_TEST_ROOT; Write-Output ('original=' + (Get-Acl -LiteralPath $path).Sddl); $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl = [System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetOwner($user); $acl.SetAccessRuleProtection($true, $false); $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($user, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl; Write-Output ('fixture=' + (Get-Acl -LiteralPath $path).Sddl)"#,
+            ])
+            .env("DELETE_TEST_ROOT", test_root.path())
+            .output()
+            .expect("isolate legacy delete fixture ACL");
+        assert!(
+            fixture_acl.status.success(),
+            "fixture ACL setup failed: stdout={}; stderr={}",
+            String::from_utf8_lossy(&fixture_acl.stdout),
+            String::from_utf8_lossy(&fixture_acl.stderr)
+        );
         let codex_home = sandbox_home("legacy-delete-writable-roots");
         let workspace = test_root.path().join("workspace");
         let temp_root = test_root.path().join("temp");
@@ -826,6 +845,18 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
                 .await;
         let stdout = String::from_utf8_lossy(&stdout);
 
+        let effective_acl = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r#"$ErrorActionPreference = 'Stop'; foreach ($path in @($env:DELETE_TEST_ROOT, $env:DELETE_TEST_WORKSPACE, $env:DELETE_TEST_OUTSIDE)) { Write-Output ($path + '=' + (Get-Acl -LiteralPath $path).Sddl) }"#,
+            ])
+            .env("DELETE_TEST_ROOT", test_root.path())
+            .env("DELETE_TEST_WORKSPACE", &workspace)
+            .env("DELETE_TEST_OUTSIDE", &outside_root)
+            .output()
+            .expect("read effective legacy delete fixture ACLs");
         assert_eq!(
             (
                 exit_code,
@@ -836,7 +867,10 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
                 protected_git_dir.is_dir(),
             ),
             (0, false, false, false, Some("outside".to_string()), true),
-            "stdout={stdout:?}\n{}",
+            "stdout={stdout:?}\nfixture ACLs: {}\neffective ACLs: {}\nACL diagnostics: {}\n{}",
+            String::from_utf8_lossy(&fixture_acl.stdout),
+            String::from_utf8_lossy(&effective_acl.stdout),
+            String::from_utf8_lossy(&effective_acl.stderr),
             sandbox_log(codex_home.path())
         );
     });

@@ -67,6 +67,9 @@ def _workspace_root_test_impl(ctx):
     for data_dep in ctx.attr.data:
         runfiles = runfiles.merge(ctx.runfiles(files = data_dep[DefaultInfo].files.to_list()))
         runfiles = runfiles.merge(data_dep[DefaultInfo].default_runfiles)
+    for dll_dir_dep in ctx.attr.windows_dll_dirs:
+        runfiles = runfiles.merge(dll_dir_dep[DefaultInfo].default_runfiles)
+        runfiles = runfiles.merge(ctx.runfiles(files = dll_dir_dep[DefaultInfo].files.to_list()))
     for runfile_dep in ctx.attr.runfile_env:
         runfile = _runfile_env_file(runfile_dep)
         runfiles = runfiles.merge(ctx.runfiles(files = [runfile]))
@@ -112,6 +115,13 @@ def _windows_runfile_env_exports(ctx):
         lines.append('call :resolve_runfile "{}"'.format(_runfile_logical_path(runfile)))
         lines.append("if errorlevel 1 exit /b 1")
         lines.append('set "{}=!resolve_runfile_result!"'.format(env_var))
+    for dll_dir_dep in ctx.attr.windows_dll_dirs:
+        locator = _runfile_env_file(dll_dir_dep)
+        lines.append('call :resolve_runfile "{}"'.format(_runfile_logical_path(locator)))
+        lines.append("if errorlevel 1 exit /b 1")
+
+        # native_link declares lib/search-path and DLLs under the sibling bin directory.
+        lines.append('for %%I in ("!resolve_runfile_result!\\..\\..\\bin") do set "PATH=%%~fI;!PATH!"')
     return "\n".join(lines)
 
 def _runfile_env_file(target):
@@ -154,6 +164,7 @@ workspace_root_test = rule(
         "runfile_env": attr.label_keyed_string_dict(
             cfg = "target",
         ),
+        "windows_dll_dirs": attr.label_list(),
         "test_bin": attr.label(
             cfg = "target",
             executable = True,
@@ -203,6 +214,8 @@ def codex_rust_crate(
         binary_test_target_compatible_with = [],
         integration_test_timeout = None,
         test_data_extra = [],
+        test_windows_dll_dirs = [],
+        wrap_integration_tests = False,
         test_shard_counts = {},
         test_tags = [],
         test_threads = 0,
@@ -252,6 +265,10 @@ def codex_rust_crate(
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
         test_data_extra: Extra runtime data for tests.
+        test_windows_dll_dirs: Native-link locators whose sibling bin directories
+            must be on Windows tests' DLL search path, including child helpers.
+        wrap_integration_tests: Resolve runfiles and runtime paths before starting
+            unsharded integration tests as well as sharded tests.
         test_shard_counts: Mapping from generated test target name to Bazel
             shard count. Matching tests use native Bazel sharding on the outer
             workspace-root launcher, not rules_rust's inner sharding wrapper.
@@ -380,6 +397,7 @@ def codex_rust_crate(
             unit_test_kwargs["flaky"] = True
 
         workspace_root_test(
+            windows_dll_dirs = test_windows_dll_dirs,
             name = unit_test_name,
             env = test_env,
             runfile_env = {
@@ -457,6 +475,7 @@ def codex_rust_crate(
             binary_unit_test_kwargs["flaky"] = True
 
         workspace_root_test(
+            windows_dll_dirs = test_windows_dll_dirs,
             name = binary_unit_test_name,
             env = test_env,
             test_bin = ":" + binary_unit_test_binary,
@@ -554,7 +573,7 @@ def codex_rust_crate(
         #    owns cleanup. The outer workspace_root_test resolves the runner,
         #    test, and server from runfiles, sets a Cargo-like cwd, and applies
         #    the native test's shard count.
-        if test_shard_count:
+        if test_shard_count or wrap_integration_tests:
             # This target is intentionally a binary-like helper, not the public
             # test target. The wrapper below owns cwd setup, runfile env
             # materialization, sharding, and flaky retry behavior.
@@ -580,6 +599,7 @@ def codex_rust_crate(
             )
 
             workspace_root_test(
+                windows_dll_dirs = test_windows_dll_dirs,
                 name = test_name,
                 env = test_env,
                 # CARGO_BIN_EXE_* values are rlocation paths at analysis time.
@@ -656,6 +676,7 @@ def codex_rust_crate(
             # needs a Cargo-like cwd, Bazel sharding, and absolute runfile paths.
             # `workspace_root_test` establishes all three before Wine starts.
             workspace_root_test(
+                windows_dll_dirs = test_windows_dll_dirs,
                 name = wine_test_name,
                 data = wine_runtime.data,
                 env = test_env,
@@ -695,6 +716,7 @@ def codex_rust_crate(
         )
 
         workspace_root_test(
+            windows_dll_dirs = test_windows_dll_dirs,
             name = test_name + "-windows-cross",
             chdir_workspace_root = False,
             env = integration_test_cargo_env,

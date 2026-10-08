@@ -32,7 +32,7 @@ fn trusted_project_edit_targets_project_trust_level() {
 #[tokio::test]
 async fn local_shared_project_discovers_git_root_beneath_untrusted_parent() -> Result<()> {
     let temp_dir = tempfile::tempdir()?;
-    let temp_path = temp_dir.path().canonicalize()?;
+    let temp_path = dunce::canonicalize(temp_dir.path())?;
     let codex_home = temp_path.join("codex-home");
     let build_parent = temp_path.join("build");
     let project_root = build_parent.join("project");

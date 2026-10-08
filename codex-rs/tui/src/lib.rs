@@ -101,6 +101,7 @@ pub(crate) use codex_app_server_client::legacy_core;
 pub(crate) use worktree_startup::ManagedTuiWorktree;
 
 mod additional_dirs;
+mod agentroute_local_server;
 mod analytics;
 mod app;
 mod app_backtrack;
@@ -1808,9 +1809,12 @@ async fn run_ratatui_app(
 
     // Remote startup keeps its existing explicit --cd trust check. Resolving other
     // remote folders requires authoritative project-root information from the server.
-    if !uses_remote_workspace || remote_cwd_override.is_some() {
-        let resumed_thread = if matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
-            && let resume_picker::SessionSelection::Resume(target) = &session_selection
+    let trust_host = agentroute_local_server::project_trust_host(&app_server_target);
+    if trust_host == config_update::ProjectTrustHost::Local || remote_cwd_override.is_some() {
+        let resumed_thread = if trust_host == config_update::ProjectTrustHost::Local
+            && !matches!(app_server_target, AppServerTarget::Embedded)
+            && let resume_picker::SessionSelection::Resume(target)
+            | resume_picker::SessionSelection::Fork(target) = &session_selection
         {
             Some(
                 startup_draft
@@ -1825,6 +1829,12 @@ async fn run_ratatui_app(
         };
         let trust_cwd = remote_cwd_override
             .as_deref()
+            .or_else(|| {
+                resumed_thread
+                    .as_ref()
+                    .filter(|_| uses_remote_workspace)
+                    .map(|thread| thread.cwd.as_path())
+            })
             .unwrap_or(config.cwd.as_path());
         let consent = onboarding::onboarding_screen::check_directory_trust(
             &mut tui,

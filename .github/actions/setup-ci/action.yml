@@ -19,6 +19,31 @@ runs:
       shell: pwsh
       run: ./.github/scripts/setup-dev-drive.ps1
 
+    # Cold fork builds lack the upstream remote cache and can fill the hosted image.
+    # These preinstalled SDKs are unused by Codex; keep required language/toolchains.
+    - name: Reclaim unused hosted Linux SDK space
+      if: runner.os == 'Linux' && runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        df -h /
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+        df -h /
+
+    - name: Reclaim unused hosted macOS simulator space
+      if: runner.os == 'macOS' && runner.environment == 'github-hosted'
+      shell: bash
+      run: |
+        df -h /
+        xcode_developer="$(xcode-select --print-path)"
+        # Codex uses the macOS SDK; mobile SDKs and simulators are unused here.
+        sudo rm -rf /Library/Developer/CoreSimulator
+        for platform in iPhoneOS iPhoneSimulator AppleTVOS AppleTVSimulator WatchOS WatchSimulator XROS XRSimulator; do
+          if [[ -d "$xcode_developer/Platforms/$platform.platform" ]]; then
+            sudo rm -rf "$xcode_developer/Platforms/$platform.platform"
+          fi
+        done
+        df -h /
+
     - name: Configure CI build root (Unix)
       if: runner.os != 'Windows'
       shell: bash

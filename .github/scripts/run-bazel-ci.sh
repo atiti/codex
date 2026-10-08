@@ -431,6 +431,16 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   bazel_run_args+=("--config=${ci_config}")
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    # Retain native Windows test policy without importing authenticated RBE settings.
+    # Cold compilation competes for the same small hosted runner's CPU and disk.
+    bazel_run_args+=(--config=ci-windows-tests --local_test_jobs=2 --test_env=RUST_TEST_THREADS=1)
+  fi
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    # Bazel's output tree already reuses actions within a job. A second disk cache
+    # duplicates large Rust/V8 artifacts and exhausts ephemeral hosted runners.
+    bazel_run_args+=(--disk_cache=)
+  fi
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")

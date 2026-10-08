@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn access_programs_require_both_chatgpt_auth_and_openai_destination() {
         let auth = CodexAuth::create_dummy_chatgpt_auth_for_testing();
-        let openai = ModelProviderInfo::create_openai_provider(None);
+        let openai = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
         let azure = ModelProviderInfo {
             name: "agentroute-azure-direct".to_string(),
             base_url: Some("https://resource.cognitiveservices.azure.com/openai/v1".to_string()),

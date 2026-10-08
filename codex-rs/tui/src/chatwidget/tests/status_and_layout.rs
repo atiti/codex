@@ -1119,8 +1119,14 @@ async fn streamed_routed_limit_family_fills_status_rows() {
         Some(8.0)
     );
     // Codex labels these windows by length, which is the "5h / weekly" pair users expect.
-    assert_eq!(get_limits_duration(300).as_deref(), Some("5h"));
-    assert_eq!(get_limits_duration(10_080).as_deref(), Some("weekly"));
+    assert_eq!(
+        get_limits_duration(/*windows_minutes*/ 300).as_deref(),
+        Some("5h")
+    );
+    assert_eq!(
+        get_limits_duration(/*windows_minutes*/ 10_080).as_deref(),
+        Some("weekly")
+    );
     assert!(
         !chat.rate_limit_snapshots_by_limit_id.contains_key("codex"),
         "a routed family must not invent a Codex bucket"

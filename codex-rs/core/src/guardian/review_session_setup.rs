@@ -374,7 +374,7 @@ pub(super) fn prepare_prewarm(
             Arc::clone(&parent),
             context,
             config.spawn_config,
-            None,
+            /*reviewer_profile_name*/ None,
             turn.model_provider().auth_manager(),
             &history,
             &config.node_repl_policy,

@@ -120,7 +120,7 @@ async fn capacity_snapshot_retains_authoritative_subscription_lock_across_sparse
     state.set_ordinary_usage_allowed(Some(false));
     // A sparse subsequent poll must not turn a known blocked subscription into an
     // implicit healthy state before the app-server reports an authoritative recovery.
-    state.set_ordinary_usage_allowed(None);
+    state.set_ordinary_usage_allowed(/*allowed*/ None);
 
     assert_eq!(state.capacity_snapshot().1, Some(false));
 }

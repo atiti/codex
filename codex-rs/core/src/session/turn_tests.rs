@@ -138,7 +138,12 @@ fn openai_prompt_drops_third_party_plaintext_reasoning() {
     };
     let mut input = vec![native.clone(), foreign, assistant_output_text("answer")];
 
-    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ false,
+    );
 
     assert_eq!(input, vec![native, assistant_output_text("answer")]);
 }
@@ -170,12 +175,17 @@ fn restricted_provider_prompt_keeps_only_portable_custom_tools() {
         assistant_output_text("answer"),
     ];
 
-    normalize_response_items_for_provider(&mut input, &provider, &HashSet::new(), false);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ false,
+    );
 
     let mut expected_apply_patch = apply_patch;
-    expected_apply_patch.set_id(None);
+    expected_apply_patch.set_id(/*new_id*/ None);
     let mut expected_message = assistant_output_text("answer");
-    expected_message.set_id(None);
+    expected_message.set_id(/*new_id*/ None);
     assert_eq!(input, vec![expected_apply_patch, expected_message]);
 }
 
@@ -218,10 +228,15 @@ fn compatible_third_party_provider_drops_encrypted_provider_state() {
     ];
 
     let foreign_ids = input.iter().filter_map(|item| item.id().cloned()).collect();
-    normalize_response_items_for_provider(&mut input, &provider, &foreign_ids, true);
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &foreign_ids,
+        /*strip_unattributed_provider_state*/ true,
+    );
 
     let mut expected_function_call = function_call;
-    expected_function_call.set_id(None);
+    expected_function_call.set_id(/*new_id*/ None);
     if let ResponseItem::FunctionCall {
         encrypted_function_args,
         ..
@@ -230,6 +245,6 @@ fn compatible_third_party_provider_drops_encrypted_provider_state() {
         *encrypted_function_args = None;
     }
     let mut expected_message = assistant_output_text("answer");
-    expected_message.set_id(None);
+    expected_message.set_id(/*new_id*/ None);
     assert_eq!(input, vec![expected_function_call, expected_message]);
 }

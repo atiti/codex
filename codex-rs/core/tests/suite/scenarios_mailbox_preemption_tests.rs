@@ -42,7 +42,7 @@ async fn mailbox_preemption_preserves_response_when_deferred(
 ) -> anyhow::Result<()> {
     let boundary_id = match boundary {
         Boundary::Reasoning => "rs_boundary",
-        Boundary::Commentary => "boundary",
+        Boundary::Commentary | Boundary::PartialAnswer => "boundary",
     };
     let (release, gate) = oneshot::channel();
     let (added, done, boundary_name) = match boundary {

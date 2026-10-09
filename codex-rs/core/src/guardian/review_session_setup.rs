@@ -197,7 +197,7 @@ impl PreparedGuardianContext {
                 .zip(codex_history::CompactionCheckpoint::latest(
                     history.annotated_items(),
                 ))
-                .is_some_and(|(parent, loaded)| parent == loaded.item);
+                .is_some_and(|(parent, loaded)| parent.item == *loaded.item);
         }
         let context = GuardianReviewSessionReuseKey {
             user_instructions: inherited.user,

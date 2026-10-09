@@ -460,12 +460,13 @@ fn all_provider_requests_keep_guidance_without_harness_identity() -> anyhow::Res
         )
     };
     let routed = request(&client)?;
+    let routed_input = serde_json::to_value(&routed.input)?;
     assert_eq!(
-        routed.instructions,
+        routed_input[0]["content"][0]["text"],
         "Keep working with the user.\nYou are careful."
     );
     assert_eq!(
-        serde_json::to_value(&routed.input)?[0]["content"][0]["text"],
+        routed_input[1]["content"][0]["text"],
         "Follow the user's task."
     );
     assert_eq!(
@@ -480,9 +481,13 @@ fn all_provider_requests_keep_guidance_without_harness_identity() -> anyhow::Res
         /*auth_manager*/ None,
     );
     let native = request(&client)?;
-    assert_eq!(native.instructions, routed.instructions);
+    let native_input = serde_json::to_value(&native.input)?;
     assert_eq!(
-        serde_json::to_value(&native.input)?[0]["content"][0]["text"],
+        native_input[0]["content"][0]["text"],
+        routed_input[0]["content"][0]["text"]
+    );
+    assert_eq!(
+        native_input[1]["content"][0]["text"],
         "Follow the user's task."
     );
     assert_eq!(

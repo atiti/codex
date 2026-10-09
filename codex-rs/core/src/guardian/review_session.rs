@@ -549,7 +549,7 @@ async fn run_review_on_session(
                 .zip(codex_history::CompactionCheckpoint::latest(
                     reviewer_history.annotated_items(),
                 ))
-                .is_some_and(|(parent, loaded)| parent == loaded.item);
+                .is_some_and(|(parent, loaded)| parent.item == *loaded.item);
             // Keep the action-time snapshot: a later parent compaction must not
             // replace evidence with a checkpoint this reviewer never received.
             let (history, transcript_source) = if loaded_parent_checkpoint {

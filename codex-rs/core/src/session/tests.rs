@@ -6275,8 +6275,8 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         session
             .replace_compacted_history(
                 vec![ResponseItemEnvelope::new(user_message("compacted context"))],
-                with_baselines.then_some(turn_context_baseline.clone()),
-                with_baselines.then(|| world_state.render_full().0),
+                turn_context_baseline.clone(),
+                world_state.render_full().0,
                 CompactedHistoryMetadata {
                     input_goal_ids,
                     message: String::new(),
@@ -6318,13 +6318,24 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     assert_eq!(first.replacement_history, first_live_history);
     assert_eq!(first.resume_metadata.as_ref(), Some(&expected));
     assert_eq!(second.resume_metadata.as_ref(), Some(&expected));
+    let model_provider_id = turn_context.model_provider_id();
     assert_eq!(
-        first.model_provider_id,
-        turn_context.model_provider_id()
+        first
+            .replacement_history
+            .as_ref()
+            .and_then(|items| items.first())
+            .and_then(|item| item.metadata.as_ref())
+            .and_then(|metadata| metadata.model_provider_id.as_deref()),
+        Some(model_provider_id.as_str())
     );
     assert_eq!(
-        second.model_provider_id,
-        turn_context.model_provider_id()
+        second
+            .replacement_history
+            .as_ref()
+            .and_then(|items| items.first())
+            .and_then(|item| item.metadata.as_ref())
+            .and_then(|metadata| metadata.model_provider_id.as_deref()),
+        Some(model_provider_id.as_str())
     );
     assert_eq!(
         first_world_state,

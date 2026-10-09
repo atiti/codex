@@ -13,6 +13,8 @@ pub struct ProviderCapabilities {
     pub image_generation: bool,
     pub web_search: bool,
     pub external_web_access: bool,
+    /// Whether tools can be exposed through Responses API namespaces.
+    pub namespace_tools: bool,
     pub remote_compaction: RemoteCompactionSupport,
 }
 
@@ -22,6 +24,7 @@ impl Default for ProviderCapabilities {
             image_generation: true,
             web_search: true,
             external_web_access: true,
+            namespace_tools: true,
             remote_compaction: RemoteCompactionSupport::Unsupported,
         }
     }
@@ -30,6 +33,7 @@ impl Default for ProviderCapabilities {
 impl ProviderCapabilities {
     pub(crate) fn from_config(info: &ModelProviderInfo) -> Self {
         let defaults = Self {
+            namespace_tools: info.tool_compatibility.is_none(),
             remote_compaction: if info.is_openai()
                 || is_azure_responses_provider(&info.name, info.base_url.as_deref())
             {

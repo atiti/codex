@@ -2,6 +2,7 @@
 
 use codex_config::test_support::CloudConfigBundleFixture;
 use codex_core::config::Constrained;
+use codex_features::Feature;
 use codex_protocol::AgentPath;
 use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::models::PermissionProfile;

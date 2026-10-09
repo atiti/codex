@@ -23,7 +23,7 @@ pub(crate) fn should_retry_with_current_model(
         return false;
     }
 
-    current.provider.info().is_openai()
+    current.model_provider().info().is_openai()
         && current
             .auth_manager
             .as_deref()

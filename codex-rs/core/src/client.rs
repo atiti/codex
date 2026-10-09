@@ -103,6 +103,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::ToolSpec;
+use codex_tools::create_tools_json_for_responses_api;
 use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use eventsource_stream::Event;
@@ -896,6 +897,7 @@ impl ModelClient {
                 disable_websockets: AtomicBool::new(false),
                 agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
                 cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                last_inference_tools: StdMutex::new(None),
             }),
             agent_identity_policy: self.agent_identity_policy,
             api_key_cyber_access_programs: self.api_key_cyber_access_programs,
@@ -1233,8 +1235,7 @@ impl ModelClient {
             Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
         };
         if !prompt.base_instructions.text.is_empty() {
-            let neutral_instructions =
-                neutralize_harness_identity(&prompt.base_instructions.text);
+            let neutral_instructions = neutralize_harness_identity(&prompt.base_instructions.text);
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
                 neutral_instructions.clone(),
             ));

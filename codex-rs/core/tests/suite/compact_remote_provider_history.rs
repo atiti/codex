@@ -91,6 +91,100 @@ async fn resumed_provider_switch_filters_encrypted_state_before_compaction(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_provider_switch_filters_encrypted_state_before_local_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = wiremock::MockServer::start().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "reasoning", "id": "rs_azure_local", "summary": [],
+                    "encrypted_content": "AZURE_ONLY_LOCAL_CIPHERTEXT"
+                }}),
+                responses::ev_assistant_message("msg-before-local-compact", "saved answer"),
+                responses::ev_completed("resp-before-local-compact"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("msg-local-summary", "safe local summary"),
+                responses::ev_completed("resp-local-compact"),
+            ]),
+            sse(vec![responses::ev_completed("resp-after-local-compact")]),
+        ],
+    )
+    .await;
+    let initial = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider_id = "agentroute-azure".to_string();
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    initial
+        .submit_turn("retain this local compaction context")
+        .await?;
+    let home = initial.home.clone();
+    let path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+    initial.codex.shutdown_and_wait().await?;
+
+    let resumed = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider.name = "OpenAI-compatible local test provider".to_string();
+            config.model_provider.capabilities =
+                Some(codex_model_provider_info::ModelProviderCapabilities {
+                    remote_compaction: Some(
+                        codex_model_provider_info::RemoteCompactionSupport::Unsupported,
+                    ),
+                    ..Default::default()
+                });
+            config.model_provider.tool_compatibility = Some(
+                codex_model_provider_info::ToolCompatibility::
+                    FunctionsAndApplyPatchPreserveReasoning,
+            );
+        })
+        .resume(&server, home, path)
+        .await?;
+    resumed.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&resumed.codex).await;
+    resumed
+        .submit_turn("continue after local compaction")
+        .await?;
+    resumed.codex.shutdown_and_wait().await?;
+
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 3);
+    let compact_request = &requests[1];
+    assert!(compact_request.input().iter().any(|item| {
+        item.to_string()
+            .contains("retain this local compaction context")
+    }));
+    assert!(
+        !compact_request
+            .input()
+            .iter()
+            .any(|item| item.to_string().contains("AZURE_ONLY_LOCAL_CIPHERTEXT"))
+    );
+    assert!(
+        !compact_request
+            .input()
+            .iter()
+            .any(|item| item["type"] == "compaction_trigger")
+    );
+    assert!(
+        requests[2]
+            .input()
+            .iter()
+            .any(|item| item.to_string().contains("safe local summary"))
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_warmup_filters_foreign_reasoning_before_sampling() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let http = wiremock::MockServer::start().await;

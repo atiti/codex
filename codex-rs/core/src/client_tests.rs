@@ -336,7 +336,7 @@ fn reasoning_compatible_provider_preserves_encrypted_reasoning() {
     assert_eq!(
         input,
         vec![ResponseItem::Reasoning {
-            id: None,
+            id: Some(ResponseItemId::with_suffix("rs", "signed")),
             summary: Vec::new(),
             content: None,
             encrypted_content: Some("SIGNED_THINKING_BLOCK".to_string()),

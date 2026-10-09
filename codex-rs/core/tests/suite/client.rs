@@ -117,8 +117,12 @@ async fn reasoning_compatible_provider_replays_signed_reasoning() -> anyhow::Res
         vec![
             sse(vec![
                 json!({"type": "response.output_item.done", "item": {
-                    "type": "reasoning", "id": "rs_signed", "summary": [],
-                    "encrypted_content": "SIGNED_THINKING_BLOCK"
+                    "type": "reasoning", "id": "rs_signed_first", "summary": [],
+                    "encrypted_content": "SIGNED_THINKING_BLOCK_FIRST"
+                }}),
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "reasoning", "id": "rs_signed_second", "summary": [],
+                    "encrypted_content": "SIGNED_THINKING_BLOCK_SECOND"
                 }}),
                 ev_assistant_message("answer-1", "first answer"),
                 ev_completed("response-1"),
@@ -143,11 +147,27 @@ async fn reasoning_compatible_provider_replays_signed_reasoning() -> anyhow::Res
 
     let requests = response_mock.requests();
     assert_eq!(requests.len(), 2);
-    assert!(
-        requests[1]
-            .input()
-            .iter()
-            .any(|item| { item.get("encrypted_content") == Some(&json!("SIGNED_THINKING_BLOCK")) })
+    let reasoning = requests[1]
+        .input()
+        .into_iter()
+        .filter(|item| item["type"] == "reasoning")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reasoning,
+        vec![
+            json!({
+                "type": "reasoning",
+                "id": "rs_signed_first",
+                "summary": [],
+                "encrypted_content": "SIGNED_THINKING_BLOCK_FIRST"
+            }),
+            json!({
+                "type": "reasoning",
+                "id": "rs_signed_second",
+                "summary": [],
+                "encrypted_content": "SIGNED_THINKING_BLOCK_SECOND"
+            }),
+        ]
     );
     test.codex.shutdown_and_wait().await?;
     Ok(())

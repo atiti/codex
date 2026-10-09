@@ -225,10 +225,12 @@ async fn run_compact_task_inner(
     }
     let result = run_compact_task_inner_impl(
         Arc::clone(&sess),
-        Arc::clone(&turn_context),
-        replacement_step_context,
+        CompactionTaskContext {
+            turn_context: Arc::clone(&turn_context),
+            replacement_step_context,
+            request_step_context,
+        },
         client_session,
-        request_step_context,
         input,
         world_state,
         compaction_metadata,
@@ -275,16 +277,25 @@ async fn run_compact_task_inner(
     result.map(|_| ())
 }
 
-async fn run_compact_task_inner_impl(
-    sess: Arc<Session>,
+struct CompactionTaskContext {
     turn_context: Arc<TurnContext>,
     replacement_step_context: Arc<StepContext>,
-    client_session: &mut ModelClientSession,
     request_step_context: Option<Arc<StepContext>>,
+}
+
+async fn run_compact_task_inner_impl(
+    sess: Arc<Session>,
+    context: CompactionTaskContext,
+    client_session: &mut ModelClientSession,
     input: Vec<UserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
 ) -> CodexResult<String> {
+    let CompactionTaskContext {
+        turn_context,
+        replacement_step_context,
+        request_step_context,
+    } = context;
     let compaction_item = TurnItem::ContextCompaction(ContextCompactionItem::new());
     sess.emit_turn_item_started(&turn_context, &compaction_item)
         .await;

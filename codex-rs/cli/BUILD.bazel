@@ -9,6 +9,10 @@ codex_rust_crate(
     extra_binaries = [
         "//codex-rs/bwrap:bwrap",
     ],
+    integration_test_timeouts = {
+        # Daemon fixtures serialize executable copies to bound peak disk usage.
+        "cli-app_server_daemon-test": "long",
+    },
     rustc_flags_extra = MACOS_WEBRTC_RUSTC_LINK_FLAGS,
     test_data_extra = glob(["src/**/snapshots/**"]),
 )

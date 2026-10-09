@@ -1,4 +1,8 @@
-# AgentRoute integration on Codex 0.161.0
+# Historical AgentRoute integration on Codex 0.161.0
+
+This note describes the superseded 0.161.0 candidate. For the current 0.162.0
+port, see `docs/codex-fork.md` in AgentRoute; its release checklist is in
+`docs/releasing.md`.
 
 Upstream base: OpenAI `rust-v0.161.0`, commit
 `979011409de0a60b52f179721948e65531d26144`.

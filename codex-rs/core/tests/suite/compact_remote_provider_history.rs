@@ -173,6 +173,106 @@ async fn resume_warmup_filters_foreign_reasoning_before_sampling() -> Result<()>
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_warmup_caps_history_and_keeps_latest_complete_turn() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let http = wiremock::MockServer::start().await;
+    let _initial_responses = responses::mount_sse_sequence(
+        &http,
+        vec![
+            sse(vec![
+                responses::ev_assistant_message("msg-old", "old turn response"),
+                responses::ev_completed("resp-old"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("msg-middle", "middle turn response"),
+                responses::ev_completed("resp-middle"),
+            ]),
+            sse(vec![
+                responses::ev_assistant_message("msg-latest", "latest complete assistant turn"),
+                responses::ev_completed("resp-latest"),
+            ]),
+        ],
+    )
+    .await;
+    let initial = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .build_with_auto_env(&http)
+        .await?;
+    let older_turn = format!("older turn marker {}", "o".repeat(4_000));
+    let middle_turn = format!("middle turn marker {}", "m".repeat(3_800));
+    initial.submit_turn(&older_turn).await?;
+    initial.submit_turn(&middle_turn).await?;
+    initial.submit_turn("latest complete user turn").await?;
+    let home = initial.home.clone();
+    let path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+    initial.codex.shutdown_and_wait().await?;
+
+    let ws = responses::start_websocket_server(vec![
+        vec![vec![
+            responses::ev_response_created("warm-1"),
+            responses::ev_completed("warm-1"),
+        ]],
+        vec![vec![
+            responses::ev_response_created("warm-2"),
+            responses::ev_completed("warm-2"),
+        ]],
+    ])
+    .await;
+    let base_url = format!("{}/v1", ws.uri());
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let resumed = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_extensions(Arc::new(extensions.build()))
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(base_url);
+            config.model_provider.supports_websockets = true;
+        })
+        .resume(&http, home, path)
+        .await?;
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        ws.wait_for_request(/*connection_index*/ 0, /*request_index*/ 0),
+    )
+    .await?;
+    let warmup = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            resumed.codex.prewarm_with_history().await;
+            tokio::select! {
+                request = ws.wait_for_request(/*connection_index*/ 1, /*request_index*/ 0) => break request,
+                _ = tokio::time::sleep(Duration::from_millis(10)) => {}
+            }
+        }
+    })
+    .await?;
+
+    let warmup_body = warmup.body_json();
+    assert_eq!(warmup_body["generate"], false);
+    let input = warmup_body["input"].as_array().context("prewarm input")?;
+    let history = input
+        .iter()
+        .filter(|item| {
+            item["type"] == "message" && matches!(item["role"].as_str(), Some("user" | "assistant"))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let history_text = serde_json::to_string(&history)?;
+    assert!(serde_json::to_vec(&history)?.len() <= 8_000);
+    assert!(!history_text.contains("older turn marker"));
+    assert!(history_text.contains("middle turn marker"));
+    assert!(history_text.contains("latest complete user turn"));
+    assert!(history_text.contains("latest complete assistant turn"));
+
+    resumed.codex.shutdown_and_wait().await?;
+    ws.shutdown().await;
+    Ok(())
+}
+
 #[test_case(true, false; "provider switch")]
 #[test_case(false, false; "same provider")]
 #[test_case(true, true; "legacy provider metadata absent")]

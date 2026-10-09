@@ -430,10 +430,10 @@ pub(crate) fn normalize_response_items_for_provider(
                 _ => true,
             });
             for item in input.iter_mut() {
-                if !matches!(
+                if !(matches!(
                     item,
                     ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
-                ) && !(preserve_reasoning && matches!(item, ResponseItem::Reasoning { .. }))
+                ) || preserve_reasoning && matches!(item, ResponseItem::Reasoning { .. }))
                 {
                     item.set_id(/*new_id*/ None);
                 }

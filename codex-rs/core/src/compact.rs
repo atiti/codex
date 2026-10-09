@@ -161,10 +161,20 @@ pub(crate) async fn run_compact_task(
 ) -> CodexResult<()> {
     sess.emit_turn_started(&step_context.turn, TaskKind::Compact)
         .await;
+    let history = sess.clone_history().await;
     let mut client_session = sess
         .services
         .model_client
-        .new_session_for_provider(step_context.turn.model_provider());
+        .new_session_for_foreign_provider_history(
+            &step_context.turn.model_provider_id(),
+            step_context.turn.model_provider(),
+            history.annotated_items(),
+        )
+        .unwrap_or_else(|| {
+            sess.services
+                .model_client
+                .new_session_for_provider(step_context.turn.model_provider())
+        });
     run_compact_task_inner(
         sess.clone(),
         Arc::clone(&step_context.turn),

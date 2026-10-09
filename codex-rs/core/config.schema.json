@@ -4395,6 +4395,13 @@
             "functions_and_apply_patch"
           ],
           "type": "string"
+        },
+        {
+          "description": "Function tools plus `apply_patch`, while retaining same-provider reasoning items.",
+          "enum": [
+            "functions_and_apply_patch_preserve_reasoning"
+          ],
+          "type": "string"
         }
       ]
     },

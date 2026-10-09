@@ -139,6 +139,8 @@ impl<'de> Deserialize<'de> for WireApi {
 pub enum ToolCompatibility {
     /// Function tools plus the Responses API `apply_patch` custom tool.
     FunctionsAndApplyPatch,
+    /// Function tools plus `apply_patch`, while retaining same-provider reasoning items.
+    FunctionsAndApplyPatchPreserveReasoning,
 }
 
 /// Serializable representation of a provider definition.

@@ -612,7 +612,8 @@ pub(crate) fn model_info_for_provider_compatibility(
             .and_then(|m| m.guardian_v2.clone());
     }
     match compatibility {
-        Some(ToolCompatibility::FunctionsAndApplyPatch) => {
+        Some(ToolCompatibility::FunctionsAndApplyPatch)
+        | Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning) => {
             model_info.tool_mode = Some(ToolMode::Direct);
             model_info.apply_patch_tool_type = Some(ApplyPatchToolType::Freeform);
             model_info.supports_search_tool = false;

@@ -384,8 +384,11 @@ pub(crate) fn normalize_response_items_for_provider(
             }
         }
     }
+    let preserve_reasoning = provider.tool_compatibility
+        == Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning);
     match provider.tool_compatibility {
-        Some(ToolCompatibility::FunctionsAndApplyPatch) => {
+        Some(ToolCompatibility::FunctionsAndApplyPatch)
+        | Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning) => {
             for item in input.iter_mut() {
                 let ResponseItem::AgentMessage { content, .. } = item else {
                     continue;
@@ -411,6 +414,7 @@ pub(crate) fn normalize_response_items_for_provider(
                 })
                 .collect::<HashSet<_>>();
             input.retain(|item| match item {
+                ResponseItem::Reasoning { .. } if preserve_reasoning => true,
                 ResponseItem::Reasoning { .. }
                 | ResponseItem::AdditionalTools { .. }
                 | ResponseItem::LocalShellCall { .. }

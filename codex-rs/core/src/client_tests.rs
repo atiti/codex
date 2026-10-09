@@ -313,6 +313,39 @@ fn restricted_provider_drops_encrypted_agent_message() {
 }
 
 #[test]
+fn reasoning_compatible_provider_preserves_encrypted_reasoning() {
+    let provider = ModelProviderInfo {
+        tool_compatibility: Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning),
+        ..Default::default()
+    };
+    let mut input = vec![ResponseItem::Reasoning {
+        id: Some(ResponseItemId::with_suffix("rs", "signed")),
+        summary: Vec::new(),
+        content: None,
+        encrypted_content: Some("SIGNED_THINKING_BLOCK".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }];
+
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ false,
+    );
+
+    assert_eq!(
+        input,
+        vec![ResponseItem::Reasoning {
+            id: None,
+            summary: Vec::new(),
+            content: None,
+            encrypted_content: Some("SIGNED_THINKING_BLOCK".to_string()),
+            internal_chat_message_metadata_passthrough: None,
+        }]
+    );
+}
+
+#[test]
 fn mixed_provider_history_drops_encrypted_state_even_for_openai_destination() {
     let provider =
         ModelProviderInfo::create_openai_provider(Some("https://api.openai.com/v1".to_string()));

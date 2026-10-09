@@ -23,6 +23,7 @@ use codex_login::default_client::originator;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
@@ -106,6 +107,51 @@ use wiremock::matchers::query_param;
 const INSTALLATION_ID_FILENAME: &str = "installation_id";
 const TEST_WINDOW_ID: &str = "test-thread:0";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_compatible_provider_replays_signed_reasoning() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "reasoning", "id": "rs_signed", "summary": [],
+                    "encrypted_content": "SIGNED_THINKING_BLOCK"
+                }}),
+                ev_assistant_message("answer-1", "first answer"),
+                ev_completed("response-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("answer-2", "second answer"),
+                ev_completed("response-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.tool_compatibility =
+                Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("first turn").await?;
+    test.submit_turn("continue with the same provider").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .input()
+            .iter()
+            .any(|item| { item.get("encrypted_content") == Some(&json!("SIGNED_THINKING_BLOCK")) })
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
 
 #[test_case::test_case(false, false)]
 #[test_case::test_case(false, true)]

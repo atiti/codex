@@ -4,6 +4,8 @@ use std::path::PathBuf;
 use std::process::Child;
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -15,15 +17,29 @@ use pretty_assertions::assert_eq;
 use serde_json::Value;
 use tempfile::TempDir;
 
+// Daemon fixtures install independent CLI copies. Bound only this test binary's
+// peak disk usage and startup contention when libtest runs cases concurrently.
+static DAEMON_FIXTURE_LOCK: Mutex<()> = Mutex::new(());
+
 struct TestDaemon {
     home: TempDir,
     codex: PathBuf,
     unmanaged: Option<Child>,
+    _fixture_guard: MutexGuard<'static, ()>,
 }
 
 impl TestDaemon {
     fn new() -> Result<Self> {
+        let fixture_guard = DAEMON_FIXTURE_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let home = tempfile::Builder::new().tempdir_in("/tmp")?;
+        // Lifecycle fixtures exercise local daemons; plugin catalog sync has
+        // separate coverage and can delay readiness on a cold CI host.
+        std::fs::write(
+            home.path().join("config.toml"),
+            "[features]\nplugins = false\n",
+        )?;
         let codex = codex_utils_cargo_bin::cargo_bin("codex")?;
         let codex_source = std::fs::canonicalize(&codex)?;
         let target = if cfg!(target_os = "macos") {
@@ -70,6 +86,7 @@ impl TestDaemon {
             home,
             codex,
             unmanaged: None,
+            _fixture_guard: fixture_guard,
         })
     }
 
@@ -582,7 +599,7 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
     std::fs::write(
         package.join("codex-package.json"),
         serde_json::to_vec(&serde_json::json!({
-            "version": env!("CARGO_PKG_VERSION"), "target": target, "entrypoint": "bin/codex"
+            "version": "0.0.0-local", "target": target, "entrypoint": "bin/codex"
         }))?,
     )?;
     if action == "start" && initial == InitialDaemon::Missing {

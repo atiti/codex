@@ -327,6 +327,21 @@ if [[ -n "${CODEX_BAZEL_EXECUTION_LOG_COMPACT_DIR:-}" ]]; then
 fi
 
 if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+  # Resolve the checked-out revision before Bazel's reduced Windows environment.
+  STABLE_GIT_COMMIT="$(git rev-parse --verify HEAD)"
+  export STABLE_GIT_COMMIT
+  if [[ ! "$STABLE_GIT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "Windows workspace status requires the checked-out Git revision." >&2
+    exit 1
+  fi
+  windows_status_command="cmd.exe /d /c echo STABLE_GIT_COMMIT $STABLE_GIT_COMMIT"
+  windows_status_output="$(MSYS2_ARG_CONV_EXCL='*' cmd.exe /d /c echo STABLE_GIT_COMMIT "$STABLE_GIT_COMMIT" | tr -d '\r')"
+  if [[ "$windows_status_output" != "STABLE_GIT_COMMIT $STABLE_GIT_COMMIT" ]]; then
+    echo "Windows workspace status did not emit the checked-out revision." >&2
+    exit 1
+  fi
+  # Supply the native command after rc/config options; receipts still consume ctx.info_file.
+  post_config_bazel_args+=("--workspace_status_command=$windows_status_command")
   pass_windows_build_env=1
   if [[ $windows_cross_compile -eq 1 && -n "${BUILDBUDDY_API_KEY:-}" ]]; then
     # Remote build actions execute on Linux RBE workers. Passing the Windows
@@ -336,6 +351,20 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
   fi
 
   if [[ $pass_windows_build_env -eq 1 ]]; then
+    # LLVM's Windows C toolchain emits GNU objects. Host Rust proc macros use MSVC;
+    # select native C compilation only for targets carrying that ABI constraint.
+    post_config_bazel_args+=(
+      "--repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0"
+      "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain"
+      "--features=static_link_msvcrt"
+      "--host_features=static_link_msvcrt"
+    )
+    if [[ -n "${VOICE_WINDOWS_BAZEL_REPOSITORY:-}" ]]; then
+      post_config_bazel_args+=(
+        "--inject_repository=voice_windows_tools=${VOICE_WINDOWS_BAZEL_REPOSITORY}"
+        "--//third_party/voice:windows_installed_tools=@voice_windows_tools//:tools"
+      )
+    fi
     windows_action_env_vars=(
       INCLUDE
       LIB
@@ -349,6 +378,20 @@ if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
       WindowsSdkDir
       WindowsSDKLibVersion
       WindowsSDKVersion
+    )
+
+    # Native voice tool analysis reads fixed OS values from default_shell_env.
+    # Git Bash exposes the inherited Windows SystemRoot as uppercase SYSTEMROOT.
+    windows_system_root="${SystemRoot:-${SYSTEMROOT:-${WINDIR:-}}}"
+    if [[ -z "$windows_system_root" || -z "${PROCESSOR_ARCHITECTURE:-}" ]]; then
+      echo "Windows Bazel CI requires the runner's system root and host architecture." >&2
+      exit 1
+    fi
+    post_config_bazel_args+=(
+      "--action_env=SystemRoot=${windows_system_root}"
+      "--host_action_env=SystemRoot=${windows_system_root}"
+      "--action_env=PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE}"
+      "--host_action_env=PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE}"
     )
 
     for env_var in "${windows_action_env_vars[@]}"; do
@@ -391,6 +434,17 @@ if [[ -n "${BUILDBUDDY_API_KEY:-}" ]]; then
   bazel_run_args+=("--config=${ci_config}")
 else
   echo "BuildBuddy API key is not available; using local Bazel configuration."
+  if [[ "${RUNNER_OS:-}" == "Windows" ]]; then
+    # Retain native Windows test policy without importing authenticated RBE settings.
+    # Cold compilation competes for the same small hosted runner's CPU and disk.
+    bazel_run_args+=(--config=ci-windows-tests --local_test_jobs=2 --test_env=RUST_TEST_THREADS=1)
+  fi
+  if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+    # Bazel's output tree already reuses actions within a job. A second disk cache
+    # duplicates large Rust/V8 artifacts and exhausts ephemeral hosted runners.
+    # Bound concurrent fixture copies and Wine prefix bootstraps as well.
+    bazel_run_args+=(--disk_cache= --local_test_jobs=2)
+  fi
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
   bazel_run_args+=("${post_config_bazel_args[@]}")

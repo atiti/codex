@@ -38,7 +38,7 @@ async fn heartbeat_root_projection_uses_latest_turn_skills(feature: Feature) -> 
             vec![
                 ev_function_call_with_namespace(
                     SPAWN_CALL_ID,
-                    "collaboration",
+                    "agentroute_collaboration",
                     "spawn_agent",
                     &json!({"task_name": "worker", "message": INITIAL_TASK}).to_string(),
                 ),

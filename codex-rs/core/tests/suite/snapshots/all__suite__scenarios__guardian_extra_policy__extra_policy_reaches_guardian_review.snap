@@ -7,7 +7,7 @@ Scenario: Guardian reviews an escalated command against a restrictive user goal 
 ## Window 1
 Settings:
   include: ["reasoning.encrypted_content"]
-  instructions: You are Codex, a coding agent based on GPT-5. You and the user share one workspace, and your job is to c...rate with them until their goal is genuinely handled. [hash=2a3efec66e7f8963]
+  instructions: You and the user share one workspace, and your job is to collaborate with them until their goal is genuinely handled.
     
     # Personality
     

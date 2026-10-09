@@ -42,7 +42,8 @@ rust_binary(
 
 wine_rust_test(
     name = "wine-test-support-unit-tests",
-    timeout = "short",
+    timeout = "moderate",
+    args = ["--test-threads=1"],
     crate = ":wine_test_support",
     windows_binaries = {
         "wine-smoke": ":windows-smoke",

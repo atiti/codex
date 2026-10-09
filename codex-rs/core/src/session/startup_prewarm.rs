@@ -18,6 +18,7 @@ use tracing::trace_span;
 use tracing::warn;
 
 use crate::client::ModelClientSession;
+use crate::context_manager::is_user_turn_boundary;
 use crate::responses_metadata::CodexResponsesRequestKind;
 use crate::session::INITIAL_SUBMIT_ID;
 use crate::session::RequestEffortUsage;
@@ -29,6 +30,7 @@ use codex_otel::STARTUP_PREWARM_DURATION_METRIC;
 use codex_otel::SessionTelemetry;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::SessionSource;
 use codex_protocol::protocol::SubAgentSource;
 
@@ -36,6 +38,35 @@ use codex_protocol::protocol::SubAgentSource;
 pub(crate) enum PrewarmInput {
     Base,
     History,
+}
+
+const STARTUP_PREWARM_HISTORY_MAX_BYTES: usize = 8_000;
+
+fn truncate_startup_prewarm_history(history: Vec<ResponseItem>) -> Vec<ResponseItem> {
+    if history.is_empty() {
+        return history;
+    }
+
+    let mut turn_starts = vec![0];
+    turn_starts.extend((1..history.len()).filter(|index| is_user_turn_boundary(&history[*index])));
+
+    let mut remaining_bytes = STARTUP_PREWARM_HISTORY_MAX_BYTES;
+    let mut retained_start = history.len();
+    for (group_index, start) in turn_starts.iter().enumerate().rev() {
+        let end = turn_starts
+            .get(group_index + 1)
+            .copied()
+            .unwrap_or(history.len());
+        let group_bytes = serde_json::to_vec(&history[*start..end])
+            .map_or(usize::MAX, |serialized| serialized.len());
+        if group_bytes > remaining_bytes {
+            break;
+        }
+        remaining_bytes -= group_bytes;
+        retained_start = *start;
+    }
+
+    history.into_iter().skip(retained_start).collect()
 }
 
 impl PrewarmInput {
@@ -308,6 +339,23 @@ async fn schedule_startup_prewarm_inner(
 ) -> CodexResult<ModelClientSession> {
     let prewarm_started_at = Instant::now();
     let mut client_session = session.services.model_client.new_session();
+    if matches!(input, PrewarmInput::History) {
+        // Resume warmup precedes UserPromptSubmit and must enforce ownership itself.
+        let history = session.clone_history().await;
+        let state = session.state.lock().await;
+        let config = &state.session_configuration;
+        if let Some(foreign_session) = session
+            .services
+            .model_client
+            .new_session_for_foreign_provider_history(
+                &config.original_config_do_not_use.model_provider_id,
+                Arc::clone(&config.provider),
+                history.annotated_items(),
+            )
+        {
+            client_session = foreign_session;
+        }
+    }
     let websocket_ready = client_session.is_websocket_prewarmed().await;
     // Count the decision before preparation can fail; fresh clients also need prewarm.
     session.services.session_telemetry.counter(
@@ -408,7 +456,7 @@ async fn schedule_startup_prewarm_inner(
                 .services
                 .executed_tool_calls
                 .attach_to_prompt(&mut history, &mut HashMap::new());
-            history
+            truncate_startup_prewarm_history(history)
         }
     };
     let startup_prompt = build_prompt(
@@ -450,3 +498,7 @@ async fn schedule_startup_prewarm_inner(
     );
     Ok(client_session)
 }
+
+#[cfg(test)]
+#[path = "startup_prewarm_tests.rs"]
+mod tests;

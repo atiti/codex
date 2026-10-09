@@ -92,6 +92,7 @@ async fn run_review_preserves_evidence_during_parent_compaction() {
                 compaction_response_id: None,
                 compaction_model_hash: Some("matching".to_owned()),
                 reviewer_compaction_hash: Some("matching".to_owned()),
+                model_provider_id: turn.model_provider_id(),
             },
         )
         .await;
@@ -225,6 +226,8 @@ async fn test_review_params() -> GuardianReviewSessionParams {
         parent_history: session.clone_history().await,
         parent_session: Arc::new(session),
         parent_context: GuardianReviewContext::from(Arc::new(turn)),
+        reviewer_profile_name: None,
+        reviewer_auth_manager: None,
         spawn_config,
         node_repl_policy: GuardianNodeReplPolicy::from_messages(ResolvedModelMessages::bundled()),
         category: GuardianScope::Shell,
@@ -367,6 +370,14 @@ async fn guardian_review_session_config_change_invalidates_cached_session() {
         PathUri::from_abs_path(&cached_spawn_config.cwd)
     );
     assert_ne!(cached_reuse_key, next_reuse_key);
+    assert_ne!(
+        cached_reuse_key.clone(),
+        GuardianReviewSessionReuseKey {
+            reviewer_profile_name: Some("fallback".to_string()),
+            ..cached_reuse_key.clone()
+        },
+        "switching reviewer subscriptions must invalidate reviewer history"
+    );
     assert_eq!(
         cached_reuse_key,
         GuardianReviewSessionReuseKey::from_spawn_config(
@@ -463,18 +474,20 @@ async fn encrypted_parent_compaction_requires_original_item_id(mode: GuardianCon
     };
 
     let mut history = ContextManager::new();
-    history.replace_annotated(vec![ResponseItemEnvelope {
-        item: item.clone(),
+    let expected = ResponseItemEnvelope {
+        item,
         metadata: Some(CodexHarnessMetadata {
             compaction_model_hash: Some("compatible".to_owned()),
+            model_provider_id: Some("openai".to_owned()),
             ..Default::default()
         }),
-    }]);
+    };
+    history.replace_annotated(vec![expected.clone()]);
     assert_eq!(
         policy
             .parent_compaction(&history)
             .expect("valid checkpoint"),
-        Some(item)
+        Some(expected)
     );
     // The latest unusable checkpoint must not fall back to the older valid one.
     let mut items = history.annotated_items().to_vec();

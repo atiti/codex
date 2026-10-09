@@ -212,6 +212,7 @@ rules_rust.patch(
         # Group build-script argument files to avoid Windows command-line limits.
         "//patches:rules_rust_group_build_script_arg_files.patch",
         "//patches:rules_rust_windows_execroot_separators.patch",
+        "//patches:rules_rust_windows_static_crt.patch",
         "//patches:rules_rust_compiler_thp.patch",
     ],
     strip = 1,
@@ -291,6 +292,14 @@ use_repo(nightly_rust, "rust_toolchains")
 toolchains = use_extension("@rules_rs//rs/toolchains:module_extension.bzl", "toolchains")
 toolchains.toolchain(
     edition = "2024",
+    extra_exec_rustc_flags = {
+        "aarch64-pc-windows-msvc": ["-Ctarget-feature=+crt-static"],
+        "x86_64-pc-windows-msvc": ["-Ctarget-feature=+crt-static"],
+    },
+    extra_rustc_flags = {
+        "aarch64-pc-windows-msvc": ["-Ctarget-feature=+crt-static"],
+        "x86_64-pc-windows-msvc": ["-Ctarget-feature=+crt-static"],
+    },
     version = "1.95.0",
 )
 use_repo(toolchains, "default_rust_toolchains")
@@ -626,6 +635,8 @@ crate.annotation(
         "@rules_foreign_cc//toolchains:current_ninja_toolchain",
     ],
     crate = "opusic-sys",
+    patch_args = ["-p1"],
+    patches = ["//patches:opusic-sys_materialize_installed_headers.patch"],
 )
 
 # The musl CLI's allocator needs declared native tools and consistent header flags.

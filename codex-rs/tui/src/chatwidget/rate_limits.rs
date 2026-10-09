@@ -373,7 +373,12 @@ impl ChatWidget {
 
             // /wham/usage identifies ordinary and additional model limits separately. Streamed
             // updates still drive warnings/recovery above, but must not overwrite status data.
-            if matches!(source, RateLimitSnapshotSource::AccountUsage) {
+            //
+            // Routed providers are the exception. Their quota only ever arrives as a streamed
+            // limit family because no account read backs it, so keep those rows fresh. Codex
+            // families stay owned by the account read, which also carries credits.
+            let routed_limit_family = !limit_id.to_ascii_lowercase().starts_with("codex");
+            if matches!(source, RateLimitSnapshotSource::AccountUsage) || routed_limit_family {
                 let limit_label = snapshot
                     .limit_name
                     .clone()

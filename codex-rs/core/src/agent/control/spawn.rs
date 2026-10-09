@@ -26,6 +26,7 @@ use codex_context_fragments::set_annotated_content;
 use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
 use codex_history::ResponseItemEnvelope;
+use codex_model_provider::create_model_provider;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::intersect_effective_permission_profiles;
 use codex_protocol::protocol::EnvironmentConfigState;
@@ -1027,6 +1028,11 @@ impl LocalAgentControl {
                     &parent_config.multi_agent_v2,
                     ResolvedModelMessages::bundled().multi_agent(),
                     !parent_config.update_plan_enabled,
+                    create_model_provider(
+                        parent_config.model_provider.clone(),
+                        /*auth_manager*/ None,
+                    )
+                    .capabilities(),
                 );
                 [parent_usage_hints.root, parent_usage_hints.subagent]
                     .into_iter()
@@ -1224,6 +1230,11 @@ impl LocalAgentControl {
                         &config.multi_agent_v2,
                         ResolvedModelMessages::bundled().multi_agent(),
                         !config.update_plan_enabled,
+                        create_model_provider(
+                            config.model_provider.clone(),
+                            /*auth_manager*/ None,
+                        )
+                        .capabilities(),
                     )
                     .subagent
                 })

@@ -135,6 +135,7 @@ async fn model_switch_program_pair(
     .await;
     submit_pair(&initial.codex, previous_model, previous_program).await?;
     let expected_program = previous_program
+        .filter(|_| !local)
         .map(|program| json!({"cyber": program}))
         .unwrap_or(Value::Null);
     assert_eq!(
@@ -284,7 +285,7 @@ async fn model_switch_program_pair(
             Arc::clone(&resumed.codex)
         }
     };
-    if matches!(history, History::ApiKeyResume) {
+    if matches!(history, History::ApiKeyResume) && !local {
         // Resuming a ChatGPT turn does not enable the API-key rollout features.
         let error = submit_pair(&thread, next_model, Some(CyberAccessProgram::DaybreakRed))
             .await
@@ -292,7 +293,8 @@ async fn model_switch_program_pair(
         assert!(
             error
                 .to_string()
-                .contains("Cyber access programs are disabled for this API-key session.")
+                .contains("Cyber access programs are disabled for this API-key session."),
+            "unexpected API-key selection error: {error}"
         );
         thread.shutdown_and_wait().await?;
         assert_eq!(
@@ -342,14 +344,15 @@ async fn model_switch_program_pair(
             );
         }
     }
-    let (old_program, new_program) = if matches!(history, History::ApiKeyCustomProviderResume) {
-        for request in &requests {
-            assert_eq!(request.body_json().get("access_programs"), None);
-        }
-        (Value::Null, Value::Null)
-    } else {
-        (expected_program, json!({"cyber": "daybreak_red"}))
-    };
+    let (old_program, new_program) =
+        if local || matches!(history, History::ApiKeyCustomProviderResume) {
+            for request in &requests {
+                assert_eq!(request.body_json().get("access_programs"), None);
+            }
+            (Value::Null, Value::Null)
+        } else {
+            (expected_program, json!({"cyber": "daybreak_red"}))
+        };
     let actual = requests
         .iter()
         .map(|request| {

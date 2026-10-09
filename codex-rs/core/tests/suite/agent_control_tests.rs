@@ -294,7 +294,7 @@ async fn host_threads_preserve_lineage_settings_and_resume_routing() -> anyhow::
                 responses::sse(vec![
                     responses::ev_function_call_with_namespace(
                         "post",
-                        "collaboration",
+                        "agentroute_collaboration",
                         "post",
                         &arguments.to_string(),
                     ),
@@ -468,7 +468,7 @@ async fn collaboration_tools_dispatch_to_the_host_controller() -> anyhow::Result
     ] {
         events.push(responses::ev_function_call_with_namespace(
             call,
-            "collaboration",
+            "agentroute_collaboration",
             name,
             &arguments.to_string(),
         ));

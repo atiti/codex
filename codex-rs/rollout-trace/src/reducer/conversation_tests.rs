@@ -164,6 +164,7 @@ fn agent_messages_preserve_routing_and_content() -> anyhow::Result<()> {
                 Some(ConversationChannel::Analysis),
                 ConversationItemKind::Message,
                 Some(AgentMessageMetadata {
+                    id: None,
                     author: "/root/worker".to_string(),
                     recipient: "/root".to_string(),
                 }),
@@ -178,6 +179,7 @@ fn agent_messages_preserve_routing_and_content() -> anyhow::Result<()> {
                 Some(ConversationChannel::Analysis),
                 ConversationItemKind::Message,
                 Some(AgentMessageMetadata {
+                    id: None,
                     author: "/root".to_string(),
                     recipient: "/root/worker".to_string(),
                 }),

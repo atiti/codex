@@ -114,7 +114,10 @@ impl App {
             return Err(AppRunControl::Continue);
         }
         let resumed_thread =
-            if matches!(self.app_server_target, AppServerTarget::LocalDaemon { .. }) {
+            if crate::agentroute_local_server::project_trust_host(&self.app_server_target)
+                == crate::config_update::ProjectTrustHost::Local
+                && !matches!(self.app_server_target, AppServerTarget::Embedded)
+            {
                 Some(
                     app_server
                         .thread_read(target_session.thread_id, /*include_turns*/ false)
@@ -129,7 +132,14 @@ impl App {
             } else {
                 None
             };
-        let trust_cwd = resume_config.0.cwd.to_path_buf();
+        let trust_cwd = resumed_thread
+            .as_ref()
+            .filter(|_| {
+                self.app_server_target.uses_remote_workspace()
+                    && app_server.remote_cwd_override().is_none()
+            })
+            .map_or(resume_config.0.cwd.as_path(), |thread| thread.cwd.as_path())
+            .to_path_buf();
         self.confirm_directory_trust(
             tui,
             app_server,
@@ -157,7 +167,9 @@ impl App {
     ) -> std::result::Result<(), AppRunControl> {
         // Keep the existing explicit remote --cd gate, including retries after cancellation.
         // Other remote destinations await authoritative trust-root metadata.
-        let cwd = if self.app_server_target.uses_remote_workspace() {
+        let cwd = if crate::agentroute_local_server::project_trust_host(&self.app_server_target)
+            == crate::config_update::ProjectTrustHost::Remote
+        {
             let Some(cwd) = app_server.remote_cwd_override() else {
                 return Ok(());
             };

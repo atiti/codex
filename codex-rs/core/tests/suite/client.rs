@@ -383,7 +383,7 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_openai_responses_requests_include_item_ids_without_passthrough_metadata() {
+async fn non_openai_responses_requests_omit_item_ids_and_passthrough_metadata() {
     let server = MockServer::start().await;
     let mut private_function_call = ev_function_call("private-call", "unsupported_tool", "{}");
     private_function_call["item"]["encrypted_function_args"] = json!(["message"]);
@@ -443,8 +443,8 @@ async fn non_openai_responses_requests_include_item_ids_without_passthrough_meta
             "input item should omit private encrypted function metadata: {item}"
         );
         assert!(
-            item.get("id").and_then(serde_json::Value::as_str).is_some(),
-            "input item should include a generated ID: {item}"
+            item.get("id").is_none(),
+            "generic provider input should omit item IDs: {item}"
         );
     }
 }
@@ -1659,6 +1659,8 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         supports_websockets: false,
         supports_standalone_web_search: false,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     send_request_with_provider(provider).await;
@@ -3145,7 +3147,7 @@ async fn includes_managed_developer_instructions_once_per_request() -> anyhow::R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids() {
+async fn azure_responses_request_does_not_store_and_omits_item_ids() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3178,6 +3180,8 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         supports_websockets: false,
         supports_standalone_web_search: false,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -3350,23 +3354,13 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
 
     assert_eq!(body["store"], serde_json::Value::Bool(false));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(body["input"].as_array().map(Vec::len), Some(10));
-    assert_eq!(body["input"][0]["id"].as_str(), Some("rs_reasoning-id"));
-    assert_eq!(body["input"][1]["id"].as_str(), Some("msg_message-id"));
-    assert_eq!(body["input"][2]["id"].as_str(), Some("ws_web-search-id"));
-    assert_eq!(body["input"][3]["id"].as_str(), Some("fc_function-id"));
-    assert_eq!(
-        body["input"][4]["call_id"].as_str(),
-        Some("function-call-id")
-    );
-    assert_eq!(body["input"][5]["id"].as_str(), Some("lsh_local-shell-id"));
-    assert_eq!(body["input"][6]["id"].as_str(), Some("ctc_custom-tool-id"));
-    assert_eq!(
-        body["input"][7]["call_id"].as_str(),
-        Some("custom-tool-call-id")
-    );
-    assert_eq!(body["input"][8].get("id"), None);
-    assert_eq!(body["input"][9].get("id"), None);
+    let input = body["input"].as_array().expect("Azure request input");
+    assert_eq!(input.len(), 9);
+    for item in input {
+        assert_eq!(item.get("id"), None);
+    }
+    assert_eq!(input[3]["call_id"].as_str(), Some("function-call-id"));
+    assert_eq!(input[6]["call_id"].as_str(), Some("custom-tool-call-id"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3816,6 +3810,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         supports_websockets: false,
         supports_standalone_web_search: false,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     // Init session
@@ -3903,6 +3899,8 @@ async fn env_var_overrides_loaded_auth() {
         supports_websockets: false,
         supports_standalone_web_search: false,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     // Init session

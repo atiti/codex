@@ -258,19 +258,27 @@ async fn guardian_review_turns_and_tools_reach_analytics() -> Result<()> {
         .collect::<Vec<_>>();
     for event in &children {
         let params = &event["event_params"];
+        // Prewarming can initialize a reviewer that is replaced before sampling.
+        // Events from sampled turns must match their actual request identity.
+        if params["turn_id"].is_string() {
+            let review = reviews
+                .iter()
+                .find(|review| review["turn_id"] == params["turn_id"])
+                .expect("Guardian turn event must match a captured review request");
+            assert_eq!(params["thread_id"], review["thread_id"]);
+        }
+        assert!(
+            params["thread_id"]
+                .as_str()
+                .is_some_and(|id| !id.is_empty() && id != thread.id)
+        );
         assert_eq!(
             json!([
-                params["thread_id"],
                 params["session_id"],
                 params["parent_thread_id"],
                 params["thread_source"]
             ]),
-            json!([
-                reviews[0]["thread_id"],
-                thread.session_id,
-                thread.id,
-                "guardian_review"
-            ])
+            json!([thread.session_id, thread.id, "guardian_review"])
         );
     }
     let turns = children
@@ -373,7 +381,7 @@ async fn multi_agent_v2_tools_emit_collaborator_analytics() -> Result<()> {
                 responses::ev_response_created(&response_id),
                 responses::ev_function_call_with_namespace(
                     &format!("call-{index}"),
-                    "collaboration",
+                    "agentroute_collaboration",
                     tool,
                     &args.to_string(),
                 ),

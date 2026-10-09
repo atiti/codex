@@ -101,6 +101,7 @@ pub(crate) use codex_app_server_client::legacy_core;
 pub(crate) use worktree_startup::ManagedTuiWorktree;
 
 mod additional_dirs;
+mod agentroute_local_server;
 mod analytics;
 mod app;
 mod app_backtrack;
@@ -644,13 +645,16 @@ pub(crate) async fn start_app_server_for_picker(
 pub(crate) async fn start_embedded_app_server_for_picker(
     config: &Config,
 ) -> color_eyre::Result<AppServerSession> {
+    // Picker fixtures exercise local task state and must not sync the public catalog.
+    let mut config = config.clone();
+    config.features.disable(Feature::Plugins)?;
     let mut target = AppServerTarget::Embedded;
-    let mut state_db = init_state_db_for_app_server_target(config, &target).await?;
+    let mut state_db = init_state_db_for_app_server_target(&config, &target).await?;
     let app_server = start_app_server(
         &mut target,
         Arg0DispatchPaths::default(),
         config.clone(),
-        Vec::new(),
+        vec![("features.plugins".to_string(), toml::Value::Boolean(false))],
         LoaderOverrides::without_managed_config_for_tests(),
         /*strict_config*/ false,
         CloudConfigBundleLoader::default(),
@@ -1808,9 +1812,12 @@ async fn run_ratatui_app(
 
     // Remote startup keeps its existing explicit --cd trust check. Resolving other
     // remote folders requires authoritative project-root information from the server.
-    if !uses_remote_workspace || remote_cwd_override.is_some() {
-        let resumed_thread = if matches!(app_server_target, AppServerTarget::LocalDaemon { .. })
-            && let resume_picker::SessionSelection::Resume(target) = &session_selection
+    let trust_host = agentroute_local_server::project_trust_host(&app_server_target);
+    if trust_host == config_update::ProjectTrustHost::Local || remote_cwd_override.is_some() {
+        let resumed_thread = if trust_host == config_update::ProjectTrustHost::Local
+            && !matches!(app_server_target, AppServerTarget::Embedded)
+            && let resume_picker::SessionSelection::Resume(target)
+            | resume_picker::SessionSelection::Fork(target) = &session_selection
         {
             Some(
                 startup_draft
@@ -1825,6 +1832,12 @@ async fn run_ratatui_app(
         };
         let trust_cwd = remote_cwd_override
             .as_deref()
+            .or_else(|| {
+                resumed_thread
+                    .as_ref()
+                    .filter(|_| uses_remote_workspace)
+                    .map(|thread| thread.cwd.as_path())
+            })
             .unwrap_or(config.cwd.as_path());
         let consent = onboarding::onboarding_screen::check_directory_trust(
             &mut tui,
@@ -2659,14 +2672,16 @@ requires_openai_auth = {requires_openai_auth}
     }
 
     pub(crate) async fn start_test_embedded_app_server(
-        config: Config,
+        mut config: Config,
     ) -> color_eyre::Result<InProcessAppServerClient> {
+        // These fixtures use local RPCs; plugin synchronization has its own coverage.
+        config.features.disable(Feature::Plugins)?;
         let state_db =
             init_state_db_for_app_server_target(&config, &AppServerTarget::Embedded).await?;
         start_embedded_app_server(
             Arg0DispatchPaths::default(),
             config,
-            Vec::new(),
+            vec![("features.plugins".to_string(), toml::Value::Boolean(false))],
             LoaderOverrides::default(),
             /*strict_config*/ false,
             CloudConfigBundleLoader::default(),

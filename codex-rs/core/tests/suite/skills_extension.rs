@@ -3340,14 +3340,23 @@ async fn production_turn_keeps_rebalanced_catalogs_stable_after_compaction_and_r
         );
     }
 
+    // The in-process executor discovers host MCP configuration. Snapshot the input history,
+    // while the catalog and allocation assertions above remain independent of its tool settings.
+    let inputs = requests
+        .iter()
+        .map(responses::ResponsesRequest::input)
+        .collect::<Vec<_>>();
+    let entries = inputs
+        .iter()
+        .map(Vec::as_slice)
+        .map(context_snapshot::SnapshotEntry::items)
+        .collect::<Vec<_>>();
     insta::assert_snapshot!(
         "cloud_skills_across_executor_readiness",
-        context_snapshot::format_request_history_snapshot(
+        context_snapshot::format_context_snapshot(
             "Cloud skills rebalance once to retain every executor skill. Post-turn compaction and resume restore the same cloud allocation before the executor reconnects; both catalogs are fully reinjected once into the new history.",
-            &requests,
-            &ContextSnapshotOptions::default()
-                .rewrite_known_segments()
-                .include_request_settings(),
+            &entries,
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
 

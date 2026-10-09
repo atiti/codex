@@ -2694,6 +2694,11 @@
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
       "properties": {
+        "approval_review_model": {
+          "default": null,
+          "description": "Optional provider-native model used for automatic approval review.",
+          "type": "string"
+        },
         "auth": {
           "allOf": [
             {
@@ -2796,6 +2801,15 @@
           "default": false,
           "description": "Whether this provider supports the Responses API WebSocket transport.",
           "type": "boolean"
+        },
+        "tool_compatibility": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolCompatibility"
+            }
+          ],
+          "default": null,
+          "description": "Optional tool-schema compatibility profile for OpenAI-compatible providers."
         },
         "websocket_connect_timeout_ms": {
           "description": "Maximum time (in milliseconds) to wait for a websocket connection attempt before treating it as failed.",
@@ -4287,6 +4301,18 @@
         }
       },
       "type": "object"
+    },
+    "ToolCompatibility": {
+      "description": "Provider-specific restrictions on the tool schemas accepted by a Responses API.",
+      "oneOf": [
+        {
+          "description": "Function tools plus the Responses API `apply_patch` custom tool.",
+          "enum": [
+            "functions_and_apply_patch"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ToolExposureSurface": {
       "description": "A model-facing surface on which a tool can be exposed.",

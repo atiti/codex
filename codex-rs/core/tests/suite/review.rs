@@ -1217,7 +1217,7 @@ async fn review_input_isolated_from_parent_history() {
 
     // Ensure the REVIEW_PROMPT rubric is sent via instructions.
     let instructions = body["instructions"].as_str().expect("instructions string");
-    assert_eq!(instructions, REVIEW_PROMPT);
+    assert_eq!(instructions, REVIEW_PROMPT.replace("\r\n", "\n"));
 
     // Also verify that a user interruption note was recorded in the rollout.
     let path = codex.rollout_path().expect("rollout path");

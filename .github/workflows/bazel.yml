@@ -5,7 +5,17 @@ name: Bazel
 
 on:
   workflow_call:
+    inputs:
+      windows-ci:
+        description: Run optional Windows coverage in addition to the Mac and Linux release gates.
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      windows-ci:
+        description: Run optional Windows coverage.
+        type: boolean
+        default: false
 
 concurrency:
   # Cancel previous actions from the same PR or branch except 'main' branch.
@@ -15,11 +25,9 @@ concurrency:
 
 jobs:
   test:
-    # PRs use the sharded Windows cross-compiled test jobs below. Post-merge
-    # pushes to main also run the native Windows test job for broader Windows
-    # signal without putting PR latency back on the critical path. When
-    # Code-mode unit tests run on every Bazel target. When authenticated RBE
-    # is available, the Windows-cross shards exercise the source-built V8 path.
+    # Mac is the primary platform and Linux is secondary. Windows coverage is
+    # explicitly enabled through the workflow input and does not run for releases.
+    # Code-mode unit tests run on every enabled Bazel target.
     # Standard hosted runners need time for a cold native build before all test shards run.
     timeout-minutes: 180
     strategy:
@@ -132,6 +140,7 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   test-windows-shard:
+    if: inputs.windows-ci
     # Split the Windows Bazel test leg across separate Windows hosts. Jobs with
     # BuildBuddy credentials use Linux RBE for build actions; test execution
     # remains on a Windows runner.
@@ -242,7 +251,7 @@ jobs:
   test-windows:
     # Preserve the existing required-check surface while the real work happens
     # in the sharded Windows jobs above.
-    if: always()
+    if: always() && inputs.windows-ci
     needs: test-windows-shard
     runs-on: ubuntu-24.04
     name: Bazel test on windows-latest for x86_64-pc-windows-gnullvm
@@ -259,7 +268,7 @@ jobs:
   test-windows-native-main:
     # Native Windows Bazel tests are slower and frequently approach the
     # PR test budget. Run this only for post-merge commits to main.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: inputs.windows-ci && github.event_name == 'push' && github.ref == 'refs/heads/main'
     timeout-minutes: 120
     runs-on: windows-latest
     name: Bazel test on windows-latest for x86_64-pc-windows-msvc (native main)
@@ -343,16 +352,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Keep Linux lint coverage on x64 and add the arm64 macOS path that
-          # the Bazel test job already exercises. Add Windows gnullvm as well
-          # so PRs get Bazel-native lint signal on the same Windows toolchain
-          # that the Bazel test job uses.
+          # Match lint coverage to the Mac and Linux release platforms.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
           - os: macos-15
             target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
     env:
@@ -450,8 +454,6 @@ jobs:
             target: x86_64-unknown-linux-gnu
           - os: macos-15
             target: aarch64-apple-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-gnullvm
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}
     env:

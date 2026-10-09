@@ -213,6 +213,7 @@ def codex_rust_crate(
         unit_test_args = [],
         binary_test_target_compatible_with = [],
         integration_test_timeout = None,
+        integration_test_timeouts = {},
         test_data_extra = [],
         test_windows_dll_dirs = [],
         wrap_integration_tests = False,
@@ -264,6 +265,8 @@ def codex_rust_crate(
         binary_test_target_compatible_with: Platform constraints for binary unit tests.
         integration_test_timeout: Optional Bazel timeout for integration test
             targets generated from `tests/*.rs`.
+        integration_test_timeouts: Mapping from generated integration test target
+            name to a timeout that overrides integration_test_timeout.
         test_data_extra: Extra runtime data for tests.
         test_windows_dll_dirs: Native-link locators whose sibling bin directories
             must be on Windows tests' DLL search path, including child helpers.
@@ -544,6 +547,8 @@ def codex_rust_crate(
 
         test_kwargs = {}
         test_kwargs.update(integration_test_kwargs)
+        if test_name in integration_test_timeouts:
+            test_kwargs["timeout"] = integration_test_timeouts[test_name]
         test_shard_count = _test_shard_count(test_shard_counts, test_name)
         if test_shard_count:
             # Put Bazel sharding on the label users/CI invoke. Do not set

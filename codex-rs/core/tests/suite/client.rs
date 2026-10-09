@@ -23,6 +23,7 @@ use codex_login::default_client::originator;
 use codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID;
 use codex_model_provider_info::AMAZON_BEDROCK_RUNTIME_PROVIDER_ID;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::WireApi;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
@@ -106,6 +107,71 @@ use wiremock::matchers::query_param;
 const INSTALLATION_ID_FILENAME: &str = "installation_id";
 const TEST_WINDOW_ID: &str = "test-thread:0";
 const TEST_INSTALLATION_ID: &str = "11111111-1111-4111-8111-111111111111";
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reasoning_compatible_provider_replays_signed_reasoning() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let response_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "reasoning", "id": "rs_signed_first", "summary": [],
+                    "encrypted_content": "SIGNED_THINKING_BLOCK_FIRST"
+                }}),
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "reasoning", "id": "rs_signed_second", "summary": [],
+                    "encrypted_content": "SIGNED_THINKING_BLOCK_SECOND"
+                }}),
+                ev_assistant_message("answer-1", "first answer"),
+                ev_completed("response-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("answer-2", "second answer"),
+                ev_completed("response-2"),
+            ]),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_config(|config| {
+            config.model_provider.tool_compatibility =
+                Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+
+    test.submit_turn("first turn").await?;
+    test.submit_turn("continue with the same provider").await?;
+
+    let requests = response_mock.requests();
+    assert_eq!(requests.len(), 2);
+    let reasoning = requests[1]
+        .input()
+        .into_iter()
+        .filter(|item| item["type"] == "reasoning")
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reasoning,
+        vec![
+            json!({
+                "type": "reasoning",
+                "id": "rs_signed_first",
+                "summary": [],
+                "encrypted_content": "SIGNED_THINKING_BLOCK_FIRST"
+            }),
+            json!({
+                "type": "reasoning",
+                "id": "rs_signed_second",
+                "summary": [],
+                "encrypted_content": "SIGNED_THINKING_BLOCK_SECOND"
+            }),
+        ]
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
 
 #[test_case::test_case(false, false)]
 #[test_case::test_case(false, true)]
@@ -440,7 +506,7 @@ async fn openai_stateless_responses_requests_preserve_item_turn_metadata_across_
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn non_openai_responses_requests_include_item_ids_without_passthrough_metadata() {
+async fn non_openai_responses_requests_omit_item_ids_and_passthrough_metadata() {
     let server = MockServer::start().await;
     let mut private_function_call = ev_function_call("private-call", "unsupported_tool", "{}");
     private_function_call["item"]["encrypted_function_args"] = json!(["message"]);
@@ -500,8 +566,8 @@ async fn non_openai_responses_requests_include_item_ids_without_passthrough_meta
             "input item should omit private encrypted function metadata: {item}"
         );
         assert!(
-            item.get("id").and_then(serde_json::Value::as_str).is_some(),
-            "input item should include a generated ID: {item}"
+            item.get("id").is_none(),
+            "generic provider input should omit item IDs: {item}"
         );
     }
 }
@@ -1701,6 +1767,8 @@ async fn send_provider_auth_request(server: &MockServer, auth: ModelProviderAuth
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     send_request_with_provider(provider).await;
@@ -3170,7 +3238,7 @@ async fn includes_managed_developer_instructions_once_per_request() -> anyhow::R
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids() {
+async fn azure_responses_request_does_not_store_and_omits_item_ids() {
     skip_if_no_network!();
 
     let server = MockServer::start().await;
@@ -3204,6 +3272,8 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let codex_home = TempDir::new().unwrap();
@@ -3376,20 +3446,13 @@ async fn azure_responses_request_does_not_store_and_preserves_prefixed_item_ids(
 
     assert_eq!(body["store"], serde_json::Value::Bool(false));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    let input = body["input"].as_array().expect("request input");
-    assert_eq!(input[0]["role"], "developer");
-    let input = &input[1..];
-    assert_eq!(input.len(), 10);
-    assert_eq!(input[0]["id"].as_str(), Some("rs_reasoning-id"));
-    assert_eq!(input[1]["id"].as_str(), Some("msg_message-id"));
-    assert_eq!(input[2]["id"].as_str(), Some("ws_web-search-id"));
-    assert_eq!(input[3]["id"].as_str(), Some("fc_function-id"));
-    assert_eq!(input[4]["call_id"].as_str(), Some("function-call-id"));
-    assert_eq!(input[5]["id"].as_str(), Some("lsh_local-shell-id"));
-    assert_eq!(input[6]["id"].as_str(), Some("ctc_custom-tool-id"));
-    assert_eq!(input[7]["call_id"].as_str(), Some("custom-tool-call-id"));
-    assert_eq!(input[8].get("id"), None);
-    assert_eq!(input[9].get("id"), None);
+    let input = body["input"].as_array().expect("Azure request input");
+    assert_eq!(input.len(), 9);
+    for item in input {
+        assert_eq!(item.get("id"), None);
+    }
+    assert_eq!(input[3]["call_id"].as_str(), Some("function-call-id"));
+    assert_eq!(input[6]["call_id"].as_str(), Some("custom-tool-call-id"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -3840,6 +3903,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     // Init session
@@ -3928,6 +3993,8 @@ async fn env_var_overrides_loaded_auth() {
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     // Init session

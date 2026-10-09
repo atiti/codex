@@ -13,6 +13,7 @@ use crate::responses_metadata::CompactionTurnMetadata;
 use crate::session::session::Session;
 use crate::session::step_context::StepContext;
 use codex_history::CodexHarnessMetadata;
+use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
@@ -42,6 +43,21 @@ pub(super) async fn run_remote_compact_v2_attempt(
 ) -> CodexResult<RemoteCompactV2Attempt> {
     let turn_context = &step_context.turn;
     let mut history = sess.clone_history().await;
+    // Standalone compaction has no routed turn session to carry provider ownership.
+    let mut owned_client_session = client_session.is_none().then(|| {
+        sess.services
+            .model_client
+            .new_session_for_foreign_provider_history(
+                &turn_context.model_provider_id(),
+                turn_context.model_provider(),
+                history.annotated_items(),
+            )
+            .unwrap_or_else(|| {
+                sess.services
+                    .model_client
+                    .new_session_for_provider(turn_context.model_provider())
+            })
+    });
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
     let tools_in_history = step_context.settings.model_info.use_responses_lite
         && history
@@ -105,6 +121,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         output_schema: None,
         output_schema_strict: true,
         cyber_access_program: turn_context.cyber_access_program,
+        model_provider_id: Some(turn_context.model_provider_id()),
     };
 
     let mut responses_metadata = sess
@@ -117,10 +134,11 @@ pub(super) async fn run_remote_compact_v2_attempt(
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,
     }));
-    let mut owned_client_session = None;
     let client_session = match client_session {
         Some(client_session) => client_session,
-        None => owned_client_session.insert(sess.services.model_client.new_session()),
+        None => owned_client_session
+            .as_mut()
+            .ok_or_else(|| CodexErr::Fatal("Missing standalone compaction session".to_owned()))?,
     };
     let compaction_output_result = run_remote_compaction_request_v2(
         sess,

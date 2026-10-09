@@ -40,7 +40,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use uuid::Uuid;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectTrustHost {
     Local,
     Remote,

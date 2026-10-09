@@ -7,6 +7,7 @@ use crate::agent::child_config::build_agent_resume_config;
 use crate::agent::role::apply_role_to_config;
 use crate::agent::types::AgentMetadata;
 use crate::agent::types::LiveAgent;
+use crate::agent::types::SpawnAgentForkMode;
 use crate::agent::types::SpawnAgentOptions;
 use crate::agents_md_manager::SessionInstructions;
 use crate::codex_thread::CodexThread;
@@ -27,6 +28,7 @@ use codex_context_fragments::to_annotated_content;
 use codex_extension_api::ExtensionDataInit;
 use codex_features::Feature;
 use codex_history::ResponseItemEnvelope;
+use codex_model_provider::create_model_provider;
 use codex_prompts::ResolvedModelMessages;
 use codex_protocol::error::AgentErrorContext;
 use codex_protocol::intersect_effective_permission_profiles;
@@ -1019,11 +1021,10 @@ impl LocalAgentControl {
                 "spawn_agent fork requires a parent spawn call id".to_string(),
             ));
         }
-        if options.fork_mode.is_none() {
-            return Err(CodexErr::Fatal(
-                "spawn_agent fork requires a fork mode".to_string(),
-            ));
-        }
+        let fork_mode = options
+            .fork_mode
+            .as_ref()
+            .ok_or_else(|| CodexErr::Fatal("spawn_agent fork requires a fork mode".to_string()))?;
         let SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
             parent_thread_id, ..
         }) = &session_source
@@ -1098,6 +1099,11 @@ impl LocalAgentControl {
                     &parent_config.multi_agent_v2,
                     ResolvedModelMessages::bundled().multi_agent(),
                     !parent_config.update_plan_enabled,
+                    create_model_provider(
+                        parent_config.model_provider.clone(),
+                        /*auth_manager*/ None,
+                    )
+                    .capabilities(),
                 );
                 [parent_usage_hints.root, parent_usage_hints.subagent]
                     .into_iter()
@@ -1107,17 +1113,19 @@ impl LocalAgentControl {
             } else {
                 Vec::new()
             };
-        let mut preserve_context_baselines = true;
-        for item in forked_rollout_items.iter().rev() {
-            let RolloutItem::Compacted(compacted) = item else {
-                continue;
-            };
-            // Legacy checkpoints force the child to rebuild context regardless of the
-            // live parent's reference baseline; an older superseded checkpoint does not.
-            if compacted.replacement_history.is_none() {
-                preserve_context_baselines = false;
+        let mut preserve_context_baselines = matches!(fork_mode, SpawnAgentForkMode::FullHistory);
+        if preserve_context_baselines {
+            for item in forked_rollout_items.iter().rev() {
+                let RolloutItem::Compacted(compacted) = item else {
+                    continue;
+                };
+                // Legacy checkpoints force the child to rebuild context regardless of the
+                // live parent's reference baseline; an older superseded checkpoint does not.
+                if compacted.replacement_history.is_none() {
+                    preserve_context_baselines = false;
+                }
+                break;
             }
-            break;
         }
         let mut replaced_parent_developer_instructions = false;
         // Scrub inherited hints and replace only the parent's developer-instruction fragment.
@@ -1302,6 +1310,11 @@ impl LocalAgentControl {
                         &config.multi_agent_v2,
                         ResolvedModelMessages::bundled().multi_agent(),
                         !config.update_plan_enabled,
+                        create_model_provider(
+                            config.model_provider.clone(),
+                            /*auth_manager*/ None,
+                        )
+                        .capabilities(),
                     )
                     .subagent
                 })

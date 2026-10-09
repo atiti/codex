@@ -1080,6 +1080,81 @@ async fn rolling_rate_limit_snapshot_preserves_prior_individual_limit() {
 }
 
 #[tokio::test]
+async fn streamed_routed_limit_family_fills_status_rows() {
+    // A routed provider has no account read behind its quota, so its streamed limit family is
+    // the only source for the `/status` rows.
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.on_rolling_rate_limit_snapshot(RateLimitSnapshot {
+        limit_id: Some("claude".to_string()),
+        limit_name: Some("Claude".to_string()),
+        normal_model_slug: None,
+        primary: Some(RateLimitWindow {
+            used_percent: 74,
+            window_duration_mins: Some(300),
+            resets_at: Some(1_790_460_000),
+        }),
+        secondary: Some(RateLimitWindow {
+            used_percent: 8,
+            window_duration_mins: Some(10_080),
+            resets_at: Some(1_790_942_400),
+        }),
+        credits: None,
+        individual_limit: None,
+        plan_type: None,
+        spend_control_reached: None,
+        rate_limit_reached_type: None,
+    });
+
+    let display = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("claude")
+        .expect("streamed routed limits should reach the status rows");
+    assert_eq!(display.limit_name, "Claude");
+    assert_eq!(
+        display.primary.as_ref().map(|window| window.used_percent),
+        Some(74.0)
+    );
+    assert_eq!(
+        display.secondary.as_ref().map(|window| window.used_percent),
+        Some(8.0)
+    );
+    // Codex labels these windows by length, which is the "5h / weekly" pair users expect.
+    assert_eq!(
+        get_limits_duration(/*windows_minutes*/ 300).as_deref(),
+        Some("5h")
+    );
+    assert_eq!(
+        get_limits_duration(/*windows_minutes*/ 10_080).as_deref(),
+        Some("weekly")
+    );
+    assert!(
+        !chat.rate_limit_snapshots_by_limit_id.contains_key("codex"),
+        "a routed family must not invent a Codex bucket"
+    );
+}
+
+#[tokio::test]
+async fn streamed_codex_family_still_leaves_status_rows_to_the_account_read() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let mut account_read = snapshot(/*percent*/ 20.0);
+    account_read.limit_id = Some("codex_other".to_string());
+    chat.on_rate_limit_snapshot(Some(account_read));
+
+    let mut rolling = snapshot(/*percent*/ 90.0);
+    rolling.limit_id = Some("codex_other".to_string());
+    chat.on_rolling_rate_limit_snapshot(rolling);
+
+    let display = chat
+        .rate_limit_snapshots_by_limit_id
+        .get("codex_other")
+        .expect("the account read still populates Codex families");
+    assert_eq!(
+        display.primary.as_ref().map(|window| window.used_percent),
+        Some(20.0)
+    );
+}
+
+#[tokio::test]
 async fn rate_limit_snapshot_updates_and_retains_plan_type() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -4058,7 +4133,9 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.4 xhigh fast · Context 0% used · {test_cwd}"))
+        Some(format!(
+            "gpt-5.4 · openai · xhigh fast · Context 0% used · {test_cwd}"
+        ))
     );
 
     chat.set_model("gpt-5.2");
@@ -4066,7 +4143,9 @@ async fn status_line_model_with_reasoning_includes_fast_for_fast_capable_models(
 
     assert_eq!(
         status_line_text(&chat),
-        Some(format!("gpt-5.2 xhigh · Context 0% used · {test_cwd}"))
+        Some(format!(
+            "gpt-5.2 · openai · xhigh · Context 0% used · {test_cwd}"
+        ))
     );
 }
 
@@ -4124,19 +4203,49 @@ async fn status_line_model_with_reasoning_updates_on_mode_switch_without_manual_
     chat.local_settings.tui.status_line = Some(vec!["model-with-reasoning".to_string()]);
     chat.set_reasoning_effort(Some(ReasoningEffortConfig::High));
 
-    assert_eq!(status_line_text(&chat), Some("gpt-5.2 high".to_string()));
+    assert_eq!(
+        status_line_text(&chat),
+        Some("gpt-5.2 · openai · high".to_string())
+    );
 
     let plan_mask = collaboration_modes::plan_mask(chat.model_catalog.as_ref())
         .expect("expected plan collaboration mode");
     chat.set_collaboration_mask(plan_mask);
 
-    assert_eq!(status_line_text(&chat), Some("gpt-5.2 medium".to_string()));
+    assert_eq!(
+        status_line_text(&chat),
+        Some("gpt-5.2 · openai · medium".to_string())
+    );
 
     let default_mask = collaboration_modes::default_mask(chat.model_catalog.as_ref())
         .expect("expected default collaboration mode");
     chat.set_collaboration_mask(default_mask);
 
-    assert_eq!(status_line_text(&chat), Some("gpt-5.2 high".to_string()));
+    assert_eq!(
+        status_line_text(&chat),
+        Some("gpt-5.2 · openai · high".to_string())
+    );
+}
+
+#[tokio::test]
+async fn status_line_model_uses_the_routed_turn_provider() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(Some("gpt-5.2")).await;
+    chat.local_settings.tui.status_line = Some(vec!["model-with-reasoning".to_string()]);
+    chat.set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+    chat.refresh_status_line();
+    assert_eq!(
+        status_line_text(&chat),
+        Some("gpt-5.2 · openai · medium".to_string())
+    );
+
+    chat.on_warning(
+        "◆ MODEL ROUTE · SMART → dev-gpt-6-astra · high reasoning · backend azure/agentroute-azure · scope root"
+    );
+
+    assert_eq!(
+        status_line_text(&chat),
+        Some("dev-gpt-6-astra · agentroute-azure · high".to_string())
+    );
 }
 
 #[tokio::test]
@@ -5473,6 +5582,7 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         ),
     );
     reveal_running_hooks(&mut chat);
+    chat.bottom_pane.reset_status_timer(Duration::ZERO);
     let exec_and_hook_running = hook_status_frame(&chat, /*width*/ 80);
 
     end_exec(&mut chat, begin, "done", "", /*exit_code*/ 0);
@@ -5480,6 +5590,7 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
+    chat.bottom_pane.reset_status_timer(Duration::ZERO);
     let hook_running_after_exec = hook_status_frame(&chat, /*width*/ 80);
 
     handle_hook_completed(
@@ -5492,6 +5603,7 @@ async fn running_hook_does_not_displace_active_exec_cell() {
         ),
     );
     assert!(drain_insert_history(&mut rx).is_empty());
+    chat.bottom_pane.reset_status_timer(Duration::ZERO);
     let quiet_hook_completed = hook_status_frame(&chat, /*width*/ 80);
     expire_quiet_hook_linger(&mut chat);
     assert!(chat.active_hook_cell.is_none());

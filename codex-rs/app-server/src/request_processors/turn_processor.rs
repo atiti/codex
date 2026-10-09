@@ -655,6 +655,7 @@ impl TurnRequestProcessor {
                     .with_thread_settings(thread_settings)
                     .on_start(TurnStartOptions {
                         turn_trigger: params.turn_trigger,
+                        goal_routing: None,
                         parent_turn_id: params.parent_turn_id,
                         initiating_agent_path: None,
                         root_turn_id: params.root_turn_id,

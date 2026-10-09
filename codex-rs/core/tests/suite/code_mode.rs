@@ -261,6 +261,10 @@ async fn run_code_mode_turn_with_model_and_config(
     configure: impl FnOnce(&mut Config) + Send + 'static,
 ) -> Result<(TestCodex, ResponseMock)> {
     let builder = test_codex().with_model(model).with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
         let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
         configure(config);
@@ -341,6 +345,10 @@ async fn missing_process_host_falls_back_to_direct_tools_and_warns_once() -> Res
         .with_model("test-gpt-5.1-codex")
         .with_code_mode_host_program("codex-code-mode-host-does-not-exist".into())
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -427,6 +435,10 @@ async fn missing_process_host_fails_closed_when_direct_fallback_is_disabled() ->
         .with_config(|config| {
             config
                 .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
+            config
+                .features
                 .enable(Feature::CodeMode)
                 .expect("code mode should be enabled");
             config.code_mode.disable_in_process_fallback = true;
@@ -460,6 +472,7 @@ async fn disabled_process_host_with_fallback_disabled_attempts_the_host() -> Res
     let server = responses::start_mock_server().await;
     let builder = test_codex()
         .with_model("test-gpt-5.1-codex")
+        .with_code_mode_host_program("codex-code-mode-host-does-not-exist".into())
         .with_config(|config| {
             config
                 .features
@@ -597,6 +610,10 @@ text(result);
             }
             config
                 .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
+            config
+                .features
                 .enable(Feature::CodeMode)
                 .expect("code mode should be enabled");
             config
@@ -709,6 +726,10 @@ async fn run_code_mode_turn_with_rmcp_config(
         let _ = if code_mode_only {
             config.features.enable(Feature::CodeModeOnly)
         } else {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             config.features.enable(Feature::CodeMode)
         };
         if non_prefixed_mcp_tool_names {
@@ -828,6 +849,10 @@ async fn code_mode_exec_holds_captured_result_during_elicitation() -> Result<()>
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
         });
     let test = builder.build(&server).await?;
@@ -3383,6 +3408,10 @@ async fn code_mode_recovers_complete_inventory_after_orphaned_mapping_pressure()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url);
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
             let _ = config.features.disable(Feature::RemoteCompactionV2);
@@ -3489,6 +3518,10 @@ text("pressure ready");"#,
         .with_extensions(Arc::new(extensions.build()))
         .with_config(move |config| {
             config.model_provider.base_url = Some(base_url);
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
             let _ = config.features.disable(Feature::RemoteCompactionV2);
@@ -3728,6 +3761,10 @@ if (!tool) {
                 .expect("test config should allow feature update");
             config
                 .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
+            config
+                .features
                 .enable(Feature::CodeMode)
                 .expect("test config should allow feature update");
             config
@@ -3899,6 +3936,10 @@ text(JSON.stringify({{
                 .features
                 .enable(Feature::CodeModeToolSearch)
                 .expect("ranked Code Mode search should be enabled");
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -4151,6 +4192,10 @@ async fn code_mode_nested_tool_calls_can_run_in_parallel() -> Result<()> {
     let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
         });
@@ -4658,6 +4703,10 @@ async fn code_mode_wait_timeout_reconnects_on_next_exec() -> Result<()> {
         .with_config(|config| {
             config
                 .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
+            config
+                .features
                 .enable(Feature::CodeMode)
                 .expect("code mode should be enabled");
         });
@@ -4819,6 +4868,10 @@ async fn code_mode_can_yield_and_resume_with_wait() -> Result<()> {
     let mut builder = test_codex()
         .with_extensions(Arc::new(extensions.build()))
         .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
         });
     let test = builder.build(&server).await?;
@@ -5006,6 +5059,10 @@ async fn code_mode_yield_and_termination_are_not_starved_by_runtime_output() -> 
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -5103,6 +5160,10 @@ async fn code_mode_can_run_multiple_yielded_sessions() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
         let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
     });
@@ -5312,6 +5373,10 @@ async fn code_mode_concurrent_cells_merge_only_the_stored_values_they_write() ->
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -5465,6 +5530,10 @@ async fn code_mode_wait_can_terminate_and_continue() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -5591,6 +5660,10 @@ async fn code_mode_wait_returns_error_for_unknown_session() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -5653,6 +5726,10 @@ async fn code_mode_wait_terminate_returns_completed_session_if_it_finished_after
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -5848,6 +5925,10 @@ async fn code_mode_background_keeps_running_on_later_turn_without_wait() -> Resu
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -5998,6 +6079,10 @@ async fn code_mode_interrupt_terminates_active_cells_and_nested_tools() -> Resul
         .with_model("test-gpt-5.1-codex")
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::CodeModeInterrupt);
             let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
@@ -6144,6 +6229,10 @@ async fn code_mode_wait_uses_its_own_max_tokens_budget() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -6371,6 +6460,10 @@ text("after");
             model.input_modalities.push(InputModality::Audio);
         })
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
         });
     let test = builder.build_with_auto_env(&server).await?;
@@ -6580,6 +6673,10 @@ async fn code_mode_unified_image_budget_preserves_legacy_contract_for_unsupporte
             model.supports_image_detail_original = false;
         })
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::ExecutedToolCallMetadata);
             let _ = config.features.enable(Feature::UnifiedImageBudget);
@@ -6619,6 +6716,10 @@ async fn code_mode_view_image_rejects_invalid_file_without_exposing_contents() -
     let builder = test_codex()
         .with_model("gpt-5.5")
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
         })
         .with_workspace_setup(|cwd, _fs| async move {
@@ -6668,6 +6769,10 @@ async fn code_mode_can_use_view_image_result_with_image_helper(
     let mut builder = test_codex()
         .with_model("gpt-5.5")
         .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             if unified_image_budget {
                 let _ = config.features.enable(Feature::UnifiedImageBudget);
@@ -6972,6 +7077,10 @@ async fn code_mode_node_repl_screenshots_can_be_captured_without_guardian_transc
     let mut builder = test_codex().with_config(move |config| {
         config
             .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
+        config
+            .features
             .enable(Feature::CodeMode)
             .expect("enable Code Mode");
         let mcp = serde_json::from_value(serde_json::json!({
@@ -7055,6 +7164,10 @@ async fn code_mode_node_repl_image_flag_without_enhanced_stays_disabled(
         .with_config(move |config| {
             config.permissions.approval_policy = Constrained::allow_any(AskForApproval::OnRequest);
             config.approvals_reviewer = ApprovalsReviewer::AutoReview;
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -7213,6 +7326,7 @@ async fn code_mode_node_repl_text_evidence_is_visible_only_to_guardian(
                     reviewer.max_context_window = reviewer.context_window;
                 }
             }
+            config.features.enable(Feature::CodeModeHost).expect("enable process code-mode host");
             config
                 .features
                 .enable(Feature::CodeMode)
@@ -7678,6 +7792,10 @@ async fn yielded_code_mode_tool_callbacks_keep_their_originating_step() -> Resul
             model.experimental_supported_tools = vec!["test_sync_tool".to_string()];
         })
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             config.features.enable(Feature::CodeMode).unwrap();
         });
     let test = builder.build_with_auto_env(&server).await?;
@@ -7763,6 +7881,10 @@ async fn code_mode_exposes_and_dispatches_namespaced_custom_tools() -> Result<()
         .with_model("test-gpt-5.1-codex")
         .with_extensions(Arc::new(extensions.build()))
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
         });
     let test = builder.build(&server).await?;
@@ -8039,6 +8161,10 @@ async fn code_mode_uses_the_first_dynamic_tool_for_a_normalized_name() -> Result
             })
             .with_config(|config| {
                 config.tool_registry.turn_metadata_includes_tool_info = true;
+                config
+                    .features
+                    .enable(Feature::CodeModeHost)
+                    .expect("enable process code-mode host");
                 config
                     .features
                     .enable(Feature::CodeMode)
@@ -8362,6 +8488,10 @@ async fn code_mode_search_normalizes_and_calls_deferred_dynamic_tools() -> Resul
             model_info.tool_mode = Some(ToolMode::CodeMode);
         })
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             let _ = config.features.enable(Feature::CodeModeToolSearch);
             config.code_mode.excluded_tool_namespaces = vec!["blocked".to_string()];
@@ -8553,6 +8683,10 @@ async fn code_mode_excludes_configured_nested_tool_namespaces() -> Result<()> {
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(|config| {
         config.update_plan_enabled = true;
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
         config.code_mode.excluded_tool_namespaces = vec!["excluded".to_string()];
     });
@@ -8656,6 +8790,10 @@ async fn code_mode_omits_configured_mcp_server_tools() -> Result<()> {
         })
         .with_config(move |config| {
             config.update_plan_enabled = true;
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process code-mode host");
             let _ = config.features.enable(Feature::CodeMode);
             let mut servers = config.mcp_servers.get().clone();
             servers.insert(
@@ -9014,6 +9152,10 @@ async fn code_mode_can_store_and_load_values_across_turns() -> Result<()> {
 
     let server = responses::start_mock_server().await;
     let mut builder = test_codex().with_config(move |config| {
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         let _ = config.features.enable(Feature::CodeMode);
     });
     let test = builder.build(&server).await?;
@@ -9183,6 +9325,10 @@ async fn code_mode_oversized_websocket_yield_keeps_later_wait_incomplete() -> Re
         config.model_context_window = Some(20_000_000);
         config.model_auto_compact_token_limit = Some(20_000_000);
         config.features.disable(Feature::TokenBudget).unwrap();
+        config
+            .features
+            .enable(Feature::CodeModeHost)
+            .expect("enable process code-mode host");
         config.features.enable(Feature::CodeMode).unwrap();
         config
             .features

@@ -5,16 +5,16 @@ expression: "normalize_voice_snapshot_directory(&format!(\"Other task:\\n{other_
 Other task:
 › Ask Codex to do anything
 
-  gpt-test default · /tmp/project
+  gpt-test · test-provider · default · /tmp/project
 Restored owner:
  voice ● listening                                      ⌃x mute     /voice stop
    mic ▁▁▁▁▁▁  codex ▁▁▁▁▁▁
 
 › Ask Codex to do anything
 
-  gpt-test default · /tmp/project
+  gpt-test · test-provider · default · /tmp/project
 
-  >_ OpenAI Codex (v0.0.0)
+  >_ OpenAI Codex (v0.161.0)
      /tmp/project
 
   To get started, describe a task or try one of these commands:

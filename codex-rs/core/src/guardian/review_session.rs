@@ -98,6 +98,7 @@ use super::review::guardian_review_session_config;
 pub(crate) use super::reviewer_config::build_guardian_review_session_config;
 use codex_guardian_reviewer::run_before_review_deadline;
 use codex_guardian_reviewer::wait_for_guardian_review;
+use codex_login::AuthManager;
 
 const GUARDIAN_MAX_IMAGE_ITEM_TOKENS: i64 = 10_000;
 pub(crate) use codex_guardian_reviewer::GuardianReviewSessionOutcome;
@@ -105,6 +106,8 @@ pub(crate) use codex_guardian_reviewer::GuardianReviewSessionOutcome;
 pub(crate) struct GuardianReviewSessionParams {
     pub(crate) parent_session: Arc<Session>,
     pub(crate) parent_context: GuardianReviewContext,
+    pub(crate) reviewer_profile_name: Option<String>,
+    pub(crate) reviewer_auth_manager: Option<Arc<AuthManager>>,
     // Checkpoint selection and thread-owned prompt evidence must use the same history.
     pub(crate) parent_history: ContextManager,
     pub(crate) spawn_config: Config,
@@ -216,6 +219,7 @@ pub struct GuardianReviewSessionReuseKey {
     zsh_path: Option<PathBuf>,
     features: ManagedFeatures,
     environment_ids: Vec<String>,
+    reviewer_profile_name: Option<String>,
 }
 
 impl GuardianReviewSessionReuseKey {
@@ -260,6 +264,7 @@ impl GuardianReviewSessionReuseKey {
             zsh_path: spawn_config.zsh_path.clone(),
             features: spawn_config.features.clone(),
             environment_ids: Vec::new(),
+            reviewer_profile_name: None,
         }
     }
 
@@ -544,7 +549,7 @@ async fn run_review_on_session(
                 .zip(codex_history::CompactionCheckpoint::latest(
                     reviewer_history.annotated_items(),
                 ))
-                .is_some_and(|(parent, loaded)| parent == loaded.item);
+                .is_some_and(|(parent, loaded)| parent.item == *loaded.item);
             // Keep the action-time snapshot: a later parent compaction must not
             // replace evidence with a checkpoint this reviewer never received.
             let (history, transcript_source) = if loaded_parent_checkpoint {

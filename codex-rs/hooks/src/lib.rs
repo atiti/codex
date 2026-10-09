@@ -74,6 +74,7 @@ pub use events::session_start::StartHookTarget;
 pub use events::stop::StopHookTarget;
 pub use events::stop::StopOutcome;
 pub use events::stop::StopRequest;
+pub use events::user_prompt_submit::ReviewerFallbackProfile;
 pub use events::user_prompt_submit::UserPromptSubmitOutcome;
 pub use events::user_prompt_submit::UserPromptSubmitRequest;
 pub use legacy_notify::legacy_notify_json;

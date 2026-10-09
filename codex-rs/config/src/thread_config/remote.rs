@@ -4,6 +4,7 @@ use std::num::NonZeroU64;
 use std::time::Duration;
 
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -158,6 +159,18 @@ fn model_provider_from_proto(
         ));
     }
     let id = provider.id;
+    let tool_compatibility = match provider.tool_compatibility.as_deref() {
+        Some("functions_and_apply_patch") => Some(ToolCompatibility::FunctionsAndApplyPatch),
+        Some("functions_and_apply_patch_preserve_reasoning") => {
+            Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning)
+        }
+        Some(unknown) => {
+            return Err(parse_error(format!(
+                "remote thread config returned unknown tool_compatibility: {unknown}"
+            )));
+        }
+        None => None,
+    };
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
         Ok(proto::WireApi::Unspecified) => {
@@ -196,6 +209,8 @@ fn model_provider_from_proto(
         supports_standalone_web_search: provider.supports_standalone_web_search,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility,
+        approval_review_model: provider.approval_review_model,
     };
     Ok((id, info))
 }
@@ -228,6 +243,8 @@ fn model_provider_to_proto(
         supports_standalone_web_search,
         include_internal_metadata: _,
         capabilities: _,
+        tool_compatibility,
+        approval_review_model,
     } = provider;
 
     proto::ModelProvider {
@@ -250,6 +267,16 @@ fn model_provider_to_proto(
         requires_openai_auth,
         supports_websockets,
         supports_standalone_web_search,
+        tool_compatibility: tool_compatibility.map(|compatibility| {
+            match compatibility {
+                ToolCompatibility::FunctionsAndApplyPatch => "functions_and_apply_patch",
+                ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning => {
+                    "functions_and_apply_patch_preserve_reasoning"
+                }
+            }
+            .to_string()
+        }),
+        approval_review_model,
     }
 }
 
@@ -447,6 +474,9 @@ mod tests {
         let mut expected = expected_provider();
         expected.auth = None;
         expected.experimental_bearer_token = Some("synthetic-provider-token".into());
+        expected.tool_compatibility =
+            Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning);
+        expected.approval_review_model = Some("synthetic-review-model".to_string());
         let proto = model_provider_to_proto("local", expected.clone());
         assert!(proto.supports_standalone_web_search);
         let (id, actual) = model_provider_from_proto(proto).expect("model provider from proto");
@@ -519,6 +549,8 @@ mod tests {
                             requires_openai_auth: false,
                             supports_websockets: true,
                             supports_standalone_web_search: true,
+                            tool_compatibility: None,
+                            approval_review_model: None,
                         }],
                         features: HashMap::from([
                             ("plugins".to_string(), false),
@@ -582,6 +614,8 @@ mod tests {
             supports_websockets: true,
             supports_standalone_web_search: true,
             gateway_oauth: None,
+            tool_compatibility: None,
+            approval_review_model: None,
             aws: None,
             capabilities: None,
             include_internal_metadata: false,

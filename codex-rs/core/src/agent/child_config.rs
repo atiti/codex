@@ -45,6 +45,7 @@ pub(crate) struct SpawnConfigOptions<'a> {
 pub(crate) struct PreparedSpawnConfig {
     pub(crate) config: Config,
     pub(crate) role_name: Option<String>,
+    pub(crate) requested_backend: Option<String>,
 }
 
 /// Resolves child settings before starting the thread, retaining the invoking tool's precedence.
@@ -59,7 +60,7 @@ pub(crate) async fn prepare_agent_spawn_config(
     if options.version == SpawnConfigVersion::V1 && options.full_history_fork {
         reject_full_fork_agent_type_override(options.role_name)?;
     }
-    apply_requested_spawn_agent_model_overrides(
+    let requested_backend = apply_requested_spawn_agent_model_overrides(
         session,
         step_context,
         &mut config,
@@ -96,7 +97,11 @@ pub(crate) async fn prepare_agent_spawn_config(
             .then_some(DEFAULT_ROLE_NAME)
         })
         .map(str::to_owned);
-    Ok(PreparedSpawnConfig { config, role_name })
+    Ok(PreparedSpawnConfig {
+        config,
+        role_name,
+        requested_backend,
+    })
 }
 
 /// Builds the base config snapshot for a newly spawned sub-agent.
@@ -135,7 +140,8 @@ fn build_agent_shared_config(turn: &TurnContext) -> Result<Config, String> {
     // Fresh child startup restores configured preferences from the retained snapshot.
     config.token_budget = turn.configured_token_budget.clone();
     config.model = Some(turn.model_info().slug.clone());
-    config.model_provider = turn.provider.info().clone();
+    config.model_provider_id = turn.model_provider_id();
+    config.model_provider = turn.model_provider().info().clone();
     config.model_reasoning_effort = turn
         .reasoning_effort()
         .or(turn.model_info().default_reasoning_level.as_ref())
@@ -199,16 +205,56 @@ async fn apply_requested_spawn_agent_model_overrides(
     config: &mut Config,
     requested_model: Option<&str>,
     requested_reasoning_effort: Option<ReasoningEffort>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
     let turn = step_context.turn.as_ref();
     let requested_model = requested_model.or(turn.config.agent_default_subagent_model.as_deref());
     let requested_reasoning_effort = requested_reasoning_effort
         .or_else(|| turn.config.agent_default_subagent_reasoning_effort.clone());
     if requested_model.is_none() && requested_reasoning_effort.is_none() {
-        return Ok(());
+        return Ok(None);
     }
 
     if let Some(requested_model) = requested_model {
+        let requested_model =
+            parse_spawn_agent_model_override(requested_model, &config.model_providers)?;
+        let requested_backend = requested_model
+            .provider_id
+            .as_deref()
+            .map(spawn_agent_backend_for_provider);
+        let provider_changed = requested_model
+            .provider_id
+            .as_deref()
+            .is_some_and(|provider_id| provider_id != config.model_provider_id);
+        if let Some(provider_id) = requested_model.provider_id.as_deref() {
+            let provider = config
+                .model_providers
+                .get(provider_id)
+                .cloned()
+                .ok_or_else(|| format!("Unknown model provider `{provider_id}` for spawn_agent"))?;
+            config.model_provider_id = provider_id.to_string();
+            config.model_provider = provider;
+        }
+        if provider_changed {
+            let selected_model_info = session
+                .services
+                .models_manager
+                .get_model_info(&requested_model.model, &config.to_models_manager_config())
+                .await;
+            config.model = Some(requested_model.model.clone());
+            if let Some(reasoning_effort) = requested_reasoning_effort {
+                if !selected_model_info.used_fallback_model_metadata {
+                    validate_spawn_agent_reasoning_effort(
+                        &requested_model.model,
+                        &selected_model_info.supported_reasoning_levels,
+                        &reasoning_effort,
+                    )?;
+                }
+                config.model_reasoning_effort = Some(reasoning_effort);
+            } else if !selected_model_info.used_fallback_model_metadata {
+                config.model_reasoning_effort = selected_model_info.default_reasoning_level;
+            }
+            return Ok(requested_backend);
+        }
         let available_models = session
             .services
             .models_manager
@@ -216,7 +262,7 @@ async fn apply_requested_spawn_agent_model_overrides(
             .await;
         let selected_model_name = find_spawn_agent_model_name(
             &available_models,
-            requested_model,
+            &requested_model.model,
             turn.multi_agent_version,
         )?;
         let selected_model_info = session
@@ -237,7 +283,7 @@ async fn apply_requested_spawn_agent_model_overrides(
             config.model_reasoning_effort = selected_model_info.default_reasoning_level;
         }
 
-        return Ok(());
+        return Ok(requested_backend);
     }
 
     if let Some(reasoning_effort) = requested_reasoning_effort {
@@ -249,7 +295,54 @@ async fn apply_requested_spawn_agent_model_overrides(
         config.model_reasoning_effort = Some(reasoning_effort);
     }
 
-    Ok(())
+    Ok(None)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SpawnAgentModelOverride {
+    provider_id: Option<String>,
+    model: String,
+}
+
+fn parse_spawn_agent_model_override(
+    requested_model: &str,
+    model_providers: &std::collections::HashMap<
+        String,
+        codex_model_provider_info::ModelProviderInfo,
+    >,
+) -> Result<SpawnAgentModelOverride, String> {
+    let requested_model = requested_model.trim();
+    if requested_model.is_empty() {
+        return Err("Model override for spawn_agent cannot be empty".to_string());
+    }
+    if let Some((provider_id, model)) = requested_model.split_once('/')
+        && model_providers.contains_key(provider_id.trim())
+    {
+        let model = model.trim();
+        if model.is_empty() {
+            return Err(
+                "Provider-qualified spawn_agent models must use `<provider>/<model>`".to_string(),
+            );
+        }
+        return Ok(SpawnAgentModelOverride {
+            provider_id: Some(provider_id.trim().to_string()),
+            model: model.to_string(),
+        });
+    }
+    Ok(SpawnAgentModelOverride {
+        provider_id: None,
+        model: requested_model.to_string(),
+    })
+}
+
+fn spawn_agent_backend_for_provider(provider_id: &str) -> String {
+    match provider_id {
+        "openai" => "gpt".to_string(),
+        provider_id => provider_id
+            .strip_prefix("agentroute-")
+            .unwrap_or(provider_id)
+            .to_string(),
+    }
 }
 
 pub(crate) async fn apply_spawn_agent_service_tier(

@@ -1,0 +1,26 @@
+diff --git a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -235,6 +235,22 @@
+ 
+     let mut out_dir = cmake.build();
+ 
++    // CMake preserves source-header symlinks from Bazel's temporary Cargo
++    // manifest directory. Materialize them before that directory is removed,
++    // so the declared output tree never contains dangling installed headers.
++    let installed_headers = out_dir.join("include").join("opus");
++    for entry in std::fs::read_dir(&installed_headers).unwrap() {
++        let entry = entry.unwrap();
++        let destination = entry.path();
++        if destination.extension().is_some_and(|extension| extension == "h") {
++            let source = path::Path::new(CURRENT_DIR).join("include").join(entry.file_name());
++            let contents = std::fs::read(source).unwrap();
++            // remove_file also removes dangling links, unlike an exists check.
++            std::fs::remove_file(&destination).unwrap();
++            std::fs::write(destination, contents).unwrap();
++        }
++    }
++
+     println!("cargo:rustc-link-lib=static=opus");
+ 
+     out_dir.push("lib");

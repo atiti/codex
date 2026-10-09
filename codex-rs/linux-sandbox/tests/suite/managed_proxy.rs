@@ -795,7 +795,11 @@ async fn managed_proxy_mode_routes_through_bridge_and_blocks_direct_egress() {
         format!("http://127.0.0.1:{proxy_port}"),
     );
 
-    let sandbox_helper_dir = std::path::Path::new(env!("CARGO_BIN_EXE_codex-linux-sandbox"))
+    let sandbox_helper = codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+        .expect("sandbox helper should be available")
+        .canonicalize()
+        .expect("sandbox helper should resolve to its executable");
+    let sandbox_helper_dir = sandbox_helper
         .parent()
         .expect("sandbox helper should have a parent");
     let file_system_sandbox_policy =

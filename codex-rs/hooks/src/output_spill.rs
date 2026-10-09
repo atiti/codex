@@ -1,15 +1,20 @@
+use codex_config::DEFAULT_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT;
+use codex_config::MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT;
+use codex_config::effective_hook_additional_context_token_limit;
 use codex_protocol::ThreadId;
 use codex_protocol::items::HookPromptFragment;
 use codex_utils_absolute_path::AbsolutePathBuf;
 use codex_utils_output_truncation::TruncationPolicy;
 use codex_utils_output_truncation::approx_token_count;
 use codex_utils_output_truncation::formatted_truncate_text;
+use codex_utils_output_truncation::truncate_text;
 use tokio::fs;
 use tracing::warn;
 use uuid::Uuid;
 
 const HOOK_OUTPUTS_DIR: &str = "hook_outputs";
-pub(crate) const DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT: usize = 2_500;
+pub(crate) const DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT: usize =
+    DEFAULT_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct AdditionalContextLimit {
@@ -19,7 +24,7 @@ pub(crate) struct AdditionalContextLimit {
 impl AdditionalContextLimit {
     pub(crate) fn from_config(value: Option<usize>) -> Self {
         Self {
-            token_limit: value.unwrap_or(DEFAULT_HOOK_OUTPUT_TOKEN_LIMIT),
+            token_limit: value.unwrap_or(DEFAULT_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT),
         }
     }
 }
@@ -66,8 +71,11 @@ impl HookOutputSpiller {
         text: String,
         limit: AdditionalContextLimit,
     ) -> String {
-        let token_limit = limit.token_limit;
-        if token_limit == 0 || approx_token_count(&text) <= token_limit {
+        // Hook configuration controls the smaller spill threshold, but cannot disable the
+        // hard cap on model-visible context. A configured zero keeps short output inline;
+        // larger output is still spilled at the maximum.
+        let token_limit = effective_hook_additional_context_token_limit(limit.token_limit);
+        if approx_token_count(&text) <= token_limit {
             return text;
         }
 
@@ -79,12 +87,18 @@ impl HookOutputSpiller {
                 "failed to create hook output directory {}: {err}",
                 parent.display()
             );
-            return formatted_truncate_text(&text, TruncationPolicy::Tokens(token_limit));
+            return clamp_hook_output_preview(formatted_truncate_text(
+                &text,
+                TruncationPolicy::Tokens(token_limit),
+            ));
         }
 
         if let Err(err) = fs::write(path.as_ref(), &text).await {
             warn!("failed to write hook output {}: {err}", path.display());
-            return formatted_truncate_text(&text, TruncationPolicy::Tokens(token_limit));
+            return clamp_hook_output_preview(formatted_truncate_text(
+                &text,
+                TruncationPolicy::Tokens(token_limit),
+            ));
         }
 
         spilled_hook_output_preview(&text, &path, token_limit)
@@ -127,7 +141,23 @@ fn spilled_hook_output_preview(text: &str, path: &AbsolutePathBuf, token_limit: 
     let footer = format!("\n\nFull hook output saved to: {}", path.display());
     let preview_policy =
         TruncationPolicy::Tokens(token_limit.saturating_sub(approx_token_count(&footer)));
-    format!("{}{footer}", formatted_truncate_text(text, preview_policy))
+    let preview = format!("{}{footer}", formatted_truncate_text(text, preview_policy));
+    clamp_hook_output_preview(preview)
+}
+
+fn clamp_hook_output_preview(preview: String) -> String {
+    if approx_token_count(&preview) <= MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT {
+        preview
+    } else {
+        const PREVIEW_CLAMP_OVERHEAD_TOKENS: usize = 100;
+        truncate_text(
+            &preview,
+            TruncationPolicy::Tokens(
+                MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT
+                    .saturating_sub(PREVIEW_CLAMP_OVERHEAD_TOKENS),
+            ),
+        )
+    }
 }
 
 #[cfg(test)]

@@ -2793,9 +2793,12 @@ async fn guardian_mode_skips_auto_when_annotations_do_not_require_approval() {
     );
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = create_model_provider(
-        config.model_provider.clone(),
-        turn_context.auth_manager.clone(),
+    turn_context.set_model_provider(
+        config.model_provider_id.clone(),
+        create_model_provider(
+            config.model_provider.clone(),
+            turn_context.auth_manager.clone(),
+        ),
     );
 
     let session = Arc::new(session);
@@ -3108,9 +3111,12 @@ async fn strict_auto_review_forces_guardian_for_mcp_policy_skip() {
     );
     session.services.models_manager = models_manager;
     turn_context.config = Arc::clone(&config);
-    turn_context.provider = create_model_provider(
-        config.model_provider.clone(),
-        turn_context.auth_manager.clone(),
+    turn_context.set_model_provider(
+        config.model_provider_id.clone(),
+        create_model_provider(
+            config.model_provider.clone(),
+            turn_context.auth_manager.clone(),
+        ),
     );
 
     let session = Arc::new(session);
@@ -3468,9 +3474,12 @@ async fn approve_mode_skips_guardian_in_every_permission_mode() {
         );
         session.services.models_manager = models_manager;
         turn_context.config = Arc::clone(&config);
-        turn_context.provider = create_model_provider(
-            config.model_provider.clone(),
-            turn_context.auth_manager.clone(),
+        turn_context.set_model_provider(
+            config.model_provider_id.clone(),
+            create_model_provider(
+                config.model_provider.clone(),
+                turn_context.auth_manager.clone(),
+            ),
         );
 
         let session = Arc::new(session);

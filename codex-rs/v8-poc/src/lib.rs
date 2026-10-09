@@ -36,6 +36,7 @@ mod tests {
         INIT.call_once(|| {
             v8::V8::initialize_platform(v8::new_default_platform(0, false).make_shared());
             v8::V8::initialize();
+            drop(v8::new_default_allocator());
         });
     }
 

@@ -43,6 +43,7 @@ impl Handler {
             MessageDeliveryMode::TriggerTurn,
             args.target,
             args.message,
+            /*routing_prompt*/ None,
             analytics,
         )
         .await

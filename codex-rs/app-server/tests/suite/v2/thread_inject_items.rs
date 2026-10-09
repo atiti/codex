@@ -244,7 +244,7 @@ async fn thread_inject_items_adds_raw_response_items_to_thread_history(
         .collect::<Vec<_>>();
     assert_eq!(
         persisted_additional_context,
-        vec![("developer", Some(true)), ("user", None)]
+        vec![("developer", Some(true)), ("user", Some(false))]
     );
 
     let injected_value = serde_json::to_value(&injected_item)?;
@@ -598,7 +598,13 @@ async fn thread_inject_items_adds_raw_response_items_after_a_turn() -> Result<()
             _ => None,
         })
         .context("injected developer item should be persisted")?;
-    assert_eq!(persisted_developer_item.metadata, None);
+    assert_eq!(
+        serde_json::to_value(&persisted_developer_item.metadata)?,
+        json!({
+            "model_provider_id": "mock_provider",
+            "client_authored": false,
+        })
+    );
 
     let second_turn_req = mcp
         .send_turn_start_request(TurnStartParams {

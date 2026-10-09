@@ -183,8 +183,12 @@ async fn first_turn_model_change_appends_model_instructions_developer_message(
     let server = MockServer::start().await;
     let resp_mock = mount_sse_once(&server, sse_completed("resp-1")).await;
 
-    let mut builder =
-        test_codex().with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture);
+    let mut builder = test_codex()
+        .with_model("gpt-5.6-terra")
+        .with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture)
+        .with_config(|config| {
+            config.update_plan_enabled = true;
+        });
     let test = builder.build_with_auto_env(&server).await?;
     let next_model = "gpt-5.5";
 
@@ -206,11 +210,16 @@ async fn first_turn_model_change_appends_model_instructions_developer_message(
         .into_iter()
         .find(|model| model.slug == next_model)
         .expect("expected target model in bundled catalog");
-    let expected_instructions = render_model_instructions(&expected_model);
+    let expected_instructions = render_model_instructions(&expected_model).replacen(
+        "You are Codex, a coding agent based on GPT-5. ",
+        "",
+        1,
+    );
     assert!(
         developer_texts.iter().any(|text| {
             text.contains("<model_switch>") && text.contains(&expected_instructions)
-        })
+        }),
+        "model switch should preserve the target model guidance after neutralizing harness identity"
     );
     assert!(
         developer_texts
@@ -304,8 +313,12 @@ async fn model_change_appends_model_instructions_developer_message() -> Result<(
     )
     .await;
 
-    let mut builder =
-        test_codex().with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture);
+    let mut builder = test_codex()
+        .with_model("gpt-5.6-terra")
+        .with_model_info_override("gpt-5.6-terra", configure_model_switching_fixture)
+        .with_config(|config| {
+            config.update_plan_enabled = true;
+        });
     let test = builder.build(&server).await?;
     let next_model = "gpt-5.5";
 

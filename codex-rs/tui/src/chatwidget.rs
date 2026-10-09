@@ -400,6 +400,7 @@ use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;
 use self::turn_lifecycle::TurnLifecycleState;
+pub(crate) use self::turn_runtime::parse_model_route;
 mod usage;
 mod user_messages;
 mod working_directory;
@@ -581,6 +582,10 @@ pub(crate) struct ChatWidget {
     security_setup_identity: Option<crate::security_setup::Identity>,
     security_setup_dismissed: bool,
     automatic_model_switch_state: backend_banners::AutomaticModelSwitchState,
+    /// Accepted per-turn route shown in status surfaces without mutating thread defaults.
+    routed_turn_model: Option<String>,
+    routed_turn_model_provider: Option<String>,
+    routed_turn_reasoning_effort: Option<ReasoningEffortConfig>,
     backend_banner_notice_model: Option<String>,
     // Remember the account's Reserve entry notice across chats and transient banner refreshes.
     luna_reserve_notice_account_id: Option<String>,

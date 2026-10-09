@@ -369,8 +369,10 @@ async fn responses_websocket_omits_unprefixed_item_ids_without_mutating_prompt()
     ]]])
     .await;
 
+    let mut provider = websocket_provider(&server);
+    provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
     let harness = websocket_harness_with_provider_options(
-        websocket_provider(&server),
+        provider,
         /*runtime_metrics_enabled*/ false,
         /*concurrent_reasoning_summaries_enabled*/ false,
         /*enabled_features*/ &[],
@@ -2026,7 +2028,15 @@ async fn responses_lite_websocket_uses_incremental_create_on_prefix() {
     ]])
     .await;
 
-    let mut harness = websocket_harness(&server).await;
+    let mut provider = websocket_provider(&server);
+    provider.name = ModelProviderInfo::create_openai_provider(/*base_url*/ None).name;
+    let mut harness = websocket_harness_with_provider_options(
+        provider,
+        /*runtime_metrics_enabled*/ false,
+        /*concurrent_reasoning_summaries_enabled*/ false,
+        /*enabled_features*/ &[],
+    )
+    .await;
     harness.model_info.use_responses_lite = true;
     let mut client_session = harness.client.new_session();
     let mut initial_item = message_item("hello");
@@ -2666,6 +2676,8 @@ fn websocket_provider_with_connect_timeout(
         supports_standalone_web_search: false,
         capabilities: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     }
 }
 

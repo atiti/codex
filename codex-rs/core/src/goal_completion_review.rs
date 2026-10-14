@@ -5,7 +5,11 @@ use std::time::Duration;
 
 use codex_features::Feature;
 use codex_protocol::config_types::WebSearchMode;
+use codex_protocol::items::AgentMessageContent;
+use codex_protocol::items::AgentMessageItem;
+use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructionsProvenance;
+use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
@@ -14,9 +18,42 @@ use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
 
 use crate::codex_delegate::run_codex_thread_one_shot;
+use crate::codex_thread::CodexThread;
 use crate::config::Constrained;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+
+impl CodexThread {
+    /// Publish bounded reviewer activity through the normal client and rollout lifecycle.
+    /// These display items do not add messages to the model's conversation history.
+    pub async fn report_goal_completion_review(&self, turn_id: &str, mut message: String) {
+        let ctx = {
+            let active = self.session.active_turn.lock().await;
+            let Some(task) = active.as_ref().and_then(|active| active.task.as_ref()) else {
+                return;
+            };
+            if task.turn_context.sub_id != turn_id || task.cancellation_token.is_cancelled() {
+                return;
+            }
+            Arc::clone(&task.turn_context)
+        };
+        let mut end = message.len().min(1_600);
+        while !message.is_char_boundary(end) {
+            end -= 1;
+        }
+        message.truncate(end);
+        let item = TurnItem::AgentMessage(AgentMessageItem {
+            id: format!("goal-review-{}", uuid::Uuid::new_v4()),
+            content: vec![AgentMessageContent::Text { text: message }],
+            phase: Some(MessagePhase::Commentary),
+            memory_citation: None,
+            delivery: None,
+            questions: None,
+        });
+        self.session.emit_turn_item_started(&ctx, &item).await;
+        self.session.emit_turn_item_completed(&ctx, item).await;
+    }
+}
 
 const REVIEW_INSTRUCTIONS: &str = "Independently audit whether the user's goal is complete. Use available read-only evidence. Never assume a claim or prior message proves an outcome. Return only a JSON object with decision (complete, continue, or blocked) and reason (a concrete, short explanation). A missing check, inaccessible evidence, or uncertainty means continue. Blocked requires an exact external dependency.";
 

@@ -347,7 +347,8 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   clippy:
-    timeout-minutes: 120
+    # Native Mac builds fall back to local compilation without BuildBuddy.
+    timeout-minutes: ${{ matrix.os == 'macos-15' && 180 || 120 }}
     strategy:
       fail-fast: false
       matrix:

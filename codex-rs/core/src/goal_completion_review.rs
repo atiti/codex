@@ -12,7 +12,11 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::protocol::AskForApproval;
+use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::HasLegacyEvent;
+use codex_protocol::protocol::ItemCompletedEvent;
+use codex_protocol::protocol::ItemStartedEvent;
 use codex_protocol::protocol::SubAgentSource;
 use codex_protocol::user_input::UserInput;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +26,7 @@ use crate::codex_thread::CodexThread;
 use crate::config::Constrained;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
+use crate::turn_timing::now_unix_timestamp_ms;
 
 impl CodexThread {
     /// Publish bounded reviewer activity through the normal client and rollout lifecycle.
@@ -50,8 +55,39 @@ impl CodexThread {
             delivery: None,
             questions: None,
         });
-        self.session.emit_turn_item_started(&ctx, &item).await;
-        self.session.emit_turn_item_completed(&ctx, item).await;
+        let started_at_ms = now_unix_timestamp_ms();
+        let started = EventMsg::ItemStarted(ItemStartedEvent {
+            thread_id: self.session.thread_id,
+            turn_id: ctx.sub_id.clone(),
+            item: item.clone(),
+            started_at_ms,
+        });
+        let completed = EventMsg::ItemCompleted(ItemCompletedEvent {
+            thread_id: self.session.thread_id,
+            turn_id: ctx.sub_id.clone(),
+            item,
+            started_at_ms: Some(started_at_ms),
+            completed_at_ms: now_unix_timestamp_ms(),
+        });
+        // Display-only events must bypass progress accounting and realtime handoffs.
+        // Preserve the legacy fanout so older rollouts retain the same visible history.
+        for message in [started, completed] {
+            let legacy = message.as_legacy_events(/*show_raw_agent_reasoning*/ false);
+            self.session
+                .send_event_raw(Event {
+                    id: ctx.sub_id.clone(),
+                    msg: message,
+                })
+                .await;
+            for message in legacy {
+                self.session
+                    .send_event_raw(Event {
+                        id: ctx.sub_id.clone(),
+                        msg: message,
+                    })
+                    .await;
+            }
+        }
     }
 }
 

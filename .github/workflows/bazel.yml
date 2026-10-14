@@ -98,6 +98,13 @@ jobs:
             -//third_party/v8:all
             -//codex-rs/v8-poc:v8-poc-unit-tests
           )
+          if [[ "${{ inputs.windows-ci }}" != "true" ]]; then
+            # Windows execution through Wine belongs to the optional Windows coverage.
+            bazel_targets+=(
+              -//codex-rs/core:core-all-wine-exec-test
+              -//codex-rs/app-server:app-server-all-wine-exec-test
+            )
+          fi
 
           bazel_wrapper_args=(
             --print-failed-action-summary

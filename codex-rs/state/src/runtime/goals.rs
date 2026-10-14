@@ -1181,6 +1181,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn completion_review_persists_across_store_reads_and_stays_with_its_goal() {
+        let runtime = test_runtime().await;
+        let thread_id = test_thread_id();
+        upsert_test_thread(&runtime, thread_id).await;
+        let goal = runtime
+            .thread_goals()
+            .replace_thread_goal(
+                thread_id,
+                "ship the release",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("goal replacement should succeed");
+        let store = runtime.thread_goals();
+        let first = store
+            .record_completion_review(thread_id, &goal.goal_id, "continue", "missing tag")
+            .await
+            .expect("review should persist")
+            .expect("active goal should be reviewed");
+        assert_eq!(
+            GoalCompletionReview {
+                attempts: 1,
+                repeated_reason_count: 1,
+                decision: "continue".into(),
+                reason: "missing tag".into(),
+            },
+            first
+        );
+        let second = store
+            .record_completion_review(thread_id, &goal.goal_id, "continue", "missing tag")
+            .await
+            .expect("second review should persist")
+            .expect("active goal should be reviewed");
+        assert_eq!(
+            GoalCompletionReview {
+                attempts: 2,
+                repeated_reason_count: 2,
+                ..first
+            },
+            second
+        );
+        assert_eq!(
+            store
+                .get_completion_review(thread_id, &goal.goal_id)
+                .await
+                .expect("review should be readable"),
+            Some(second)
+        );
+        assert!(
+            store
+                .record_completion_review(thread_id, "different-goal", "complete", "done")
+                .await
+                .expect("stale review should be checked")
+                .is_none()
+        );
+        let next = store
+            .replace_thread_goal(
+                thread_id,
+                "ship the next release",
+                crate::ThreadGoalStatus::Active,
+                /*token_budget*/ None,
+            )
+            .await
+            .expect("replacement should succeed");
+        assert_eq!(
+            store
+                .get_completion_review(thread_id, &next.goal_id)
+                .await
+                .expect("new goal review should be readable"),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn usage_accounting_updates_active_goals_and_accounts_budget_limited_in_flight_usage() {
         let runtime = test_runtime().await;
         let thread_id = test_thread_id();
@@ -1724,5 +1799,82 @@ mod tests {
                 .await
                 .expect("goal read should succeed")
         );
+    }
+}
+
+/// Bounded, persisted assessment of a model's attempt to complete a goal.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GoalCompletionReview {
+    pub attempts: i64,
+    pub repeated_reason_count: i64,
+    pub decision: String,
+    pub reason: String,
+}
+
+impl GoalStore {
+    pub async fn get_completion_review(
+        &self,
+        thread_id: ThreadId,
+        goal_id: &str,
+    ) -> anyhow::Result<Option<GoalCompletionReview>> {
+        let row = sqlx::query(
+            "SELECT attempts, repeated_reason_count, decision, reason FROM thread_goal_completion_reviews WHERE thread_id = ? AND goal_id = ?",
+        )
+        .bind(thread_id.to_string())
+        .bind(goal_id)
+        .fetch_optional(self.pool.as_ref())
+        .await?;
+        row.map(|row| {
+            Ok(GoalCompletionReview {
+                attempts: row.try_get("attempts")?,
+                repeated_reason_count: row.try_get("repeated_reason_count")?,
+                decision: row.try_get("decision")?,
+                reason: row.try_get("reason")?,
+            })
+        })
+        .transpose()
+    }
+
+    pub async fn record_completion_review(
+        &self,
+        thread_id: ThreadId,
+        goal_id: &str,
+        decision: &str,
+        reason: &str,
+    ) -> anyhow::Result<Option<GoalCompletionReview>> {
+        let current = self.get_thread_goal(thread_id).await?;
+        if current.as_ref().is_none_or(|goal| {
+            goal.goal_id != goal_id || goal.status != crate::ThreadGoalStatus::Active
+        }) {
+            return Ok(None);
+        }
+        let previous = self.get_completion_review(thread_id, goal_id).await?;
+        let attempts = previous
+            .as_ref()
+            .map_or(1, |review| review.attempts.saturating_add(1));
+        let repeated_reason_count = previous.as_ref().map_or(1, |review| {
+            if review.decision == decision && review.reason == reason {
+                review.repeated_reason_count.saturating_add(1)
+            } else {
+                1
+            }
+        });
+        sqlx::query("INSERT INTO thread_goal_completion_reviews (thread_id, goal_id, attempts, repeated_reason_count, decision, reason, reviewed_at_ms) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(thread_id, goal_id) DO UPDATE SET attempts = excluded.attempts, repeated_reason_count = excluded.repeated_reason_count, decision = excluded.decision, reason = excluded.reason, reviewed_at_ms = excluded.reviewed_at_ms")
+            .bind(thread_id.to_string())
+            .bind(goal_id)
+            .bind(attempts)
+            .bind(repeated_reason_count)
+            .bind(decision)
+            .bind(reason)
+            .bind(datetime_to_epoch_millis(Utc::now()))
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(Some(GoalCompletionReview {
+            attempts,
+            repeated_reason_count,
+            decision: decision.to_string(),
+            reason: reason.to_string(),
+        }))
     }
 }

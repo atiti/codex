@@ -35,6 +35,10 @@ def test_private_goal_operation_coalesces_runtime_continuations(tmp_path) -> Non
                 ]
             )
         )
+        harness.responses.enqueue_assistant_message(
+            '{"decision":"complete","reason":"Benchmark coverage verified."}',
+            response_id="goal-review",
+        )
         harness.responses.enqueue_sse(
             sse(
                 [
@@ -60,7 +64,7 @@ def test_private_goal_operation_coalesces_runtime_continuations(tmp_path) -> Non
             events = list(stream)
             result = _collect_turn_result(iter(events), turn_id=turn_id)
             routes = codex._client._router._goal_operations.copy()  # noqa: SLF001
-            requests = harness.responses.wait_for_requests(3)
+            requests = harness.responses.wait_for_requests(4)
 
     lifecycle = [event.method for event in events if event.method.startswith("turn/")]
     routed_ids = [
@@ -83,8 +87,15 @@ def test_private_goal_operation_coalesces_runtime_continuations(tmp_path) -> Non
         "lifecycle": ["turn/started", "turn/completed"],
         "routed_ids": [turn_id] * len(routed_ids),
         "result": (turn_id, TurnStatus.completed, "Goal complete."),
-        "messages": ["Initial pass complete.", "Goal complete."],
-        "request_count": 3,
+        "messages": [
+            "Initial pass complete.",
+            "Review agent · checking completion (attempt 1).\n"
+            "Independently verifying the goal before it can be marked complete.",
+            "Review agent · complete (attempt 1).\n"
+            "Benchmark coverage verified.\nCompletion check passed.",
+            "Goal complete.",
+        ],
+        "request_count": 4,
         "objective_reached_model": True,
         "routes_after_completion": {},
     }

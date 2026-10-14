@@ -475,9 +475,17 @@ impl GoalRuntimeHandle {
             goal_id: goal.goal_id.clone(),
             objective: goal.objective.clone(),
         };
+        let review = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_completion_review(self.thread_id(), &goal.goal_id)
+            .await
+            .map_err(|err| err.to_string())?;
         let item = continuation_steering_item(
             &protocol_goal_from_state(goal),
             thread.config().await.update_plan_enabled,
+            review.as_ref(),
         );
 
         match thread

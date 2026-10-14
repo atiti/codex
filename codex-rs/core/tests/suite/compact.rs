@@ -5390,6 +5390,8 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model_info_override(previous_model, |_| {})
         .with_config(move |config| {
+            config.base_instructions =
+                Some(codex_models_manager::model_info::BASE_INSTRUCTIONS.to_string());
             config.update_plan_enabled = true;
             config.model_provider = model_provider;
             set_test_compact_prompt(config);

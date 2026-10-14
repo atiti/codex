@@ -6310,6 +6310,8 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         RolloutItem::TurnContext(first_turn_context),
         RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(first_settings)),
         RolloutItem::Compacted(second),
+        RolloutItem::WorldState(second_world_state),
+        RolloutItem::TurnContext(second_turn_context),
         RolloutItem::EventMsg(EventMsg::ThreadSettingsApplied(second_settings)),
     ] = compaction_items.as_slice()
     else {
@@ -6342,6 +6344,8 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         &WorldStateItem::full(world_state.render_full().0.into_object())
     );
     assert_eq!(first_turn_context, &turn_context_baseline);
+    assert_eq!(second_world_state, first_world_state);
+    assert_eq!(second_turn_context, &turn_context_baseline);
     assert_eq!(first_settings, &expected_settings);
     assert_eq!(second_settings, &expected_settings);
     let compacted = first;

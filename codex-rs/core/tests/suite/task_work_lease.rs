@@ -69,7 +69,7 @@ async fn expired_claim_requires_recheck_before_tools(style: &'static str) -> Res
         ],
     )
     .await;
-    let test = test_codex()
+    let mut builder = test_codex()
         .with_model("test-gpt-5.1-codex")
         .with_config(move |config| {
             config.update_plan_enabled = true;
@@ -86,10 +86,17 @@ async fn expired_claim_requires_recheck_before_tools(style: &'static str) -> Res
                     .features
                     .enable(Feature::CodeModeHost)
                     .expect("enable code mode host");
+                config
+                    .features
+                    .enable(Feature::ExecutedToolCallMetadata)
+                    .expect("enable executed tool call metadata");
             }
-        })
-        .build_with_auto_env(&server)
-        .await?;
+        });
+    if style == "exec" {
+        builder = builder
+            .with_code_mode_host_program(codex_utils_cargo_bin::cargo_bin("codex-code-mode-host")?);
+    }
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn("Start").await?;
     let db = test.codex.state_db().expect("persistent state");
     assert!(
@@ -97,10 +104,10 @@ async fn expired_claim_requires_recheck_before_tools(style: &'static str) -> Res
             .await?
             .is_empty()
     );
-    let pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new().filename(db.sqlite().state_db_path()),
-    )
-    .await?;
+    let pool = db
+        .sqlite()
+        .open_read_write_pool(&db.sqlite().state_db_path())
+        .await?;
     sqlx::query("UPDATE task_work_claims SET expires_at = unixepoch() - 1")
         .execute(&pool)
         .await?;

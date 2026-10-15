@@ -65,6 +65,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Reclaim unused hosted Linux tooling
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h
+
       - name: Prepare Bazel CI
         id: prepare_bazel
         uses: ./.github/actions/prepare-bazel-ci
@@ -112,6 +119,7 @@ jobs:
           )
           bazel_test_args=(
             test
+            --test_env=RUST_TEST_THREADS=2
             --test_tag_filters=-argument-comment-lint
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}

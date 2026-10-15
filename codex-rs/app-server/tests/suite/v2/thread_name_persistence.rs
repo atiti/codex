@@ -189,6 +189,13 @@ async fn task_titles_evolve_and_manual_rename_survives_later_turns() -> Result<(
         .await?;
     let ThreadStartResponse { thread: early, .. } =
         timeout(READ_TIMEOUT, app.read_response(start)).await??;
+    let seed = app
+        .send_thread_set_name_request(ThreadSetNameParams {
+            thread_id: early.id.clone(),
+            name: "Early seed".into(),
+        })
+        .await?;
+    let _: ThreadSetNameResponse = timeout(READ_TIMEOUT, app.read_response(seed)).await??;
     let early_id = codex_protocol::ThreadId::from_string(&early.id)?;
     db.update_task_work(early_id, &work).await?;
     let rename = app
@@ -204,6 +211,23 @@ async fn task_titles_evolve_and_manual_rename_survives_later_turns() -> Result<(
     )
     .await?;
     sqlx::query("CREATE TRIGGER fail_title_pin BEFORE UPDATE OF title_locked ON task_work BEGIN SELECT RAISE(FAIL, 'simulated checkpoint failure'); END").execute(&pool).await?;
+    let same = app
+        .send_thread_set_name_request(ThreadSetNameParams {
+            thread_id: id.clone(),
+            name: "Fix current task".into(),
+        })
+        .await?;
+    let error = timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_error_message(codex_app_server_protocol::RequestId::Integer(same)),
+    )
+    .await??;
+    assert!(
+        error
+            .error
+            .message
+            .contains("automatic title updates could not be disabled")
+    );
     let rename = app
         .send_thread_set_name_request(ThreadSetNameParams {
             thread_id: id.clone(),

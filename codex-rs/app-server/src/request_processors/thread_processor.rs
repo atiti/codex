@@ -1867,6 +1867,13 @@ impl ThreadRequestProcessor {
         } else {
             None
         };
+        let title_state = if let Some(db) = &self.state_db {
+            db.task_work_title(thread_id).await.map_err(|err| {
+                internal_error(format!("could not read automatic title state: {err}"))
+            })?
+        } else {
+            None
+        };
         self.thread_manager
             .update_thread_metadata(
                 thread_id,
@@ -1881,6 +1888,14 @@ impl ThreadRequestProcessor {
         if let Some(db) = &self.state_db
             && let Err(error) = db.lock_task_work_title(thread_id).await
         {
+            if title_state.as_ref().is_some_and(|state| {
+                state.automatic_name.as_deref() == Some(&name)
+                    || state.pending_name.as_deref() == Some(&name)
+            }) {
+                return Err(internal_error(format!(
+                    "task name is saved, but automatic title updates could not be disabled; retry the rename: {error}"
+                )));
+            }
             // The persisted name also differs from the automatic checkpoint, so sync
             // preserves it even if this best-effort pin cannot be stored immediately.
             tracing::warn!(%error, %thread_id, "could not checkpoint manual task title");

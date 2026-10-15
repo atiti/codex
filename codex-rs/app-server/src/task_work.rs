@@ -46,6 +46,8 @@ pub(crate) async fn sync_title(
         return Ok(());
     }
     let title = state.title;
+    let notify =
+        metadata.name.as_deref() != Some(&title) || state.pending_name.as_deref() == Some(&title);
     if metadata.name.as_deref() != Some(&title) {
         db.prepare_task_work_title(thread_id, &title).await?;
         manager
@@ -61,9 +63,9 @@ pub(crate) async fn sync_title(
     }
     db.remember_task_work_title(thread_id, &title).await?;
     drop(title_guard);
-    if metadata.name.as_deref() != Some(&title) {
+    if notify {
         outgoing
-            .send_server_notification(ServerNotification::ThreadNameUpdated(
+            .send_global_server_notification(ServerNotification::ThreadNameUpdated(
                 ThreadNameUpdatedNotification {
                     thread_id: thread_id.to_string(),
                     thread_name: Some(title.clone()),

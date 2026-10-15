@@ -104,6 +104,50 @@ async fn named_empty_paginated_thread_resumes_after_restart() -> Result<()> {
 }
 
 #[tokio::test]
+async fn naming_without_task_awareness_does_not_require_task_title_lock() -> Result<()> {
+    use codex_app_server_protocol::ThreadReadParams;
+    use codex_app_server_protocol::ThreadReadResponse;
+    use codex_features::Feature;
+    let server = create_mock_responses_server_repeating_assistant("Done").await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .disable_feature(Feature::TaskAwareness)
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized()
+        .await?;
+    let start = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } =
+        timeout(READ_TIMEOUT, app.read_response(start)).await??;
+    std::fs::create_dir(home.path().join(".task-title.lock"))?;
+
+    let name = "Scheduled task";
+    let rename = app
+        .send_thread_set_name_request(ThreadSetNameParams {
+            thread_id: thread.id.clone(),
+            name: name.to_string(),
+        })
+        .await?;
+    let _: ThreadSetNameResponse = timeout(READ_TIMEOUT, app.read_response(rename)).await??;
+    let read = app
+        .send_thread_read_request(ThreadReadParams {
+            thread_id: thread.id,
+            include_turns: false,
+        })
+        .await?;
+    let ThreadReadResponse { thread, .. } =
+        timeout(READ_TIMEOUT, app.read_response(read)).await??;
+    assert_eq!(thread.name.as_deref(), Some(name));
+    Ok(())
+}
+
+#[tokio::test]
 async fn task_titles_evolve_and_manual_rename_survives_later_turns() -> Result<()> {
     use codex_app_server_protocol::ThreadReadParams;
     use codex_app_server_protocol::ThreadReadResponse;

@@ -1860,20 +1860,36 @@ impl ThreadRequestProcessor {
         };
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let _task_title_lock = if let Some(db) = &self.state_db {
-            Some(db.task_work_title_guard().await.map_err(|err| {
-                internal_error(format!("could not acquire task title lock: {err}"))
-            })?)
-        } else {
-            None
-        };
-        let title_state = if let Some(db) = &self.state_db {
-            db.task_work_title(thread_id).await.map_err(|err| {
-                internal_error(format!("could not read automatic title state: {err}"))
-            })?
-        } else {
-            None
-        };
+        let task_awareness_enabled =
+            if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
+                thread
+                    .config()
+                    .await
+                    .features
+                    .get()
+                    .enabled(codex_features::Feature::TaskAwareness)
+            } else {
+                false
+            };
+        let mut _task_title_lock: Option<std::fs::File> = None;
+        let mut title_state = None;
+        if let Some(db) = &self.state_db {
+            if task_awareness_enabled {
+                _task_title_lock = Some(db.task_work_title_guard().await.map_err(|err| {
+                    internal_error(format!("could not acquire task title lock: {err}"))
+                })?);
+                title_state = db.task_work_title(thread_id).await.map_err(|err| {
+                    internal_error(format!("could not read automatic title state: {err}"))
+                })?;
+            } else if matches!(db.task_work_title(thread_id).await, Ok(Some(_))) {
+                _task_title_lock = Some(db.task_work_title_guard().await.map_err(|err| {
+                    internal_error(format!("could not acquire task title lock: {err}"))
+                })?);
+                title_state = db.task_work_title(thread_id).await.map_err(|err| {
+                    internal_error(format!("could not read automatic title state: {err}"))
+                })?;
+            }
+        }
         self.thread_manager
             .update_thread_metadata(
                 thread_id,
@@ -1886,6 +1902,7 @@ impl ThreadRequestProcessor {
             .await
             .map_err(|err| core_thread_write_error("set thread name", err))?;
         if let Some(db) = &self.state_db
+            && _task_title_lock.is_some()
             && let Err(error) = db.lock_task_work_title(thread_id).await
         {
             if title_state.as_ref().is_some_and(|state| {

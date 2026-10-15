@@ -42,6 +42,22 @@ fn captured(body: &Value) -> String {
 }
 
 #[test]
+fn complete_neutralized_catalog_instructions_are_recognized() {
+    let prompt = codex_models_manager::bundled_models_response()
+        .expect("catalog")
+        .models
+        .into_iter()
+        .filter_map(|model| model.model_messages?.instructions_template)
+        .find(|prompt| prompt.starts_with("You are Codex,"))
+        .expect("identity-bearing catalog prompt");
+    let neutral = super::normalize::neutralize_bundled_model_instructions(&prompt);
+    assert!(super::normalize::is_bundled_model_instructions(&neutral));
+    assert!(!super::normalize::is_bundled_model_instructions(&format!(
+        "{neutral}\nCustom instruction"
+    )));
+}
+
+#[test]
 fn lite_tool_catalog_and_code_calls_are_visible() {
     let rendered = render_test_items(
         &[

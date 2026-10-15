@@ -1290,6 +1290,49 @@ fn parent_review_messages(model: &mut ModelInfo) -> &mut AutoReviewMessages {
         })
 }
 
+#[test]
+fn provider_context_window_is_independent_of_shared_model_slug() {
+    use codex_model_provider_info::ModelProviderCapabilities;
+    use codex_model_provider_info::ModelProviderInfo;
+
+    let (mut account, _) = safety_models();
+    account.context_window = Some(272_000);
+    account.max_context_window = Some(872_000);
+    account.auto_compact_token_limit = Some(250_000);
+    let mut routed = account.clone();
+    let provider = ModelProviderInfo {
+        capabilities: Some(ModelProviderCapabilities {
+            context_windows: [(account.slug.clone(), 872_000)].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    apply_provider_context_window(&mut routed, &provider);
+    assert_eq!(routed.slug, account.slug);
+    assert_eq!(routed.context_window, Some(872_000));
+    assert_eq!(routed.max_context_window, Some(872_000));
+    assert_eq!(routed.auto_compact_token_limit, None);
+    apply_provider_context_window(&mut account, &ModelProviderInfo::default());
+    assert_eq!(account.context_window, Some(272_000));
+    assert_eq!(account.auto_compact_token_limit, Some(250_000));
+}
+
+#[test_case(0; "zero")]
+#[test_case(-1; "negative")]
+fn invalid_provider_context_window_preserves_model_metadata(window: i64) {
+    let (mut model, _) = safety_models();
+    let original = model.clone();
+    let provider = codex_model_provider_info::ModelProviderInfo {
+        capabilities: Some(codex_model_provider_info::ModelProviderCapabilities {
+            context_windows: [(model.slug.clone(), window)].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    apply_provider_context_window(&mut model, &provider);
+    assert_eq!(model, original);
+}
+
 #[test_case(None; "native_tools")]
 #[test_case(Some(ToolCompatibility::FunctionsAndApplyPatch); "function_tools")]
 fn provider_tool_compatibility_preserves_admitted_safety_authority(

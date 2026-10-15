@@ -758,6 +758,7 @@ impl Session {
                 Some(tool_compatibility),
             );
         }
+        step_activation::apply_provider_context_window(&mut model_info, &config.model_provider);
         let auth = auth_manager.auth_cached();
         // Forked subagents keep their parent's activation with the copied history.
         // Fresh children restore configured preferences before applying startup defaults.

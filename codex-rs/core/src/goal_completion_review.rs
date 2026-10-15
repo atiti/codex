@@ -4,6 +4,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use codex_features::Feature;
+use codex_history::InitialHistory;
+use codex_history::RolloutItem;
 use codex_protocol::config_types::WebSearchMode;
 use codex_protocol::items::AgentMessageContent;
 use codex_protocol::items::AgentMessageItem;
@@ -11,6 +13,7 @@ use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -24,6 +27,8 @@ use tokio_util::sync::CancellationToken;
 use crate::codex_delegate::run_codex_thread_one_shot;
 use crate::codex_thread::CodexThread;
 use crate::config::Constrained;
+use crate::context::ContextualUserFragment;
+use crate::context::GoalCompletionReviewEvidence;
 use crate::session::session::Session;
 use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
@@ -97,8 +102,17 @@ pub(crate) async fn run(
     session: Arc<Session>,
     ctx: Arc<TurnContext>,
     cancellation_token: CancellationToken,
-    prompt: String,
+    goal_id: &str,
+    objective: &str,
+    history: &[ResponseItem],
 ) -> Result<String, String> {
+    let evidence =
+        GoalCompletionReviewEvidence::new(goal_id, objective, history).ok_or_else(|| {
+            "goal objective exceeds the safe completion review context limit".to_string()
+        })?;
+    let initial_history = Some(InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+        ContextualUserFragment::into(evidence).into(),
+    )]));
     let mut config = ctx.config.as_ref().clone();
     let model = ctx.capture_current_model_info().slug.clone();
     let provider_id = ctx.model_provider_id();
@@ -129,7 +143,7 @@ pub(crate) async fn run(
         Arc::clone(&session.services.auth_manager),
         Arc::clone(&session.services.models_manager),
         vec![UserInput::Text {
-            text: prompt,
+            text: "Independently verify whether the supplied goal is complete.".to_string(),
             text_elements: Vec::new(),
         }],
         session,
@@ -137,7 +151,7 @@ pub(crate) async fn run(
         review_token.clone(),
         SubAgentSource::Review,
         /*final_output_json_schema*/ None,
-        /*initial_history*/ None,
+        initial_history,
         codex_extension_api::SessionIsolation::Isolated,
     )
     .await

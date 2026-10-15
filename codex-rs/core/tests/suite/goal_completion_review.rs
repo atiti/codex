@@ -62,7 +62,7 @@ async fn goal_reviewer_uses_active_provider_with_isolated_read_only_context() ->
     .await;
     let result = test
         .codex
-        .review_goal_completion(&turn_id, "independent review evidence".into())
+        .review_goal_completion(&turn_id, "goal-1", "independent review evidence", &[])
         .await
         .map_err(anyhow::Error::msg)?;
     assert_eq!(
@@ -85,6 +85,18 @@ async fn goal_reviewer_uses_active_provider_with_isolated_read_only_context() ->
     );
     assert!(request.instructions_text().contains("Independently audit"));
     assert!(!request.body_contains_text("root work stays active"));
+    let body = request.body_json();
+    assert!(body["tools"].is_array(), "review tools");
+    let tool_surface = body["tools"].to_string();
+    assert!(!tool_surface.contains("web_search"));
+    assert!(!tool_surface.contains("mcp__"));
+    assert!(!tool_surface.contains("agentroute_collaboration"));
+    assert!(
+        request
+            .message_input_texts("developer")
+            .join("\n")
+            .contains("sandbox_mode` is `read-only`")
+    );
     assert!(
         request
             .message_input_texts("user")

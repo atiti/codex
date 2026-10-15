@@ -4,14 +4,10 @@
 #[path = "../src/completion_review.rs"]
 mod completion_review;
 
-use codex_protocol::ThreadId;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_state::ThreadGoal;
-use codex_state::ThreadGoalStatus;
 use pretty_assertions::assert_eq;
 
 #[test]
+<<<<<<< HEAD
 fn reviewer_prompt_is_bounded_and_includes_recent_evidence() {
     let goal = ThreadGoal {
         thread_id: ThreadId::new(),
@@ -87,6 +83,8 @@ fn multibyte_history_and_objective_stay_within_byte_cap() {
 }
 
 #[test]
+=======
+>>>>>>> c849891852 (fix(goals): bound completion review evidence)
 fn invalid_or_unavailable_review_never_completes() {
     for raw in [
         Err("timeout".to_string()),

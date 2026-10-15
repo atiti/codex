@@ -1,14 +1,10 @@
 //! Bounded evidence passed to the independent Goal completion reviewer.
 
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ResponseItem;
-use codex_state::ThreadGoal;
 use serde::Deserialize;
 
-const MAX_HISTORY_BYTES: usize = 8_000;
-const MAX_HISTORY_MESSAGES: usize = 24;
 const MAX_REASON_BYTES: usize = 1_000;
 
+<<<<<<< HEAD
 pub(crate) fn review_prompt(goal: &ThreadGoal, history: &[ResponseItem]) -> String {
     let mut evidence = Vec::new();
     let mut remaining = MAX_HISTORY_BYTES;
@@ -56,6 +52,8 @@ pub(crate) fn review_prompt(goal: &ThreadGoal, history: &[ResponseItem]) -> Stri
     )
 }
 
+=======
+>>>>>>> c849891852 (fix(goals): bound completion review evidence)
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ReviewDecision {

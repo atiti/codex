@@ -3570,6 +3570,7 @@ dependencies = [
  "codex-state",
  "codex-tools",
  "codex-utils-absolute-path",
+ "codex-utils-string",
  "codex-utils-template",
  "pretty_assertions",
  "serde",

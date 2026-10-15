@@ -327,7 +327,9 @@ impl CodexThread {
     pub async fn review_goal_completion(
         &self,
         turn_id: &str,
-        prompt: String,
+        goal_id: &str,
+        objective: &str,
+        history: &[codex_protocol::models::ResponseItem],
     ) -> Result<String, String> {
         let (ctx, cancellation_token) = {
             let active = self.session.active_turn.lock().await;
@@ -343,8 +345,15 @@ impl CodexThread {
                 task.cancellation_token.clone(),
             )
         };
-        crate::goal_completion_review::run(self.session.clone(), ctx, cancellation_token, prompt)
-            .await
+        crate::goal_completion_review::run(
+            self.session.clone(),
+            ctx,
+            cancellation_token,
+            goal_id,
+            objective,
+            history,
+        )
+        .await
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {

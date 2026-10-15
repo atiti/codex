@@ -29,7 +29,6 @@ pub(crate) mod shell_spec;
 mod sleep;
 mod task_work;
 pub use task_work::TaskWorkHandler;
-pub(crate) use task_work::task_work_prompt_overlap;
 mod test_sync;
 pub(crate) mod test_sync_spec;
 mod tool_search;

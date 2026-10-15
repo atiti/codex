@@ -837,11 +837,6 @@ pub(crate) async fn inspect_pending_input(
             settings_updated: false,
         };
     };
-    let task_overlap = if matches!(pending_input_item, TurnInput::UserInput { .. }) {
-        crate::tools::handlers::task_work_prompt_overlap(sess, turn_context, &prompt).await
-    } else {
-        None
-    };
     let account_id = sess
         .services
         .auth_manager
@@ -886,21 +881,6 @@ pub(crate) async fn inspect_pending_input(
         hooks.run_user_prompt_submit(request),
     )
     .await;
-    if let Some(fragment) = task_overlap {
-        emit_agentroute_notice(
-            sess,
-            turn_context,
-            "task-overlap",
-            format!("◆ TASK OVERLAP\n{}", fragment.render()),
-        )
-        .await;
-        sess.record_conversation_items(
-            turn_context,
-            turn_context.model_info(),
-            &[ContextualUserFragment::into(fragment)],
-        )
-        .await;
-    }
     let reviewer_fallbacks = outcome
         .reviewer_fallback_profiles
         .iter()
@@ -965,7 +945,7 @@ pub(crate) async fn inspect_pending_input(
                     // Keep routing notices out of the warning channel. The TUI renders this
                     // display-only commentary as a dedicated colored transcript cell and updates
                     // its per-turn status bar; the model never receives it as prompt context.
-                    emit_agentroute_notice(sess, turn_context, "route", message).await;
+                    emit_agentroute_route_notice(sess, turn_context, message).await;
                 }
                 turn_context
                     .extension_data
@@ -978,10 +958,9 @@ pub(crate) async fn inspect_pending_input(
                     });
             }
             TurnSettingsUpdateOutcome::TargetUnavailable => {
-                emit_agentroute_notice(
+                emit_agentroute_route_notice(
                     sess,
                     turn_context,
-                    "route",
                     format!(
                         "◆ MODEL ROUTE NOT APPLIED · requested {requested_provider}/{requested_model} · current turn settings kept · active turn unavailable"
                     ),
@@ -998,10 +977,9 @@ pub(crate) async fn inspect_pending_input(
                     });
             }
             TurnSettingsUpdateOutcome::Rejected { reason } => {
-                emit_agentroute_notice(
+                emit_agentroute_route_notice(
                     sess,
                     turn_context,
-                    "route",
                     format!(
                         "◆ MODEL ROUTE NOT APPLIED · requested {requested_provider}/{requested_model} · current turn settings kept · {reason}"
                     ),
@@ -1022,13 +1000,12 @@ pub(crate) async fn inspect_pending_input(
     outcome
 }
 
-async fn emit_agentroute_notice(
+async fn emit_agentroute_route_notice(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
-    kind: &str,
     message: String,
 ) {
-    let item_id = format!("agentroute-{kind}-{}", turn_context.sub_id);
+    let item_id = format!("agentroute-route-{}", turn_context.sub_id);
     let agent_message = AgentMessageItem {
         id: item_id.clone(),
         content: vec![AgentMessageContent::Text {

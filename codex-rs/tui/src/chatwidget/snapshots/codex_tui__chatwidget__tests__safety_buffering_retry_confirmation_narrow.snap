@@ -5,7 +5,7 @@ expression: "render_bottom_popup(&chat, 40)"
 •   Stop this attempt and retry?
 
     This will stop the current
-    attempt and retry in a new        be
+    attempt and retry in a new
     thread. Any file changes or
     other actions already taken will
     remain.

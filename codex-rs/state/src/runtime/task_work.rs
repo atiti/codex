@@ -85,9 +85,18 @@ impl StateRuntime {
                 );
             }
             if let Some(path) = key.strip_prefix("file:") {
+                let path = std::path::Path::new(path);
                 anyhow::ensure!(
-                    std::path::Path::new(path).is_absolute(),
-                    "file claims require absolute paths"
+                    path.is_absolute()
+                        && !path
+                            .components()
+                            .any(|part| matches!(part, std::path::Component::ParentDir))
+                        && path
+                            .components()
+                            .collect::<std::path::PathBuf>()
+                            .as_os_str()
+                            == path.as_os_str(),
+                    "file claims require normalized absolute paths without . or .. components"
                 );
             }
         }

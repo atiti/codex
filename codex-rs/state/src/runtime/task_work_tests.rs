@@ -77,6 +77,25 @@ async fn claims_are_atomic_durable_expiring_and_released() -> anyhow::Result<()>
         ..completed
     };
     assert!(db.update_task_work(other, &oversized).await.is_err());
+    let file = home.join("main.rs");
+    let file_work = TaskWork {
+        title: "Edit one file".into(),
+        summary: String::new(),
+        status: TaskWorkStatus::Working,
+        resources: vec![format!("file:{}", file.display())],
+    };
+    assert!(db.update_task_work(owner, &file_work).await?.is_empty());
+    for alias in [
+        home.join("src").join("..").join("main.rs"),
+        home.join(".").join("main.rs"),
+    ] {
+        let alias_work = TaskWork {
+            resources: vec![format!("file:{}", alias.display())],
+            ..file_work.clone()
+        };
+        assert!(db.update_task_work(other, &alias_work).await.is_err());
+    }
+    assert_eq!(db.update_task_work(other, &file_work).await?.len(), 1);
     drop(reopened);
     drop(db);
     std::fs::remove_dir_all(home)?;

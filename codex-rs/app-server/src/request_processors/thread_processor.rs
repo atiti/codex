@@ -1860,34 +1860,30 @@ impl ThreadRequestProcessor {
         };
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
-        let task_awareness_enabled =
-            if let Ok(thread) = self.thread_manager.get_thread(thread_id).await {
-                thread
-                    .config()
-                    .await
-                    .features
-                    .get()
-                    .enabled(codex_features::Feature::TaskAwareness)
-            } else {
-                false
-            };
         let mut _task_title_lock: Option<std::fs::File> = None;
         let mut title_state = None;
         if let Some(db) = &self.state_db {
-            if task_awareness_enabled {
-                _task_title_lock = Some(db.task_work_title_guard().await.map_err(|err| {
-                    internal_error(format!("could not acquire task title lock: {err}"))
-                })?);
-                title_state = db.task_work_title(thread_id).await.map_err(|err| {
-                    internal_error(format!("could not read automatic title state: {err}"))
-                })?;
-            } else if matches!(db.task_work_title(thread_id).await, Ok(Some(_))) {
-                _task_title_lock = Some(db.task_work_title_guard().await.map_err(|err| {
-                    internal_error(format!("could not acquire task title lock: {err}"))
-                })?);
-                title_state = db.task_work_title(thread_id).await.map_err(|err| {
-                    internal_error(format!("could not read automatic title state: {err}"))
-                })?;
+            // Task work can be created by another process with a different feature
+            // configuration. Serialize the no-row check and rename with creation too.
+            match db.task_work_title_guard().await {
+                Ok(guard) => {
+                    _task_title_lock = Some(guard);
+                    title_state = db.task_work_title(thread_id).await.map_err(|err| {
+                        internal_error(format!("could not read automatic title state: {err}"))
+                    })?;
+                }
+                Err(lock_error) => {
+                    title_state = db.task_work_title(thread_id).await.map_err(|err| {
+                        internal_error(format!("could not read automatic title state: {err}"))
+                    })?;
+                    if title_state.is_some() {
+                        return Err(internal_error(format!(
+                            "could not acquire task title lock: {lock_error}"
+                        )));
+                    }
+                    // Work creation uses this same lock, so it cannot create an
+                    // unlocked title checkpoint while the lock path is unavailable.
+                }
             }
         }
         self.thread_manager

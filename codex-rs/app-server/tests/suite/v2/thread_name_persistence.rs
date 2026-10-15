@@ -104,7 +104,7 @@ async fn named_empty_paginated_thread_resumes_after_restart() -> Result<()> {
 }
 
 #[tokio::test]
-async fn naming_without_task_awareness_does_not_require_task_title_lock() -> Result<()> {
+async fn naming_without_task_awareness_survives_unavailable_title_lock() -> Result<()> {
     use codex_app_server_protocol::ThreadReadParams;
     use codex_app_server_protocol::ThreadReadResponse;
     use codex_features::Feature;
@@ -126,7 +126,6 @@ async fn naming_without_task_awareness_does_not_require_task_title_lock() -> Res
     let ThreadStartResponse { thread, .. } =
         timeout(READ_TIMEOUT, app.read_response(start)).await??;
     std::fs::create_dir(home.path().join(".task-title.lock"))?;
-
     let name = "Scheduled task";
     let rename = app
         .send_thread_set_name_request(ThreadSetNameParams {
@@ -144,6 +143,7 @@ async fn naming_without_task_awareness_does_not_require_task_title_lock() -> Res
     let ThreadReadResponse { thread, .. } =
         timeout(READ_TIMEOUT, app.read_response(read)).await??;
     assert_eq!(thread.name.as_deref(), Some(name));
+    assert!(home.path().join(".task-title.lock").is_dir());
     Ok(())
 }
 

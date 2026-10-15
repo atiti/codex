@@ -131,7 +131,7 @@ async fn task_update_persists_claim_and_surfaces_status_without_extra_inference(
             .contains(&test.session_configured.session_id.to_string())
     );
     assert_eq!(
-        db.task_work_owners(second.session_configured.session_id, &[])
+        db.task_work_owners(second.session_configured.session_id.into(), &[])
             .await?,
         owners
     );

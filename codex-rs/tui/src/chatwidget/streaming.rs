@@ -439,6 +439,11 @@ impl ChatWidget {
             self.request_redraw();
             return;
         }
+        if item.id.starts_with("agentroute-task-overlap-") {
+            self.add_to_history(history_cell::new_agentroute_task_overlap_event(message));
+            self.request_redraw();
+            return;
+        }
         let parsed = parse_assistant_markdown(&message, self.config.cwd.as_path());
         if from_replay && self.stream_controller.is_none() && !parsed.visible_markdown.is_empty() {
             self.prepare_assistant_message();

@@ -151,6 +151,14 @@ async fn reasoning_compatible_provider_replays_signed_reasoning() -> anyhow::Res
         .input()
         .into_iter()
         .filter(|item| item["type"] == "reasoning")
+        .map(|item| {
+            json!({
+                "type": item["type"],
+                "id": item["id"],
+                "summary": item["summary"],
+                "encrypted_content": item["encrypted_content"],
+            })
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         reasoning,

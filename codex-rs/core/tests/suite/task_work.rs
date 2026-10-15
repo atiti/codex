@@ -70,7 +70,7 @@ async fn task_update_persists_claim_and_surfaces_status_without_extra_inference(
         panic!("expected task message");
     };
     let codex_protocol::items::AgentMessageContent::Text { text } = &message.content[0];
-    insta::assert_snapshot!("task_work_status", text, @r#"
+    insta::assert_snapshot!(text, @r#"
     ◆ TASK · Fix SendJump proxy · Working
     Checking the existing fix
     "#);
@@ -96,7 +96,17 @@ async fn task_update_persists_claim_and_surfaces_status_without_extra_inference(
     );
     let second = test_codex()
         .with_home(home)
+        .with_model("gpt-5.5")
+        .with_pre_build_hook(|home| {
+            let script = home.join("task-route.py");
+            std::fs::write(&script, r#"import json
+print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","model":"gpt-5.5","routeMessage":"Task coordination test route"}}))
+"#).expect("write route hook");
+            std::fs::write(home.join("hooks.json"), json!({"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":format!("python3 {}", script.display())}]}]}}).to_string()).expect("write hook configuration");
+        })
         .with_config(|config| {
+            core_test_support::hooks::trust_discovered_hooks(config);
+            config.features.enable(codex_features::Feature::StepModelSwitching).expect("enable routing");
             config
                 .features
                 .enable(codex_features::Feature::TaskAwareness)
@@ -111,10 +121,21 @@ async fn task_update_persists_claim_and_surfaces_status_without_extra_inference(
             text_elements: Vec::new(),
         }]))
         .await?;
+    let mut notice_ids = std::collections::BTreeSet::new();
     wait_for_event(&second.codex, |event| {
+        if let EventMsg::ItemCompleted(item) = event
+            && let codex_protocol::items::TurnItem::AgentMessage(message) = &item.item
+            && message.id.starts_with("agentroute-")
+        {
+            assert!(
+                notice_ids.insert(message.id.clone()),
+                "notice identities must be distinct"
+            );
+        }
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
+    assert_eq!(notice_ids.len(), 2);
     let requests = mock.requests();
     assert_eq!(requests.len(), 4);
     assert!(

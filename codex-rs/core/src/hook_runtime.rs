@@ -887,9 +887,10 @@ pub(crate) async fn inspect_pending_input(
     )
     .await;
     if let Some(fragment) = task_overlap {
-        emit_agentroute_route_notice(
+        emit_agentroute_notice(
             sess,
             turn_context,
+            "task-overlap",
             format!("◆ TASK OVERLAP\n{}", fragment.render()),
         )
         .await;
@@ -964,7 +965,7 @@ pub(crate) async fn inspect_pending_input(
                     // Keep routing notices out of the warning channel. The TUI renders this
                     // display-only commentary as a dedicated colored transcript cell and updates
                     // its per-turn status bar; the model never receives it as prompt context.
-                    emit_agentroute_route_notice(sess, turn_context, message).await;
+                    emit_agentroute_notice(sess, turn_context, "route", message).await;
                 }
                 turn_context
                     .extension_data
@@ -977,9 +978,10 @@ pub(crate) async fn inspect_pending_input(
                     });
             }
             TurnSettingsUpdateOutcome::TargetUnavailable => {
-                emit_agentroute_route_notice(
+                emit_agentroute_notice(
                     sess,
                     turn_context,
+                    "route",
                     format!(
                         "◆ MODEL ROUTE NOT APPLIED · requested {requested_provider}/{requested_model} · current turn settings kept · active turn unavailable"
                     ),
@@ -996,9 +998,10 @@ pub(crate) async fn inspect_pending_input(
                     });
             }
             TurnSettingsUpdateOutcome::Rejected { reason } => {
-                emit_agentroute_route_notice(
+                emit_agentroute_notice(
                     sess,
                     turn_context,
+                    "route",
                     format!(
                         "◆ MODEL ROUTE NOT APPLIED · requested {requested_provider}/{requested_model} · current turn settings kept · {reason}"
                     ),
@@ -1019,12 +1022,13 @@ pub(crate) async fn inspect_pending_input(
     outcome
 }
 
-async fn emit_agentroute_route_notice(
+async fn emit_agentroute_notice(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
+    kind: &str,
     message: String,
 ) {
-    let item_id = format!("agentroute-route-{}", turn_context.sub_id);
+    let item_id = format!("agentroute-{kind}-{}", turn_context.sub_id);
     let agent_message = AgentMessageItem {
         id: item_id.clone(),
         content: vec![AgentMessageContent::Text {

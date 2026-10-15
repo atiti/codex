@@ -50,12 +50,7 @@ fn complete_neutralized_catalog_instructions_are_recognized() {
         .filter_map(|model| model.model_messages?.instructions_template)
         .find(|prompt| prompt.starts_with("You are Codex,"))
         .expect("identity-bearing catalog prompt");
-    let first = prompt.lines().next().expect("first line");
-    let neutral = prompt.replacen(
-        first,
-        first.split_once(". ").map_or("", |(_, rest)| rest),
-        1,
-    );
+    let neutral = super::normalize::neutralize_bundled_model_instructions(&prompt);
     assert!(super::normalize::is_bundled_model_instructions(&neutral));
     assert!(!super::normalize::is_bundled_model_instructions(&format!(
         "{neutral}\nCustom instruction"

@@ -540,35 +540,36 @@ pub(super) fn is_bundled_model_instructions(text: &str) -> bool {
                 .flat_map(|prompt| {
                     // The client removes harness identity before sending catalog guidance.
                     // Match complete transformed candidates, never an arbitrary text prefix.
-                    let mut neutral = prompt
-                        .lines()
-                        .map(|line| {
-                            let line = if line.starts_with("You are Codex,")
-                                || line.starts_with("You are ChatGPT,")
-                            {
-                                line.split_once(". ").map_or("", |(_, guidance)| guidance)
-                            } else {
-                                line
-                            };
-                            ["As Codex, you ", "As Codex, You ", "As ChatGPT, you "]
-                                .iter()
-                                .find_map(|prefix| line.strip_prefix(prefix))
-                                .map_or_else(
-                                    || line.to_string(),
-                                    |guidance| format!("You {guidance}"),
-                                )
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    if prompt.ends_with('\n') {
-                        neutral.push('\n');
-                    }
+                    let neutral = neutralize_bundled_model_instructions(&prompt);
                     [prompt, neutral]
                 })
                 .collect()
         })
         .iter()
         .any(|prompt| prompt == text)
+}
+
+pub(super) fn neutralize_bundled_model_instructions(text: &str) -> String {
+    let mut neutral = text
+        .lines()
+        .map(|line| {
+            let line = if line.starts_with("You are Codex,") || line.starts_with("You are ChatGPT,")
+            {
+                line.split_once(". ").map_or("", |(_, guidance)| guidance)
+            } else {
+                line
+            };
+            ["As Codex, you ", "As Codex, You ", "As ChatGPT, you "]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+                .map_or_else(|| line.to_string(), |guidance| format!("You {guidance}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        neutral.push('\n');
+    }
+    neutral
 }
 
 // Only complete, balanced wrappers identify guidance. Adjacent or malformed wrappers remain text.

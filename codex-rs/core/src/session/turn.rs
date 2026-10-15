@@ -196,56 +196,13 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
     let mut hook_outcomes = inspect_input_hooks(&sess, &turn_context, &input).await;
-    let active_provider_id = turn_context.model_provider_id();
-    let history = sess.clone_history().await;
-    let explicit_strip_provider_state = hook_outcomes
-        .iter()
-        .any(|outcome| outcome.strip_provider_state);
-    let foreign_provider_state_ids = history
-        .annotated_items()
-        .iter()
-        .filter(|envelope| {
-            explicit_strip_provider_state
-                || envelope
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.model_provider_id.as_deref())
-                    != Some(active_provider_id.as_str())
-        })
-        .filter_map(|envelope| envelope.item.id().cloned())
-        .collect::<HashSet<_>>();
-    let history_has_foreign_provider_state = history.annotated_items().iter().any(|envelope| {
-        envelope
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.model_provider_id.as_deref())
-            != Some(active_provider_id.as_str())
-            && matches!(
-                &envelope.item,
-                ResponseItem::Reasoning { .. }
-                    | ResponseItem::Compaction { .. }
-                    | ResponseItem::ContextCompaction { .. }
-                    | ResponseItem::FunctionCall {
-                        encrypted_function_args: Some(_),
-                        ..
-                    }
-            )
-    });
-    let strip_provider_state = history_has_foreign_provider_state || explicit_strip_provider_state;
-    if hook_outcomes.iter().any(|outcome| outcome.settings_updated) || strip_provider_state {
-        client_session = if strip_provider_state {
-            sess.services
-                .model_client
-                .new_session_for_mixed_provider_history(
-                    turn_context.model_provider(),
-                    foreign_provider_state_ids,
-                )
-        } else {
-            sess.services
-                .model_client
-                .new_session_for_provider(turn_context.model_provider())
-        };
-    }
+    let strip_provider_state = refresh_client_session_after_hooks(
+        &sess,
+        &turn_context,
+        &hook_outcomes,
+        &mut client_session,
+    )
+    .await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -536,11 +493,24 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(
+        let pending_hook_outcomes = inspect_input_hooks(&sess, &turn_context, &pending_input).await;
+        if !pending_input.is_empty() {
+            // A queued prompt can change providers within this turn. Rebuild the connection
+            // before sampling with the routed model, just as for the initial prompt.
+            refresh_client_session_after_hooks(
+                &sess,
+                &turn_context,
+                &pending_hook_outcomes,
+                &mut client_session,
+            )
+            .await;
+        }
+        if record_inputs_with_hook_outcomes(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
             &pending_input,
+            pending_hook_outcomes,
             PersistContext::SteeredUserInput,
         )
         .await
@@ -983,6 +953,66 @@ pub(crate) async fn run_hooks_and_record_inputs(
         persist_context,
     )
     .await
+}
+
+// Keep the sampled connection and provider-owned history aligned with hook routing.
+async fn refresh_client_session_after_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    hook_outcomes: &[HookRuntimeOutcome],
+    client_session: &mut ModelClientSession,
+) -> bool {
+    let active_provider_id = turn_context.model_provider_id();
+    let history = sess.clone_history().await;
+    let explicit_strip_provider_state = hook_outcomes
+        .iter()
+        .any(|outcome| outcome.strip_provider_state);
+    let foreign_provider_state_ids = history
+        .annotated_items()
+        .iter()
+        .filter(|envelope| {
+            explicit_strip_provider_state
+                || envelope
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.model_provider_id.as_deref())
+                    != Some(active_provider_id.as_str())
+        })
+        .filter_map(|envelope| envelope.item.id().cloned())
+        .collect::<HashSet<_>>();
+    let history_has_foreign_provider_state = history.annotated_items().iter().any(|envelope| {
+        envelope
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.model_provider_id.as_deref())
+            != Some(active_provider_id.as_str())
+            && matches!(
+                &envelope.item,
+                ResponseItem::Reasoning { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::ContextCompaction { .. }
+                    | ResponseItem::FunctionCall {
+                        encrypted_function_args: Some(_),
+                        ..
+                    }
+            )
+    });
+    let strip_provider_state = history_has_foreign_provider_state || explicit_strip_provider_state;
+    if hook_outcomes.iter().any(|outcome| outcome.settings_updated) || strip_provider_state {
+        *client_session = if strip_provider_state {
+            sess.services
+                .model_client
+                .new_session_for_mixed_provider_history(
+                    turn_context.model_provider(),
+                    foreign_provider_state_ids,
+                )
+        } else {
+            sess.services
+                .model_client
+                .new_session_for_provider(turn_context.model_provider())
+        };
+    }
+    strip_provider_state
 }
 
 async fn inspect_input_hooks(

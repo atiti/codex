@@ -206,10 +206,10 @@ async fn task_titles_evolve_and_manual_rename_survives_later_turns() -> Result<(
         .await?;
     let _: ThreadSetNameResponse = timeout(READ_TIMEOUT, app.read_response(rename)).await??;
     assert_eq!(db.task_work_title(early_id).await?, None);
-    let pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new().filename(db.sqlite().state_db_path()),
-    )
-    .await?;
+    let pool = db
+        .sqlite()
+        .open_read_write_pool(&db.sqlite().state_db_path())
+        .await?;
     sqlx::query("CREATE TRIGGER fail_title_pin BEFORE UPDATE OF title_locked ON task_work BEGIN SELECT RAISE(FAIL, 'simulated checkpoint failure'); END").execute(&pool).await?;
     let same = app
         .send_thread_set_name_request(ThreadSetNameParams {

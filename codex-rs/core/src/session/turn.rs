@@ -1531,6 +1531,17 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
         .is_some_and(|(previous, current)| previous != current)
 }
 
+fn previous_turn_matches_model(
+    previous_turn_settings: &PreviousTurnSettings,
+    current_model_info: &ModelInfo,
+) -> bool {
+    previous_turn_settings.model == current_model_info.slug
+        && !comp_hash_changed(
+            previous_turn_settings.comp_hash.as_deref(),
+            current_model_info.comp_hash.as_deref(),
+        )
+}
+
 /// Runs pre-sampling compaction against the previous model when its compaction compatibility
 /// hash changed or when switching to a smaller context-window model.
 ///
@@ -1544,12 +1555,13 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
+    let current_model_info = turn_context.capture_current_model_info();
     let should_compact_for_comp_hash_change = comp_hash_changed(
         previous_turn_settings.comp_hash.as_deref(),
-        turn_context.model_info().comp_hash.as_deref(),
+        current_model_info.comp_hash.as_deref(),
     );
-    let previous_model = previous_turn_settings.model;
-    if !should_compact_for_comp_hash_change && previous_model == turn_context.model_info().slug {
+    let previous_model = previous_turn_settings.model.clone();
+    if previous_turn_matches_model(&previous_turn_settings, current_model_info.as_ref()) {
         return Ok(());
     }
     let mut previous_model_turn_context = turn_context
@@ -1571,15 +1583,14 @@ async fn maybe_run_previous_model_inline_compact(
         let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
             return Ok(());
         };
-        let Some(new_context_window) = turn_context.model_context_window() else {
+        let Some(new_context_window) = current_model_info.usable_context_window() else {
             return Ok(());
         };
         let active_context_tokens = sess.get_total_token_usage().await;
         let previous_model_limit_reached =
             match turn_context.config.model_auto_compact_token_limit_scope {
                 AutoCompactTokenLimitScope::Total => {
-                    let new_auto_compact_limit = turn_context
-                        .model_info()
+                    let new_auto_compact_limit = current_model_info
                         .auto_compact_token_limit()
                         .unwrap_or(i64::MAX);
                     active_context_tokens > new_auto_compact_limit
@@ -1590,7 +1601,7 @@ async fn maybe_run_previous_model_inline_compact(
                 }
             };
         if !previous_model_limit_reached
-            || previous_model_turn_context.model_info().slug == turn_context.model_info().slug
+            || previous_model_turn_context.model_info().slug == current_model_info.slug
             || old_context_window <= new_context_window
         {
             return Ok(());

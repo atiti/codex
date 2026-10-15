@@ -6,4 +6,4 @@ expression: "render_bottom_popup(&chat, 80)"
 
 › /ultra
 
-  GPT-5.5 default · /tmp/project
+  GPT-5.5 · openai · default · /tmp/project

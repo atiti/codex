@@ -14,6 +14,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
@@ -1341,6 +1342,9 @@ impl Renderable for ListSelectionView {
         if area.height == 0 || area.width == 0 {
             return;
         }
+
+        // Modal rows must not leave the composer's wider footer visible underneath.
+        Clear.render(area, buf);
 
         let note_width = area.width.saturating_sub(2);
         let note_lines = self

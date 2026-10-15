@@ -1655,6 +1655,9 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
             responses::ev_completed(&response_id),
         ])
     }));
+    responses.push(create_final_assistant_message_sse_response(
+        r#"{"decision":"complete","reason":"All control tools have been exercised and their results recorded."}"#,
+    )?);
     responses.push(create_final_assistant_message_sse_response("Done")?);
     let server = create_mock_responses_server_sequence(responses).await;
 

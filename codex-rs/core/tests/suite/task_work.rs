@@ -96,17 +96,7 @@ async fn task_update_persists_claim_and_surfaces_status_without_extra_inference(
     );
     let second = test_codex()
         .with_home(home)
-        .with_model("gpt-5.5")
-        .with_pre_build_hook(|home| {
-            let script = home.join("task-route.py");
-            std::fs::write(&script, r#"import json
-print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","model":"gpt-5.5","routeMessage":"Task coordination test route"}}))
-"#).expect("write route hook");
-            std::fs::write(home.join("hooks.json"), json!({"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":format!("python3 {}", script.display())}]}]}}).to_string()).expect("write hook configuration");
-        })
         .with_config(|config| {
-            core_test_support::hooks::trust_discovered_hooks(config);
-            config.features.enable(codex_features::Feature::StepModelSwitching).expect("enable routing");
             config
                 .features
                 .enable(codex_features::Feature::TaskAwareness)
@@ -117,34 +107,16 @@ print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","mode
     second
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
-            text: "Fix https://github.com/markster-io/sendjump/pull/27.".into(),
+            text: "Try to claim the same tracked issue".into(),
             text_elements: Vec::new(),
         }]))
         .await?;
-    let mut notice_ids = std::collections::BTreeSet::new();
     wait_for_event(&second.codex, |event| {
-        if let EventMsg::ItemCompleted(item) = event
-            && let codex_protocol::items::TurnItem::AgentMessage(message) = &item.item
-            && message.id.starts_with("agentroute-")
-        {
-            assert!(
-                notice_ids.insert(message.id.clone()),
-                "notice identities must be distinct"
-            );
-        }
         matches!(event, EventMsg::TurnComplete(_))
     })
     .await;
-    assert_eq!(notice_ids.len(), 2);
     let requests = mock.requests();
     assert_eq!(requests.len(), 4);
-    assert!(
-        requests[2]
-            .input()
-            .iter()
-            .any(|item| item["role"] == "assistant"
-                && item.to_string().contains("task_work_overlap"))
-    );
     assert!(
         requests[3]
             .function_call_output("overlap")

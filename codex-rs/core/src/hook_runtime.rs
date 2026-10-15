@@ -85,6 +85,7 @@ use crate::turn_metadata::ExecutionMetadata;
 pub(crate) struct HookRuntimeOutcome {
     pub should_stop: bool,
     pub additional_contexts: Vec<String>,
+    pub deferred_context_items: Vec<ResponseItem>,
     pub model: Option<String>,
     pub model_provider: Option<String>,
     pub reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
@@ -129,6 +130,7 @@ impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
             outcome: HookRuntimeOutcome {
                 should_stop,
                 additional_contexts,
+                deferred_context_items: Vec::new(),
                 model: None,
                 model_provider: None,
                 reasoning_effort: None,
@@ -166,6 +168,7 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
             outcome: HookRuntimeOutcome {
                 should_stop,
                 additional_contexts,
+                deferred_context_items: Vec::new(),
                 model,
                 model_provider,
                 reasoning_effort,
@@ -825,6 +828,7 @@ pub(crate) async fn inspect_pending_input(
         return HookRuntimeOutcome {
             should_stop: false,
             additional_contexts: Vec::new(),
+            deferred_context_items: Vec::new(),
             model: None,
             model_provider: None,
             reasoning_effort: None,
@@ -894,12 +898,9 @@ pub(crate) async fn inspect_pending_input(
             format!("◆ TASK OVERLAP\n{}", fragment.render()),
         )
         .await;
-        sess.record_conversation_items(
-            turn_context,
-            turn_context.model_info(),
-            &[ContextualUserFragment::into(fragment)],
-        )
-        .await;
+        outcome
+            .deferred_context_items
+            .push(ContextualUserFragment::into(fragment));
     }
     let reviewer_fallbacks = outcome
         .reviewer_fallback_profiles
@@ -1065,8 +1066,10 @@ pub(crate) async fn record_pending_input(
     model_info: &ModelInfo,
     pending_input: TurnInput,
     additional_contexts: Vec<String>,
+    deferred_context_items: Vec<ResponseItem>,
     persist_context: PersistContext,
 ) {
+    record_deferred_context_items(sess, turn_context, deferred_context_items).await;
     match pending_input {
         TurnInput::UserInput {
             content,
@@ -1116,6 +1119,17 @@ pub(crate) async fn record_pending_input(
         }
     }
     record_additional_contexts(sess, turn_context, additional_contexts).await;
+}
+
+pub(crate) async fn record_deferred_context_items(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    context_items: Vec<ResponseItem>,
+) {
+    if !context_items.is_empty() {
+        sess.record_conversation_items(turn_context, turn_context.model_info(), &context_items)
+            .await;
+    }
 }
 
 /// Processes finished async hook results at a safe turn boundary.

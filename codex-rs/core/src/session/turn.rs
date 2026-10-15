@@ -19,6 +19,7 @@ use crate::hook_runtime::drain_async_hook_results;
 use crate::hook_runtime::inspect_pending_input;
 use crate::hook_runtime::inspect_pending_session_start_hooks;
 use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_deferred_context_items;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
@@ -1017,6 +1018,8 @@ async fn record_inputs_with_hook_outcomes(
     for (input_item, hook_outcome) in input.iter().zip(hook_outcomes) {
         if hook_outcome.should_stop {
             blocked_input = true;
+            record_deferred_context_items(sess, turn_context, hook_outcome.deferred_context_items)
+                .await;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
             if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
@@ -1040,6 +1043,7 @@ async fn record_inputs_with_hook_outcomes(
                 model_info,
                 recorded_input,
                 hook_outcome.additional_contexts,
+                hook_outcome.deferred_context_items,
                 input_persist_context,
             )
             .await;

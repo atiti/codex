@@ -1,10 +1,18 @@
 //! Prompt admission notices exact resources already owned by another task.
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_core::compact::SUMMARIZATION_PROMPT;
+use codex_login::CodexAuth;
+use codex_model_provider_info::built_in_model_providers;
+use codex_protocol::config_types::CollaborationMode;
+use codex_protocol::config_types::ModeKind;
+use codex_protocol::config_types::Settings;
 use codex_protocol::protocol::EventMsg;
+use codex_protocol::protocol::ThreadSettingsOverrides;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_function_call;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_sse_sequence;
@@ -216,6 +224,169 @@ print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","mode
     let requests = mock.requests();
     assert_eq!(requests.len(), 4);
     assert!(!requests[3].input().iter().any(|item| {
+        item["role"] == "assistant" && item.to_string().contains("task_work_overlap")
+    }));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn overlap_context_is_recorded_after_pre_sampling_compaction() -> Result<()> {
+    let server = start_mock_server().await;
+    let home = std::sync::Arc::new(tempfile::TempDir::new()?);
+    let previous_model = "gpt-5.4";
+    let next_model = "gpt-5.2";
+    let mut model_provider = built_in_model_providers(/*openai_base_url*/ None)["openai"].clone();
+    model_provider.name = "OpenAI-compatible overlap test provider".into();
+    model_provider.base_url = Some(format!("{}/v1", server.uri()));
+    model_provider.supports_websockets = false;
+    let owner_args = json!({
+        "title": "Fix SendJump proxy",
+        "summary": "Reviewing the existing fix",
+        "status": "working",
+        "resources": ["github:markster-io/sendjump#27"]
+    });
+    let mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("owner-claim"),
+                ev_function_call("owner-work", "update_task", &owner_args.to_string()),
+                ev_completed("owner-claim"),
+            ]),
+            sse(vec![
+                ev_response_created("owner-finish"),
+                ev_assistant_message("owner-finish-message", "Claim recorded"),
+                ev_completed("owner-finish"),
+            ]),
+            sse(vec![
+                ev_response_created("seed"),
+                ev_assistant_message("seed-message", "Seed history"),
+                ev_completed_with_tokens("seed", /*total_tokens*/ 120_000),
+            ]),
+            sse(vec![
+                ev_response_created("compact"),
+                ev_assistant_message("compact-summary", "PRETURN_COMPACT_SUMMARY"),
+                ev_completed_with_tokens("compact", /*total_tokens*/ 20),
+            ]),
+            sse(vec![
+                ev_response_created("overlap"),
+                ev_assistant_message("overlap-message", "I saw the existing task claim"),
+                ev_completed_with_tokens("overlap", /*total_tokens*/ 40),
+            ]),
+        ],
+    )
+    .await;
+
+    let owner = test_codex()
+        .with_home(home.clone())
+        .with_config(|config| {
+            config
+                .features
+                .enable(codex_features::Feature::TaskAwareness)
+                .expect("enable task awareness");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    owner
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Review the SendJump proxy fix".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&owner.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let task = test_codex()
+        .with_home(home)
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(previous_model)
+        .with_model_info_override(previous_model, |model_info| {
+            model_info.context_window = Some(273_000);
+            model_info.max_context_window = Some(273_000);
+        })
+        .with_model_info_override(next_model, |model_info| {
+            model_info.context_window = Some(125_000);
+            model_info.max_context_window = Some(125_000);
+        })
+        .with_config(move |config| {
+            config.model_provider = model_provider;
+            config.compact_prompt = Some(SUMMARIZATION_PROMPT.to_string());
+            config
+                .features
+                .enable(codex_features::Feature::TaskAwareness)
+                .expect("enable task awareness");
+        })
+        .build(&server)
+        .await
+        .expect("build prompt task");
+    task.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "seed context phrase ".repeat(100),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: previous_model.into(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&task.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    task.codex
+        .start_or_steer_turn(
+            TurnInputRequest::user_input(vec![UserInput::Text {
+                text: "Fix https://github.com/markster-io/sendjump/pull/27.".into(),
+                text_elements: Vec::new(),
+            }])
+            .with_thread_settings(ThreadSettingsOverrides {
+                collaboration_mode: Some(CollaborationMode {
+                    mode: ModeKind::Default,
+                    settings: Settings {
+                        model: next_model.into(),
+                        reasoning_effort: None,
+                        developer_instructions: None,
+                    },
+                }),
+                ..Default::default()
+            }),
+        )
+        .await?;
+    wait_for_event(&task.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    let requests = mock.requests();
+    let request_models = requests
+        .iter()
+        .map(|request| {
+            request.body_json()["model"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(requests.len(), 5, "model sequence: {request_models:?}");
+    let compact_request = requests[3].body_json().to_string();
+    assert!(requests[3].body_contains_text(SUMMARIZATION_PROMPT));
+    assert!(!compact_request.contains("task_work_overlap"));
+    let follow_up_request = requests[4].body_json().to_string();
+    assert!(follow_up_request.contains("PRETURN_COMPACT_SUMMARY"));
+    assert!(requests[4].input().iter().any(|item| {
         item["role"] == "assistant" && item.to_string().contains("task_work_overlap")
     }));
     Ok(())

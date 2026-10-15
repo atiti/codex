@@ -4155,6 +4155,7 @@ pub enum ThreadGoalStatus {
 }
 
 pub const MAX_THREAD_GOAL_OBJECTIVE_CHARS: usize = 4_000;
+const MAX_THREAD_GOAL_OBJECTIVE_CONTEXT_TOKENS: usize = 4_000;
 
 pub fn validate_thread_goal_objective(value: &str) -> Result<(), String> {
     if value.is_empty() {
@@ -4164,6 +4165,17 @@ pub fn validate_thread_goal_objective(value: &str) -> Result<(), String> {
         return Err(format!(
             "goal objective must be at most {MAX_THREAD_GOAL_OBJECTIVE_CHARS} characters"
         ));
+    }
+    let escaped_objective = value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;");
+    if codex_utils_string::approx_token_count(&escaped_objective)
+        > MAX_THREAD_GOAL_OBJECTIVE_CONTEXT_TOKENS
+    {
+        return Err(
+            "goal objective is too large for safe completion review and continuation".into(),
+        );
     }
     Ok(())
 }
@@ -4593,6 +4605,18 @@ mod tests {
     use crate::permissions::FileSystemSandboxPolicy;
     use crate::permissions::FileSystemSpecialPath;
     use crate::permissions::NetworkSandboxPolicy;
+
+    #[test]
+    fn goal_objective_validation_reserves_safe_context_space_after_escaping() {
+        let ordinary_objective = "Finish the requested work and verify the result. ".repeat(80);
+        assert!(validate_thread_goal_objective(&ordinary_objective).is_ok());
+
+        let escaped_objective = "&".repeat(MAX_THREAD_GOAL_OBJECTIVE_CHARS);
+        assert_eq!(
+            validate_thread_goal_objective(&escaped_objective),
+            Err("goal objective is too large for safe completion review and continuation".into())
+        );
+    }
     use anyhow::Result;
     use codex_utils_absolute_path::AbsolutePathBuf;
     use codex_utils_absolute_path::test_support::PathBufExt;

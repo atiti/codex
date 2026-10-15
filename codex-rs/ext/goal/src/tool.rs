@@ -406,10 +406,13 @@ impl GoalToolExecutor {
             &invocation.turn_id,
             format!("Review agent · checking completion (attempt {attempt}).\nIndependently verifying the goal before it can be marked complete."),
         ).await;
-        let prompt =
-            crate::completion_review::review_prompt(&goal, invocation.conversation_history.items());
         let raw = thread
-            .review_goal_completion(&invocation.turn_id, prompt)
+            .review_goal_completion(
+                &invocation.turn_id,
+                &goal.goal_id,
+                &goal.objective,
+                invocation.conversation_history.items(),
+            )
             .await;
         let verdict = crate::completion_review::parse_review(raw);
         let reason = verdict.reason();

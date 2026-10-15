@@ -52,9 +52,13 @@ pub(crate) mod reclamation;
 pub(crate) mod recovery;
 mod remote_control;
 mod rollout_migration;
+mod task_work;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod thread_attachments;
+pub use task_work::TaskWork;
+pub use task_work::TaskWorkOwner;
+pub use task_work::TaskWorkStatus;
 mod thread_metadata;
 mod thread_section_order;
 mod thread_sections;

@@ -36,6 +36,9 @@ pub use model::RolloutMigrationSkippedRollout;
 pub use model::RolloutMigrationState;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
+pub use runtime::TaskWork;
+pub use runtime::TaskWorkOwner;
+pub use runtime::TaskWorkStatus;
 pub use sqlite::SqliteConfig;
 
 pub use audit::ThreadStateAuditRow;

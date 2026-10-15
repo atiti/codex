@@ -706,6 +706,53 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
     assert!(Arc::ptr_eq(&before.settings, &turn.initial_settings));
     assert_eq!(turn.model_info().slug, MODEL_A);
 
+    // Usage follows the routed request, even while legacy turn accessors expose A.
+    let usage = codex_protocol::protocol::TokenUsage {
+        input_tokens: 160_000,
+        total_tokens: 160_000,
+        ..Default::default()
+    };
+    session
+        .record_token_usage_info(&turn, &after.settings, Some(&usage))
+        .await
+        .expect("record routed usage");
+    assert_eq!(
+        session
+            .state
+            .lock()
+            .await
+            .token_info()
+            .expect("usage info")
+            .model_context_window,
+        Some(152_000)
+    );
+    let current_status =
+        super::super::context_window::context_window_token_status(&session, &turn).await;
+    assert_eq!(
+        (
+            current_status.auto_compact_scope_limit,
+            current_status.full_context_window_limit,
+            current_status.token_limit_reached
+        ),
+        (Some(150_000), Some(152_000), true)
+    );
+    // A live update must not change the budget of an already captured request.
+    let captured_status = super::super::context_window::context_window_token_status_for_model(
+        &session,
+        turn.config.as_ref(),
+        &turn,
+        before.settings.model_info.as_ref(),
+    )
+    .await;
+    assert_eq!(
+        (
+            captured_status.auto_compact_scope_limit,
+            captured_status.full_context_window_limit,
+            captured_status.token_limit_reached
+        ),
+        (Some(244_800), Some(258_400), false)
+    );
+
     let done = {
         let active = session.active_turn.lock().await;
         Arc::clone(&active.as_ref().unwrap().task.as_ref().unwrap().done)

@@ -663,11 +663,14 @@ pub(crate) async fn run_turn(
                 let (has_pending_input, token_status) = async {
                     let has_pending_input =
                         sess.input_queue.has_pending_input(&sess.active_turn).await;
-                    let token_status = super::context_window::context_window_token_status(
-                        sess.as_ref(),
-                        turn_context.as_ref(),
-                    )
-                    .await;
+                    let token_status =
+                        super::context_window::context_window_token_status_for_model(
+                            sess.as_ref(),
+                            turn_context.config.as_ref(),
+                            turn_context.as_ref(),
+                            step_context.settings.model_info.as_ref(),
+                        )
+                        .await;
                     (has_pending_input, token_status)
                 }
                 .instrument(trace_span!("run_turn.collect_post_sampling_state"))

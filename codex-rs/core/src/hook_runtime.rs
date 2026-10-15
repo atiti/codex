@@ -837,6 +837,11 @@ pub(crate) async fn inspect_pending_input(
             settings_updated: false,
         };
     };
+    let task_overlap = if matches!(pending_input_item, TurnInput::UserInput { .. }) {
+        crate::tools::handlers::task_work_prompt_overlap(sess, turn_context, &prompt).await
+    } else {
+        None
+    };
     let account_id = sess
         .services
         .auth_manager
@@ -881,6 +886,20 @@ pub(crate) async fn inspect_pending_input(
         hooks.run_user_prompt_submit(request),
     )
     .await;
+    if let Some(fragment) = task_overlap {
+        emit_agentroute_route_notice(
+            sess,
+            turn_context,
+            format!("◆ TASK OVERLAP\n{}", fragment.render()),
+        )
+        .await;
+        sess.record_conversation_items(
+            turn_context,
+            turn_context.model_info(),
+            &[ContextualUserFragment::into(fragment)],
+        )
+        .await;
+    }
     let reviewer_fallbacks = outcome
         .reviewer_fallback_profiles
         .iter()

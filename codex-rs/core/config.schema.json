@@ -1172,6 +1172,9 @@
             "system_proxy_fallback": {
               "type": "boolean"
             },
+            "task_awareness": {
+              "type": "boolean"
+            },
             "telepathy": {
               "type": "boolean"
             },
@@ -7419,6 +7422,9 @@
           "type": "boolean"
         },
         "system_proxy_fallback": {
+          "type": "boolean"
+        },
+        "task_awareness": {
           "type": "boolean"
         },
         "telepathy": {

@@ -1231,6 +1231,13 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
     let advertise_environment_tools =
         stable_environment_tools || environment_mode.has_environment();
 
+    if features.enabled(Feature::TaskAwareness)
+        && !turn_context.session_source.is_non_root_agent()
+        && !turn_context.config.ephemeral
+    {
+        registry.add(crate::tools::handlers::TaskWorkHandler);
+    }
+
     if turn_context.config.update_plan_enabled {
         registry.add(PlanHandler);
     }

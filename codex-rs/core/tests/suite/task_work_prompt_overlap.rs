@@ -42,6 +42,11 @@ async fn exact_active_pr_prompt_shows_overlap_without_claiming_it() -> Result<()
                 ev_assistant_message("prompt-done", "I found another task on this PR"),
                 ev_completed("prompt"),
             ]),
+            sse(vec![
+                ev_response_created("feature-disabled"),
+                ev_assistant_message("feature-disabled-done", "Task awareness is disabled"),
+                ev_completed("feature-disabled"),
+            ]),
         ],
     )
     .await;
@@ -85,7 +90,7 @@ async fn exact_active_pr_prompt_shows_overlap_without_claiming_it() -> Result<()
     );
 
     let prompt_task = test_codex()
-        .with_home(home)
+        .with_home(home.clone())
         .with_model("gpt-5.5")
         .with_pre_build_hook(|home| {
             let script = home.join("task-route.py");
@@ -157,5 +162,61 @@ print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","mode
             .await?,
         owners
     );
+
+    let task_awareness_disabled = test_codex()
+        .with_home(home)
+        .with_model("gpt-5.5")
+        .with_pre_build_hook(|home| {
+            let script = home.join("task-route.py");
+            std::fs::write(
+                &script,
+                r#"import json
+print(json.dumps({"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","model":"gpt-5.5","routeMessage":"Task coordination test route"}}))
+"#,
+            )
+            .expect("write route hook");
+            std::fs::write(
+                home.join("hooks.json"),
+                json!({"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":format!("python3 {}", script.display())}]}]}}).to_string(),
+            )
+            .expect("write hook configuration");
+        })
+        .with_config(|config| {
+            core_test_support::hooks::trust_discovered_hooks(config);
+            config
+                .features
+                .enable(codex_features::Feature::StepModelSwitching)
+                .expect("enable routing");
+            config
+                .features
+                .disable(codex_features::Feature::TaskAwareness)
+                .expect("disable task awareness");
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    task_awareness_disabled
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Fix https://github.com/markster-io/sendjump/pull/27.".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let mut disabled_notice_ids = std::collections::BTreeSet::new();
+    wait_for_event(&task_awareness_disabled.codex, |event| {
+        if let EventMsg::ItemCompleted(item) = event
+            && let codex_protocol::items::TurnItem::AgentMessage(message) = &item.item
+            && message.id.starts_with("agentroute-task-overlap-")
+        {
+            disabled_notice_ids.insert(message.id.clone());
+        }
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(disabled_notice_ids.is_empty());
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(!requests[3].input().iter().any(|item| {
+        item["role"] == "assistant" && item.to_string().contains("task_work_overlap")
+    }));
     Ok(())
 }

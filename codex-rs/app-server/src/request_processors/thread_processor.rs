@@ -1082,6 +1082,7 @@ impl ThreadRequestProcessor {
 
     fn listener_task_context(&self) -> ListenerTaskContext {
         ListenerTaskContext {
+            task_title_permit: Arc::clone(&self.thread_list_state_permit),
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
@@ -1213,6 +1214,7 @@ impl ThreadRequestProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
+            task_title_permit: Arc::clone(&self.thread_list_state_permit),
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
@@ -1858,6 +1860,13 @@ impl ThreadRequestProcessor {
         };
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let _task_title_lock = if let Some(db) = &self.state_db {
+            Some(db.task_work_title_guard().await.map_err(|err| {
+                internal_error(format!("could not acquire task title lock: {err}"))
+            })?)
+        } else {
+            None
+        };
         self.thread_manager
             .update_thread_metadata(
                 thread_id,
@@ -1869,6 +1878,13 @@ impl ThreadRequestProcessor {
             )
             .await
             .map_err(|err| core_thread_write_error("set thread name", err))?;
+        if let Some(db) = &self.state_db
+            && let Err(error) = db.lock_task_work_title(thread_id).await
+        {
+            // The persisted name also differs from the automatic checkpoint, so sync
+            // preserves it even if this best-effort pin cannot be stored immediately.
+            tracing::warn!(%error, %thread_id, "could not checkpoint manual task title");
+        }
 
         Ok((
             ThreadSetNameResponse {},

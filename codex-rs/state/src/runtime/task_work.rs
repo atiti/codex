@@ -33,6 +33,14 @@ pub struct TaskWorkOwner {
     pub resource: String,
 }
 
+/// Suggested title with a durable checkpoint for interrupted automatic rename writes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TaskWorkTitle {
+    pub title: String,
+    pub automatic_name: Option<String>,
+    pub pending_name: Option<String>,
+}
+
 impl StateRuntime {
     /// Replace this task's claims atomically. Any conflict leaves existing claims intact.
     /// Leases expire after one hour; callers renew while the task is active.
@@ -199,15 +207,35 @@ impl StateRuntime {
     pub async fn task_work_title(
         &self,
         thread_id: ThreadId,
-    ) -> anyhow::Result<Option<(String, Option<String>)>> {
+    ) -> anyhow::Result<Option<TaskWorkTitle>> {
         let row = sqlx::query(
-            "SELECT title, automatic_name FROM task_work WHERE thread_id = ? AND title_locked = 0",
+            "SELECT title, automatic_name, pending_name FROM task_work WHERE thread_id = ? AND title_locked = 0",
         )
         .bind(thread_id.to_string())
         .fetch_optional(self.pool.as_ref())
         .await?;
-        row.map(|row| Ok((row.try_get("title")?, row.try_get("automatic_name")?)))
-            .transpose()
+        row.map(|row| {
+            Ok(TaskWorkTitle {
+                title: row.try_get("title")?,
+                automatic_name: row.try_get("automatic_name")?,
+                pending_name: row.try_get("pending_name")?,
+            })
+        })
+        .transpose()
+    }
+
+    /// Checkpoint an intended automatic name before writing thread metadata.
+    pub async fn prepare_task_work_title(
+        &self,
+        thread_id: ThreadId,
+        title: &str,
+    ) -> anyhow::Result<()> {
+        sqlx::query("UPDATE task_work SET pending_name = ? WHERE thread_id = ?")
+            .bind(title)
+            .bind(thread_id.to_string())
+            .execute(self.pool.as_ref())
+            .await?;
+        Ok(())
     }
 
     /// Remember a successfully persisted automatic title.
@@ -216,11 +244,13 @@ impl StateRuntime {
         thread_id: ThreadId,
         title: &str,
     ) -> anyhow::Result<()> {
-        sqlx::query("UPDATE task_work SET automatic_name = ? WHERE thread_id = ?")
-            .bind(title)
-            .bind(thread_id.to_string())
-            .execute(self.pool.as_ref())
-            .await?;
+        sqlx::query(
+            "UPDATE task_work SET automatic_name = ?, pending_name = NULL WHERE thread_id = ?",
+        )
+        .bind(title)
+        .bind(thread_id.to_string())
+        .execute(self.pool.as_ref())
+        .await?;
         Ok(())
     }
 

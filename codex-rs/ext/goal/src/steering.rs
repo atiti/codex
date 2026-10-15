@@ -8,6 +8,9 @@ use codex_state::GoalCompletionReview;
 use codex_utils_template::Template;
 use std::sync::LazyLock;
 
+const MAX_CONTINUATION_FRAGMENT_BYTES: usize = 32_000;
+const MAX_CONTINUATION_FRAGMENT_TOKENS: usize = 7_500;
+
 static CONTINUATION_PROMPT_TEMPLATE: LazyLock<Template> = LazyLock::new(|| {
     parse_embedded_template(
         include_str!("../templates/goals/continuation.md"),
@@ -55,8 +58,8 @@ pub(crate) fn continuation_steering_item(
     goal: &ThreadGoal,
     update_plan_enabled: bool,
     review: Option<&GoalCompletionReview>,
-) -> ResponseItem {
-    let mut prompt = continuation_prompt(goal, update_plan_enabled);
+) -> Option<ResponseItem> {
+    let mut prompt = continuation_prompt(goal, update_plan_enabled)?;
     if let Some(review) = review
         && review.decision != "complete"
     {
@@ -67,7 +70,9 @@ pub(crate) fn continuation_steering_item(
             escape_xml_text(&review.reason),
         ));
     }
-    goal_context_input_item(prompt)
+    (prompt.len() <= MAX_CONTINUATION_FRAGMENT_BYTES
+        && codex_utils_string::approx_token_count(&prompt) <= MAX_CONTINUATION_FRAGMENT_TOKENS)
+        .then(|| goal_context_input_item(prompt))
 }
 
 fn goal_context_input_item(prompt: String) -> ResponseItem {
@@ -77,7 +82,7 @@ fn goal_context_input_item(prompt: String) -> ResponseItem {
     ))
 }
 
-fn continuation_prompt(goal: &ThreadGoal, update_plan_enabled: bool) -> String {
+fn continuation_prompt(goal: &ThreadGoal, update_plan_enabled: bool) -> Option<String> {
     let objective = escape_xml_text(&goal.objective);
     let tokens_used = goal.tokens_used.to_string();
     let token_budget = goal
@@ -94,7 +99,7 @@ fn continuation_prompt(goal: &ThreadGoal, update_plan_enabled: bool) -> String {
     } else {
         &*CONTINUATION_PROMPT_WITHOUT_UPDATE_PLAN
     };
-    template
+    let prompt = template
         .render([
             ("objective", objective.as_str()),
             ("tokens_used", tokens_used.as_str()),
@@ -103,7 +108,10 @@ fn continuation_prompt(goal: &ThreadGoal, update_plan_enabled: bool) -> String {
         ])
         .unwrap_or_else(|err| {
             panic!("embedded goals/continuation.md template failed to render: {err}")
-        })
+        });
+    (prompt.len() <= MAX_CONTINUATION_FRAGMENT_BYTES
+        && codex_utils_string::approx_token_count(&prompt) <= MAX_CONTINUATION_FRAGMENT_TOKENS)
+        .then_some(prompt)
 }
 
 fn budget_limit_prompt(goal: &ThreadGoal) -> String {

@@ -39,6 +39,7 @@ pub use runtime::StateRuntime;
 pub use runtime::TaskWork;
 pub use runtime::TaskWorkOwner;
 pub use runtime::TaskWorkStatus;
+pub use runtime::TaskWorkTitle;
 pub use sqlite::SqliteConfig;
 
 pub use audit::ThreadStateAuditRow;

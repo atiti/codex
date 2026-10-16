@@ -2735,6 +2735,14 @@
       "additionalProperties": false,
       "description": "Overrides for the optional API features supported by a custom provider.",
       "properties": {
+        "context_windows": {
+          "additionalProperties": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": "Context windows by model slug, independent of account-specific model metadata. Missing models and nonpositive values retain their catalog metadata.",
+          "type": "object"
+        },
         "external_web_access": {
           "description": "Whether hosted web search may access the live web.",
           "type": "boolean"

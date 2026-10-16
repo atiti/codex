@@ -1640,7 +1640,9 @@ async fn turn_profile_tracks_blocking_tool_and_follow_up_sampling() -> Result<()
         (
             "update-goal-call",
             "update_goal",
-            json!({"status": "complete"}),
+            // Completion now requires an independent review; this test only exercises
+            // control-tool event accounting, so use a non-terminal status mutation.
+            json!({"status": "paused"}),
         ),
     ];
     let mut responses = vec![

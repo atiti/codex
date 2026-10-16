@@ -59,7 +59,7 @@ async fn preferred_mxc_reaches_local_thread_and_permission_context(prefer_mxc: b
             context_snapshot::format_request_history_snapshot(
                 "Resolved local MXC selection preserves workspace-write permissions in a real agent turn.",
                 &mock.requests(),
-                &ContextSnapshotOptions::default(),
+                &ContextSnapshotOptions::default().rewrite_known_segments(),
             )
         );
     }

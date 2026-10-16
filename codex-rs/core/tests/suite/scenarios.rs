@@ -573,7 +573,7 @@ async fn astra_switches_environments_for_the_rest_of_the_active_turn() -> Result
         context_snapshot::format_request_history_snapshot(
             "Astra starts in one workspace, switches for the next step of the active turn, and returns to the original workspace on the next turn.",
             &requests,
-            &ContextSnapshotOptions::default(),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
     Ok(())
@@ -688,7 +688,9 @@ async fn astra_kickoff_with_skills_plugins_and_remote_compaction() -> Result<()>
         context_snapshot::format_request_history_snapshot(
             "Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.",
             &requests,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -924,7 +926,9 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context() ->
         context_snapshot::format_context_snapshot(
             "Astra keeps disabled skills hidden and uses each step's selected skills after the environment changes during preparation.",
             &entries,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -987,7 +991,9 @@ async fn multi_agent_catalog_parameters() -> Result<()> {
         context_snapshot::format_request_history_snapshot(
             "Astra calls list_agents using the selected catalog parameter schema.",
             &mock.requests(),
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -1101,7 +1107,9 @@ text(`MCP: ${ping.structuredContent?.echo ?? "missing"}`);"#,
         context_snapshot::format_request_history_snapshot(
             "Astra checks a Settings release using direct collaboration and Code Mode tools.",
             &mock.requests(),
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -1165,7 +1173,7 @@ async fn astra_reads_code_mode_call_timing() -> Result<()> {
         context_snapshot::format_request_history_snapshot(
             "Astra receives host and handler timings on completed and failed code-mode calls.",
             &mock.requests(),
-            &ContextSnapshotOptions::default(),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
     Ok(())
@@ -1411,7 +1419,7 @@ async fn astra_continues_after_input_yields_a_code_mode_cell() -> Result<()> {
     let snapshot = context_snapshot::format_request_history_snapshot(
         "Astra continues after new user input yields a running code cell, then waits for its result.",
         &requests,
-        &ContextSnapshotOptions::default(),
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
     )
     .replace("cell ID 1", "cell ID <CELL_ID>")
     .replace("\"cell_id\":\"1\"", "\"cell_id\":\"<CELL_ID>\"");
@@ -1553,7 +1561,9 @@ text(result.tools[0].description);"#,
         context_snapshot::format_request_history_snapshot(
             scenario,
             &requests,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -1668,7 +1678,9 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Resu
         context_snapshot::format_request_history_snapshot(
             "Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.",
             &mock.requests(),
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -1787,7 +1799,7 @@ async fn subagent_waits_for_its_inherited_environment_configuration() -> Result<
     let snapshot = context_snapshot::format_context_snapshot(
         "A parent spawns a child before the selected environment is configured. The child sees it starting, waits, and receives the ready result after an ordinary parent turn-settings update.",
         &entries,
-        &ContextSnapshotOptions::default(),
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
     // Keep every request and its environment context; collapse unrelated guidance repeated per window.
     let mut snapshot = snapshot;
@@ -1892,7 +1904,9 @@ async fn model_catalog_refresh_preserves_tools_and_history() -> Result<()> {
     insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
         "Catalog refreshes append the updated listing once while preserving tools and prior input.",
         &requests,
-        &ContextSnapshotOptions::default().include_request_settings(),
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
     ));
     Ok(())
 }

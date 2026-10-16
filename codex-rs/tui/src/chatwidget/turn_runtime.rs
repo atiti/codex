@@ -116,6 +116,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     pub(super) fn on_task_started(&mut self) {
+        self.output_rate.reset();
         self.bottom_pane.dismiss_composer_sparkle();
         self.routed_turn_model = None;
         self.routed_turn_model_provider = None;
@@ -135,6 +136,7 @@ impl ChatWidget {
         self.quit_shortcut_expires_at = None;
         self.quit_shortcut_key = None;
         self.update_task_running_state();
+        self.refresh_status_line();
         self.bottom_pane.ensure_status_indicator();
         self.bottom_pane.reset_status_timer(Duration::ZERO);
         self.status_state.retry_status_header = None;

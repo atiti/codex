@@ -197,56 +197,13 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
     let mut hook_outcomes = inspect_input_hooks(&sess, &turn_context, &input).await;
-    let active_provider_id = turn_context.model_provider_id();
-    let history = sess.clone_history().await;
-    let explicit_strip_provider_state = hook_outcomes
-        .iter()
-        .any(|outcome| outcome.strip_provider_state);
-    let foreign_provider_state_ids = history
-        .annotated_items()
-        .iter()
-        .filter(|envelope| {
-            explicit_strip_provider_state
-                || envelope
-                    .metadata
-                    .as_ref()
-                    .and_then(|metadata| metadata.model_provider_id.as_deref())
-                    != Some(active_provider_id.as_str())
-        })
-        .filter_map(|envelope| envelope.item.id().cloned())
-        .collect::<HashSet<_>>();
-    let history_has_foreign_provider_state = history.annotated_items().iter().any(|envelope| {
-        envelope
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.model_provider_id.as_deref())
-            != Some(active_provider_id.as_str())
-            && matches!(
-                &envelope.item,
-                ResponseItem::Reasoning { .. }
-                    | ResponseItem::Compaction { .. }
-                    | ResponseItem::ContextCompaction { .. }
-                    | ResponseItem::FunctionCall {
-                        encrypted_function_args: Some(_),
-                        ..
-                    }
-            )
-    });
-    let strip_provider_state = history_has_foreign_provider_state || explicit_strip_provider_state;
-    if hook_outcomes.iter().any(|outcome| outcome.settings_updated) || strip_provider_state {
-        client_session = if strip_provider_state {
-            sess.services
-                .model_client
-                .new_session_for_mixed_provider_history(
-                    turn_context.model_provider(),
-                    foreign_provider_state_ids,
-                )
-        } else {
-            sess.services
-                .model_client
-                .new_session_for_provider(turn_context.model_provider())
-        };
-    }
+    let strip_provider_state = refresh_client_session_after_hooks(
+        &sess,
+        &turn_context,
+        &hook_outcomes,
+        &mut client_session,
+    )
+    .await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
@@ -537,11 +494,24 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(
+        let pending_hook_outcomes = inspect_input_hooks(&sess, &turn_context, &pending_input).await;
+        if !pending_input.is_empty() {
+            // A queued prompt can change providers within this turn. Rebuild the connection
+            // before sampling with the routed model, just as for the initial prompt.
+            refresh_client_session_after_hooks(
+                &sess,
+                &turn_context,
+                &pending_hook_outcomes,
+                &mut client_session,
+            )
+            .await;
+        }
+        if record_inputs_with_hook_outcomes(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
             &pending_input,
+            pending_hook_outcomes,
             PersistContext::SteeredUserInput,
         )
         .await
@@ -664,11 +634,14 @@ pub(crate) async fn run_turn(
                 let (has_pending_input, token_status) = async {
                     let has_pending_input =
                         sess.input_queue.has_pending_input(&sess.active_turn).await;
-                    let token_status = super::context_window::context_window_token_status(
-                        sess.as_ref(),
-                        turn_context.as_ref(),
-                    )
-                    .await;
+                    let token_status =
+                        super::context_window::context_window_token_status_for_model(
+                            sess.as_ref(),
+                            turn_context.config.as_ref(),
+                            turn_context.as_ref(),
+                            step_context.settings.model_info.as_ref(),
+                        )
+                        .await;
                     (has_pending_input, token_status)
                 }
                 .instrument(trace_span!("run_turn.collect_post_sampling_state"))
@@ -981,6 +954,66 @@ pub(crate) async fn run_hooks_and_record_inputs(
         persist_context,
     )
     .await
+}
+
+// Keep the sampled connection and provider-owned history aligned with hook routing.
+async fn refresh_client_session_after_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    hook_outcomes: &[HookRuntimeOutcome],
+    client_session: &mut ModelClientSession,
+) -> bool {
+    let active_provider_id = turn_context.model_provider_id();
+    let history = sess.clone_history().await;
+    let explicit_strip_provider_state = hook_outcomes
+        .iter()
+        .any(|outcome| outcome.strip_provider_state);
+    let foreign_provider_state_ids = history
+        .annotated_items()
+        .iter()
+        .filter(|envelope| {
+            explicit_strip_provider_state
+                || envelope
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.model_provider_id.as_deref())
+                    != Some(active_provider_id.as_str())
+        })
+        .filter_map(|envelope| envelope.item.id().cloned())
+        .collect::<HashSet<_>>();
+    let history_has_foreign_provider_state = history.annotated_items().iter().any(|envelope| {
+        envelope
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.model_provider_id.as_deref())
+            != Some(active_provider_id.as_str())
+            && matches!(
+                &envelope.item,
+                ResponseItem::Reasoning { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::ContextCompaction { .. }
+                    | ResponseItem::FunctionCall {
+                        encrypted_function_args: Some(_),
+                        ..
+                    }
+            )
+    });
+    let strip_provider_state = history_has_foreign_provider_state || explicit_strip_provider_state;
+    if hook_outcomes.iter().any(|outcome| outcome.settings_updated) || strip_provider_state {
+        *client_session = if strip_provider_state {
+            sess.services
+                .model_client
+                .new_session_for_mixed_provider_history(
+                    turn_context.model_provider(),
+                    foreign_provider_state_ids,
+                )
+        } else {
+            sess.services
+                .model_client
+                .new_session_for_provider(turn_context.model_provider())
+        };
+    }
+    strip_provider_state
 }
 
 async fn inspect_input_hooks(
@@ -1532,6 +1565,17 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
         .is_some_and(|(previous, current)| previous != current)
 }
 
+fn previous_turn_matches_model(
+    previous_turn_settings: &PreviousTurnSettings,
+    current_model_info: &ModelInfo,
+) -> bool {
+    previous_turn_settings.model == current_model_info.slug
+        && !comp_hash_changed(
+            previous_turn_settings.comp_hash.as_deref(),
+            current_model_info.comp_hash.as_deref(),
+        )
+}
+
 /// Runs pre-sampling compaction against the previous model when its compaction compatibility
 /// hash changed or when switching to a smaller context-window model.
 ///
@@ -1545,12 +1589,13 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
+    let current_model_info = turn_context.capture_current_model_info();
     let should_compact_for_comp_hash_change = comp_hash_changed(
         previous_turn_settings.comp_hash.as_deref(),
-        turn_context.model_info().comp_hash.as_deref(),
+        current_model_info.comp_hash.as_deref(),
     );
-    let previous_model = previous_turn_settings.model;
-    if !should_compact_for_comp_hash_change && previous_model == turn_context.model_info().slug {
+    let previous_model = previous_turn_settings.model.clone();
+    if previous_turn_matches_model(&previous_turn_settings, current_model_info.as_ref()) {
         return Ok(());
     }
     let mut previous_model_turn_context = turn_context
@@ -1572,15 +1617,14 @@ async fn maybe_run_previous_model_inline_compact(
         let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
             return Ok(());
         };
-        let Some(new_context_window) = turn_context.model_context_window() else {
+        let Some(new_context_window) = current_model_info.usable_context_window() else {
             return Ok(());
         };
         let active_context_tokens = sess.get_total_token_usage().await;
         let previous_model_limit_reached =
             match turn_context.config.model_auto_compact_token_limit_scope {
                 AutoCompactTokenLimitScope::Total => {
-                    let new_auto_compact_limit = turn_context
-                        .model_info()
+                    let new_auto_compact_limit = current_model_info
                         .auto_compact_token_limit()
                         .unwrap_or(i64::MAX);
                     active_context_tokens > new_auto_compact_limit
@@ -1591,7 +1635,7 @@ async fn maybe_run_previous_model_inline_compact(
                 }
             };
         if !previous_model_limit_reached
-            || previous_model_turn_context.model_info().slug == turn_context.model_info().slug
+            || previous_model_turn_context.model_info().slug == current_model_info.slug
             || old_context_window <= new_context_window
         {
             return Ok(());

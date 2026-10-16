@@ -583,6 +583,7 @@ impl ChatWidget {
     }
 
     pub(super) fn handle_stream_finished(&mut self) {
+        self.refresh_status_line();
         if self.task_complete_pending {
             self.bottom_pane.hide_status_indicator();
             self.task_complete_pending = false;
@@ -593,6 +594,9 @@ impl ChatWidget {
 
     #[inline]
     pub(super) fn handle_streaming_delta(&mut self, delta: String) {
+        if self.output_rate.observe(&delta, Instant::now()) {
+            self.refresh_status_line();
+        }
         if !delta.is_empty() {
             self.mark_safety_buffering_agent_message_started();
         }

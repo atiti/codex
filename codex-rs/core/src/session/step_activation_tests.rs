@@ -706,6 +706,53 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
     assert!(Arc::ptr_eq(&before.settings, &turn.initial_settings));
     assert_eq!(turn.model_info().slug, MODEL_A);
 
+    // Usage follows the routed request, even while legacy turn accessors expose A.
+    let usage = codex_protocol::protocol::TokenUsage {
+        input_tokens: 160_000,
+        total_tokens: 160_000,
+        ..Default::default()
+    };
+    session
+        .record_token_usage_info(&turn, &after.settings, Some(&usage))
+        .await
+        .expect("record routed usage");
+    assert_eq!(
+        session
+            .state
+            .lock()
+            .await
+            .token_info()
+            .expect("usage info")
+            .model_context_window,
+        Some(152_000)
+    );
+    let current_status =
+        super::super::context_window::context_window_token_status(&session, &turn).await;
+    assert_eq!(
+        (
+            current_status.auto_compact_scope_limit,
+            current_status.full_context_window_limit,
+            current_status.token_limit_reached
+        ),
+        (Some(150_000), Some(152_000), true)
+    );
+    // A live update must not change the budget of an already captured request.
+    let captured_status = super::super::context_window::context_window_token_status_for_model(
+        &session,
+        turn.config.as_ref(),
+        &turn,
+        before.settings.model_info.as_ref(),
+    )
+    .await;
+    assert_eq!(
+        (
+            captured_status.auto_compact_scope_limit,
+            captured_status.full_context_window_limit,
+            captured_status.token_limit_reached
+        ),
+        (Some(244_800), Some(258_400), false)
+    );
+
     let done = {
         let active = session.active_turn.lock().await;
         Arc::clone(&active.as_ref().unwrap().task.as_ref().unwrap().done)
@@ -1241,6 +1288,49 @@ fn parent_review_messages(model: &mut ModelInfo) -> &mut AutoReviewMessages {
             rejection_instructions: None,
             timeout_instructions: None,
         })
+}
+
+#[test]
+fn provider_context_window_is_independent_of_shared_model_slug() {
+    use codex_model_provider_info::ModelProviderCapabilities;
+    use codex_model_provider_info::ModelProviderInfo;
+
+    let (mut account, _) = safety_models();
+    account.context_window = Some(272_000);
+    account.max_context_window = Some(872_000);
+    account.auto_compact_token_limit = Some(250_000);
+    let mut routed = account.clone();
+    let provider = ModelProviderInfo {
+        capabilities: Some(ModelProviderCapabilities {
+            context_windows: [(account.slug.clone(), 872_000)].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    apply_provider_context_window(&mut routed, &provider);
+    assert_eq!(routed.slug, account.slug);
+    assert_eq!(routed.context_window, Some(872_000));
+    assert_eq!(routed.max_context_window, Some(872_000));
+    assert_eq!(routed.auto_compact_token_limit, None);
+    apply_provider_context_window(&mut account, &ModelProviderInfo::default());
+    assert_eq!(account.context_window, Some(272_000));
+    assert_eq!(account.auto_compact_token_limit, Some(250_000));
+}
+
+#[test_case(0; "zero")]
+#[test_case(-1; "negative")]
+fn invalid_provider_context_window_preserves_model_metadata(window: i64) {
+    let (mut model, _) = safety_models();
+    let original = model.clone();
+    let provider = codex_model_provider_info::ModelProviderInfo {
+        capabilities: Some(codex_model_provider_info::ModelProviderCapabilities {
+            context_windows: [(model.slug.clone(), window)].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    apply_provider_context_window(&mut model, &provider);
+    assert_eq!(model, original);
 }
 
 #[test_case(None; "native_tools")]

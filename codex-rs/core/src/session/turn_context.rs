@@ -1313,7 +1313,7 @@ impl Session {
                 &session_configuration.model_info_overrides,
             )
             .await;
-        let model_info = if let Some(tool_compatibility) =
+        let mut model_info = if let Some(tool_compatibility) =
             session_configuration.provider.info().tool_compatibility
         {
             step_activation::model_info_for_provider_compatibility(
@@ -1324,6 +1324,10 @@ impl Session {
         } else {
             model_info
         };
+        step_activation::apply_provider_context_window(
+            &mut model_info,
+            session_configuration.provider.info(),
+        );
         let multi_agent_version = match build_mode {
             TurnContextBuildMode::Full => {
                 // Only execution and initial context creation publish model metadata.

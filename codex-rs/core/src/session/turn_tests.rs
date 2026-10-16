@@ -10,6 +10,37 @@ use pretty_assertions::assert_eq;
 use std::sync::Arc;
 use tracing_subscriber::prelude::*;
 
+#[test]
+fn previous_turn_matches_routed_model_when_initial_model_differs() {
+    let mut routed_model = codex_models_manager::bundled_models_response()
+        .expect("bundled models")
+        .models
+        .into_iter()
+        .next()
+        .expect("at least one bundled model");
+    routed_model.slug = "gpt-6.1-sol".to_string();
+    routed_model.comp_hash = Some("routed-comp-hash".to_string());
+    let previous_turn_settings = PreviousTurnSettings {
+        model: routed_model.slug.clone(),
+        comp_hash: routed_model.comp_hash.clone(),
+        cyber_access_program: None,
+        realtime_active: Some(false),
+    };
+
+    let mut initial_model = routed_model.clone();
+    initial_model.slug = "gpt-6-sol".to_string();
+    initial_model.comp_hash = Some("initial-comp-hash".to_string());
+
+    assert!(previous_turn_matches_model(
+        &previous_turn_settings,
+        &routed_model
+    ));
+    assert!(!previous_turn_matches_model(
+        &previous_turn_settings,
+        &initial_model
+    ));
+}
+
 struct RewriteAgentMessageContributor;
 
 impl TurnItemContributor for RewriteAgentMessageContributor {

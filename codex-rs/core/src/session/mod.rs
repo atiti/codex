@@ -758,6 +758,7 @@ impl Session {
                 Some(tool_compatibility),
             );
         }
+        step_activation::apply_provider_context_window(&mut model_info, &config.model_provider);
         let auth = auth_manager.auth_cached();
         // Forked subagents keep their parent's activation with the copied history.
         // Fresh children restore configured preferences before applying startup defaults.
@@ -4778,8 +4779,10 @@ impl Session {
         if let Some(token_usage) = token_usage {
             let token_info = {
                 let mut state = self.state.lock().await;
-                state
-                    .update_token_info_from_usage(token_usage, turn_context.model_context_window());
+                state.update_token_info_from_usage(
+                    token_usage,
+                    settings.model_info.usable_context_window(),
+                );
                 if matches!(
                     turn_context.config.model_auto_compact_token_limit_scope,
                     AutoCompactTokenLimitScope::BodyAfterPrefix

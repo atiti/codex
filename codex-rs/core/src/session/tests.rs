@@ -6344,7 +6344,10 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
         &WorldStateItem::full(world_state.render_full().0.into_object())
     );
     assert_eq!(first_turn_context, &turn_context_baseline);
-    assert_eq!(second_world_state, first_world_state);
+    assert_eq!(
+        second_world_state,
+        &WorldStateItem::full(world_state.render_full().0.into_object())
+    );
     assert_eq!(second_turn_context, &turn_context_baseline);
     assert_eq!(first_settings, &expected_settings);
     assert_eq!(second_settings, &expected_settings);

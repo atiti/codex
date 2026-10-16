@@ -43,7 +43,7 @@ impl ProviderCapabilities {
             },
             ..Self::default()
         };
-        let overrides = info.capabilities.unwrap_or_default();
+        let overrides = info.capabilities.clone().unwrap_or_default();
         Self {
             external_web_access: overrides
                 .external_web_access

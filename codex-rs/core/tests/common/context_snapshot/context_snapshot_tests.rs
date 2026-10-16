@@ -446,6 +446,12 @@ fn rewritten_model_and_personality_use_plain_tags() {
         render("<personality_spec> Original intro \nlong instructions\n</personality_spec>"),
         "00:message/developer:\n    <PERSONALITY_SPEC>"
     );
+    assert_eq!(
+        render(
+            "You are `/root`, the primary agent in a team collaborating on a task.\nPrivate policy details."
+        ),
+        "00:message/developer:\n    <MULTI_AGENT_ROLE>"
+    );
     assert_ne!(render("<model_switch>"), render("<model_switch>New intro"));
 }
 
@@ -484,6 +490,22 @@ fn base_instructions_use_the_same_mode_in_settings_and_annotated_developer_conte
     assert!(!shape.contains("A rule below the prefix"));
     let unmarked = captured(&json!({"input": [plain]}));
     assert!(unmarked.contains("A rule below the prefix"));
+
+    let host_instructions = json!({"input": [
+        {"type": "message", "role": "developer", "content": [
+            {"type": "input_text", "text": "Host-specific developer instructions"}
+        ]},
+        {"type": "message", "role": "developer", "content": [
+            {"type": "input_text", "text": "<permissions instructions>Use the configured policy.</permissions instructions>"}
+        ]}
+    ]});
+    let host_shape = format_context_snapshot(
+        "host-provided base instructions",
+        &[SnapshotEntry::body(&host_instructions)],
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
+    );
+    assert!(host_shape.contains("<MODEL_INSTRUCTIONS>"));
+    assert!(!host_shape.contains("Host-specific developer instructions"));
 
     let catalog_prompt = codex_models_manager::model_info::BASE_INSTRUCTIONS;
     let lite = |prompt: &str| {

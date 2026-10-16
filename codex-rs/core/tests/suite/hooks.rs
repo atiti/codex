@@ -6146,6 +6146,105 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
     Ok(())
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn queued_user_prompt_provider_route_replaces_active_client_session() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let (release_tx, release_rx) = oneshot::channel();
+    let first_chunks = vec![
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_response_created("initial-response")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_message_item_added("initial-message", "")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_output_text_delta("working")),
+        },
+        StreamingSseChunk {
+            gate: Some(release_rx),
+            body: sse_event(ev_message_item_done("initial-message", "working")),
+        },
+        StreamingSseChunk {
+            gate: None,
+            body: sse_event(ev_completed("initial-response")),
+        },
+    ];
+    // Let the defective path finish so endpoint assertions fail without timing out.
+    let stale_chunks = vec![StreamingSseChunk {
+        gate: None,
+        body: sse(vec![
+            ev_response_created("stale-response"),
+            ev_assistant_message("stale-message", "wrong provider"),
+            ev_completed("stale-response"),
+        ]),
+    }];
+    let (default_server, _) = start_streaming_sse_server(vec![first_chunks, stale_chunks]).await;
+    let routed_server = start_mock_server().await;
+    let routed_response = mount_sse_once(
+        &routed_server,
+        sse(vec![
+            ev_response_created("routed-response"),
+            ev_assistant_message("routed-message", "right provider"),
+            ev_completed("routed-response"),
+        ]),
+    )
+    .await;
+    let route_provider = non_openai_model_provider(&routed_server);
+    let mut builder = test_codex()
+        .with_model("gpt-5.5")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "unused blocked prompt", "unused context")
+                .expect("write queued route hook");
+            let path = home.join("user_prompt_submit_hook.py");
+            let mut hook = fs::read_to_string(&path).expect("read queued route hook");
+            hook.push_str(
+                "elif payload.get('prompt') == 'switch to Claude':\n    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'model': 'claude-haiku-5-5', 'modelProvider': 'agentroute-test'}}))\n",
+            );
+            fs::write(path, hook).expect("write queued route response");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.features.enable(Feature::StepModelSwitching).expect("enable model switching");
+            config.model_providers.insert("agentroute-test".to_string(), route_provider);
+        });
+    // Command hooks execute on the host and need a host-native working directory.
+    let test = builder.build_with_streaming_server(&default_server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "start working".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::AgentMessageContentDelta(_))
+    })
+    .await;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "switch to Claude".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    release_tx.send(()).expect("release initial response");
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+
+    assert_eq!(default_server.requests().await.len(), 1);
+    let request = routed_response.single_request();
+    assert_eq!(request.body_json()["model"], "claude-haiku-5-5");
+    assert!(
+        request
+            .message_input_texts("user")
+            .contains(&"switch to Claude".to_string())
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn goal_continuation_can_be_blocked_before_sampling() -> Result<()> {
     skip_if_no_network!(Ok(()));

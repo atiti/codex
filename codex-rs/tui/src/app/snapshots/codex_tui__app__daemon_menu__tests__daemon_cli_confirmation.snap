@@ -1,6 +1,5 @@
 ---
 source: tui/src/app/daemon_menu_tests.rs
-assertion_line: 125
 expression: "render_bottom_popup(&app.chat_widget,\nwidth).replace(r\"C:\\cli-build\\bin\\codex\", \"/x/cli-build/bin/codex\")"
 ---
   Agent command center  Group: Project  g

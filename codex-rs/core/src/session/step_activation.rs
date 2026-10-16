@@ -426,6 +426,16 @@ impl Session {
                 *compatibility,
             ));
         }
+        if let Some(destination) = updated_settings.as_mut() {
+            let provider = requested_provider
+                .as_ref()
+                .map(|(_, _, provider)| provider.clone())
+                .unwrap_or_else(|| turn_context.model_provider());
+            apply_provider_context_window(
+                Arc::make_mut(&mut destination.model_info),
+                provider.info(),
+            );
+        }
         let candidate_settings = updated_settings.as_ref().unwrap_or(current.as_ref());
 
         // Recheck the latest rules before applying the update.
@@ -579,6 +589,22 @@ fn any_environment_has_full_disk_write(
         None => fallback
             .file_system_sandbox_policy()
             .has_full_disk_write_access(),
+    }
+}
+
+pub(crate) fn apply_provider_context_window(
+    model_info: &mut ModelInfo,
+    provider: &codex_model_provider_info::ModelProviderInfo,
+) {
+    if let Some(window) = provider
+        .capabilities
+        .as_ref()
+        .and_then(|capabilities| capabilities.context_windows.get(&model_info.slug).copied())
+        .filter(|window| *window > 0)
+    {
+        model_info.context_window = Some(window);
+        model_info.max_context_window = Some(window);
+        model_info.auto_compact_token_limit = None;
     }
 }
 

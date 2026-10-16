@@ -131,7 +131,7 @@ async fn partial_answers_survive_forked_child_requests() -> Result<()> {
             sse(vec![
                 ev_function_call_with_namespace(
                     "spawn-worker",
-                    "collaboration",
+                    "agentroute_collaboration",
                     "spawn_agent",
                     &json!({
                         "task_name": "worker",

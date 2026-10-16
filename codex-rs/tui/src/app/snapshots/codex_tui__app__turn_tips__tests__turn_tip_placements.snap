@@ -1,5 +1,6 @@
 ---
 source: tui/src/app/turn_tips_tests.rs
+assertion_line: 348
 expression: "crate::chatwidget::tests::helpers::normalize_snapshot_paths(screens.join(\"\\n\\n\"))"
 ---
 working=true, response rows=1, 80x12

@@ -111,3 +111,49 @@ impl CoreToolRuntime for TaskWorkHandler {
         true
     }
 }
+
+/// Observe exact GitHub references at prompt admission without claiming from text similarity.
+pub(crate) async fn task_work_prompt_overlap(
+    session: &crate::session::session::Session,
+    turn: &crate::session::turn_context::TurnContext,
+    prompt: &str,
+) -> Option<crate::context::TaskWorkOverlap> {
+    if !turn
+        .config
+        .features
+        .get()
+        .enabled(codex_features::Feature::TaskAwareness)
+        || turn.session_source.is_non_root_agent()
+        || turn.config.ephemeral
+    {
+        return None;
+    }
+    let db = session.state_db()?;
+    let pattern = regex_lite::Regex::new(
+        r"https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)/(?:issues|pull)/([1-9][0-9]*)\b",
+    )
+    .ok()?;
+    let keys = pattern
+        .captures_iter(prompt)
+        .take(8)
+        .map(|capture| {
+            format!(
+                "github:{}/{}#{}",
+                capture[1].to_lowercase(),
+                capture[2].to_lowercase(),
+                &capture[3]
+            )
+        })
+        .collect::<Vec<_>>();
+    if keys.is_empty() {
+        return None;
+    }
+    match db.task_work_owners(session.thread_id, &keys).await {
+        Ok(owners) if !owners.is_empty() => Some(crate::context::TaskWorkOverlap(owners)),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::debug!(%error, "task overlap lookup unavailable");
+            None
+        }
+    }
+}

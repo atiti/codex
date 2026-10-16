@@ -137,6 +137,7 @@ async fn interactive_startup_honors_codex_home_symlink_opt_out() -> Result<()> {
     let deadline = Instant::now() + STARTUP_TIMEOUT;
     while Instant::now() < deadline {
         terminal.read_output(Duration::from_millis(/*millis*/ 50))?;
+        terminal.answer_startup_queries()?;
         if terminal.screen_contains("symlink-opt-out-ready") {
             let tool_output = completion_mock
                 .function_call_output_text("write")

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionEventSink;
+use codex_protocol::models::MessagePhase;
+use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::ThreadGoal;
@@ -31,4 +33,21 @@ impl GoalEventEmitter {
             }),
         });
     }
+
+    pub(crate) fn user_notice(&self, event_id: impl Into<String>, message: impl Into<String>) {
+        self.sink.emit(Event {
+            id: event_id.into(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: message.into(),
+                phase: Some(MessagePhase::Commentary),
+                memory_citation: None,
+                delivery: None,
+                questions: None,
+            }),
+        });
+    }
 }
+
+#[cfg(test)]
+#[path = "events_tests.rs"]
+mod tests;

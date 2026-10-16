@@ -304,6 +304,14 @@ fn known_segment_name(text: &str, source: TextSource<'_>) -> Option<String> {
         TextSource::Message("developer") => &[
             (GUARDIAN_INSTRUCTIONS_PREFIX, "GUARDIAN_INSTRUCTIONS"),
             (GUARDIAN_PROVENANCE_PREFIX, "GUARDIAN_INSTRUCTIONS"),
+            (
+                "You are `/root`, the primary agent in a team",
+                "MULTI_AGENT_ROLE",
+            ),
+            (
+                "You are an agent in a team of agents collaborating",
+                "MULTI_AGENT_ROLE",
+            ),
         ],
         TextSource::Message("user") => &[
             ("# AGENTS.md instructions", "AGENTS_MD"),

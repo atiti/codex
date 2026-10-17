@@ -173,6 +173,23 @@ pub(crate) fn new_agentroute_route_event(message: String) -> AgentRouteNoticeHis
     }
 }
 
+pub(crate) fn new_agentroute_task_overlap_event(message: String) -> AgentRouteNoticeHistoryCell {
+    let lines = message
+        .lines()
+        .map(|line| {
+            let style = if line == "◆ TASK OVERLAP" {
+                Style::default().fg(accent_color()).bold()
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+            Line::from(Span::styled(line.to_string(), style))
+        })
+        .collect::<Vec<_>>();
+    AgentRouteNoticeHistoryCell {
+        details: PrefixedWrappedHistoryCell::new(Text::from(lines), "  ", "  "),
+    }
+}
+
 impl HistoryCell for AgentRouteNoticeHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         self.details.display_lines(width)

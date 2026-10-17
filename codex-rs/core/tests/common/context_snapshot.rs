@@ -163,7 +163,8 @@ fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest 
         && instructions["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
             .is_null()
         && let Some(text) = instructions["content"][0]["text"].as_str()
-        && (instructions_index == 0 || is_bundled_model_instructions(text))
+        && (is_bundled_model_instructions(text)
+            || (instructions_index == 0 && !text.trim_start().starts_with('<')))
     {
         model_instruction_parts.push((instructions_index, 0));
     }

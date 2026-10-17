@@ -65,6 +65,13 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Reclaim unused hosted Linux tooling
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h
+
       - name: Prepare Bazel CI
         id: prepare_bazel
         uses: ./.github/actions/prepare-bazel-ci
@@ -98,6 +105,13 @@ jobs:
             -//third_party/v8:all
             -//codex-rs/v8-poc:v8-poc-unit-tests
           )
+          if [[ "${{ inputs.windows-ci }}" != "true" ]]; then
+            # Windows execution through Wine belongs to the optional Windows coverage.
+            bazel_targets+=(
+              -//codex-rs/core:core-all-wine-exec-test
+              -//codex-rs/app-server:app-server-all-wine-exec-test
+            )
+          fi
 
           bazel_wrapper_args=(
             --print-failed-action-summary
@@ -105,6 +119,7 @@ jobs:
           )
           bazel_test_args=(
             test
+            --test_env=RUST_TEST_THREADS=2
             --test_tag_filters=-argument-comment-lint
             --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
@@ -347,7 +362,8 @@ jobs:
         uses: ./.github/actions/check-clean-worktree
 
   clippy:
-    timeout-minutes: 120
+    # Native Mac builds fall back to local compilation without BuildBuddy.
+    timeout-minutes: ${{ matrix.os == 'macos-15' && 180 || 120 }}
     strategy:
       fail-fast: false
       matrix:

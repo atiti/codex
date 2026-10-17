@@ -391,12 +391,6 @@ impl GoalToolExecutor {
                     "goal reviewer cannot access thread: {err}"
                 ))
             })?;
-        let prompt =
-            crate::completion_review::review_prompt(&goal, invocation.conversation_history.items());
-        let raw = thread
-            .review_goal_completion(&invocation.turn_id, prompt)
-            .await;
-        let verdict = crate::completion_review::parse_review(raw);
         let previous = self
             .state_db
             .thread_goals()
@@ -405,6 +399,19 @@ impl GoalToolExecutor {
             .map_err(|err| {
                 FunctionCallError::RespondToModel(format!("failed to read goal review: {err}"))
             })?;
+        let attempt = previous
+            .as_ref()
+            .map_or(1, |prior| prior.attempts.saturating_add(1));
+        thread.report_goal_completion_review(
+            &invocation.turn_id,
+            format!("Review agent · checking completion (attempt {attempt}).\nIndependently verifying the goal before it can be marked complete."),
+        ).await;
+        let prompt =
+            crate::completion_review::review_prompt(&goal, invocation.conversation_history.items());
+        let raw = thread
+            .review_goal_completion(&invocation.turn_id, prompt)
+            .await;
+        let verdict = crate::completion_review::parse_review(raw);
         let reason = verdict.reason();
         let decision = verdict.decision();
         let repeated = previous
@@ -414,15 +421,38 @@ impl GoalToolExecutor {
             .state_db
             .thread_goals()
             .record_completion_review(self.thread_id, &goal.goal_id, decision, reason)
-            .await
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to save goal review: {err}"))
-            })?
-            .ok_or_else(|| {
-                FunctionCallError::RespondToModel(
-                    "goal changed during review; retry against current goal".to_string(),
-                )
-            })?;
+            .await;
+        let stored = match stored {
+            Ok(Some(stored)) => stored,
+            result => {
+                let detail = match result {
+                    Err(err) => format!("failed to save goal review: {err}"),
+                    Ok(_) => "goal changed during review; retry against current goal".to_string(),
+                };
+                thread.report_goal_completion_review(
+                    &invocation.turn_id,
+                    format!("Review agent · result unavailable (attempt {attempt}).\n{detail}\nCompletion remains unverified."),
+                ).await;
+                return Err(FunctionCallError::RespondToModel(detail));
+            }
+        };
+        let outcome = match decision {
+            "complete" => "Completion check passed.",
+            "blocked" => "Goal remains active; an external dependency needs attention.",
+            _ if repeated && stored.repeated_reason_count >= 3 => {
+                "Three reviews found the same gap; the agent must inspect the blocker or request input."
+            }
+            _ => "Goal remains active; work continues.",
+        };
+        thread
+            .report_goal_completion_review(
+                &invocation.turn_id,
+                format!(
+                    "Review agent · {decision} (attempt {}).\n{reason}\n{outcome}",
+                    stored.attempts
+                ),
+            )
+            .await;
         if decision != "complete" {
             let detail = format!(
                 "Goal completion review: {decision}. {reason} (attempt {}).",

@@ -482,8 +482,9 @@ trust_level = "trusted"
         }).await;
         if auth_failure {
             assert!(observed.is_ok_and(|result| result.is_err()), "{output}");
-            let exit =
-                tokio::time::timeout(Duration::from_secs(/*secs*/ 10), spawned.exit_rx).await??;
+            let exit = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), spawned.exit_rx)
+                .await
+                .with_context(|| format!("auth rejection exit timed out: {output}"))??;
             assert_ne!(exit, 0);
             assert!(output.contains("API key login is required"), "{output}");
             assert!(!home.join("auth.json").exists());
@@ -545,7 +546,8 @@ trust_level = "trusted"
         }
         if analytics {
             tokio::time::timeout(Duration::from_secs(/*secs*/ 10), metric_rx.recv())
-                .await?
+                .await
+                .with_context(|| format!("metrics export timed out (fork={fork}): {output}"))?
                 .context("metrics export while the TUI is running")?;
         }
         let startup_result = observed.as_ref().map(|result| result.as_ref().map(|_| ()));
@@ -588,8 +590,9 @@ trust_level = "trusted"
         } else {
             session.terminate();
         }
-        let exit =
-            tokio::time::timeout(Duration::from_secs(/*secs*/ 10), spawned.exit_rx).await??;
+        let exit = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), spawned.exit_rx)
+            .await
+            .with_context(|| format!("worktree exit timed out (fork={fork}): {output}"))??;
         // Include shutdown output: ConPTY can retain the channel after process exit.
         let _ = tokio::time::timeout(Duration::from_secs(/*secs*/ 1), async {
             while let Some(bytes) = stdout.recv().await {

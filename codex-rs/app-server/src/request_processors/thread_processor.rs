@@ -1082,6 +1082,7 @@ impl ThreadRequestProcessor {
 
     fn listener_task_context(&self) -> ListenerTaskContext {
         ListenerTaskContext {
+            task_title_permit: Arc::clone(&self.thread_list_state_permit),
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
@@ -1213,6 +1214,7 @@ impl ThreadRequestProcessor {
         );
         typesafe_overrides.ephemeral = ephemeral;
         let listener_task_context = ListenerTaskContext {
+            task_title_permit: Arc::clone(&self.thread_list_state_permit),
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),
@@ -1858,6 +1860,32 @@ impl ThreadRequestProcessor {
         };
 
         let _thread_list_state_permit = self.acquire_thread_list_state_permit().await?;
+        let mut _task_title_lock: Option<std::fs::File> = None;
+        let mut title_state = None;
+        if let Some(db) = &self.state_db {
+            // Task work can be created by another process with a different feature
+            // configuration. Serialize the no-row check and rename with creation too.
+            match db.task_work_title_guard().await {
+                Ok(guard) => {
+                    _task_title_lock = Some(guard);
+                    title_state = db.task_work_title(thread_id).await.map_err(|err| {
+                        internal_error(format!("could not read automatic title state: {err}"))
+                    })?;
+                }
+                Err(lock_error) => {
+                    title_state = db.task_work_title(thread_id).await.map_err(|err| {
+                        internal_error(format!("could not read automatic title state: {err}"))
+                    })?;
+                    if title_state.is_some() {
+                        return Err(internal_error(format!(
+                            "could not acquire task title lock: {lock_error}"
+                        )));
+                    }
+                    // Work creation uses this same lock, so it cannot create an
+                    // unlocked title checkpoint while the lock path is unavailable.
+                }
+            }
+        }
         self.thread_manager
             .update_thread_metadata(
                 thread_id,
@@ -1869,6 +1897,22 @@ impl ThreadRequestProcessor {
             )
             .await
             .map_err(|err| core_thread_write_error("set thread name", err))?;
+        if let Some(db) = &self.state_db
+            && _task_title_lock.is_some()
+            && let Err(error) = db.lock_task_work_title(thread_id).await
+        {
+            if title_state.as_ref().is_some_and(|state| {
+                state.automatic_name.as_deref() == Some(&name)
+                    || state.pending_name.as_deref() == Some(&name)
+            }) {
+                return Err(internal_error(format!(
+                    "task name is saved, but automatic title updates could not be disabled; retry the rename: {error}"
+                )));
+            }
+            // The persisted name also differs from the automatic checkpoint, so sync
+            // preserves it even if this best-effort pin cannot be stored immediately.
+            tracing::warn!(%error, %thread_id, "could not checkpoint manual task title");
+        }
 
         Ok((
             ThreadSetNameResponse {},

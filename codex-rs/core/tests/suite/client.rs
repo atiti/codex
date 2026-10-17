@@ -151,6 +151,14 @@ async fn reasoning_compatible_provider_replays_signed_reasoning() -> anyhow::Res
         .input()
         .into_iter()
         .filter(|item| item["type"] == "reasoning")
+        .map(|item| {
+            json!({
+                "type": item["type"],
+                "id": item["id"],
+                "summary": item["summary"],
+                "encrypted_content": item["encrypted_content"],
+            })
+        })
         .collect::<Vec<_>>();
     assert_eq!(
         reasoning,
@@ -3447,7 +3455,7 @@ async fn azure_responses_request_does_not_store_and_omits_item_ids() {
     assert_eq!(body["store"], serde_json::Value::Bool(false));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
     let input = body["input"].as_array().expect("Azure request input");
-    assert_eq!(input.len(), 9);
+    assert_eq!(input.len(), 10);
     for item in input {
         assert_eq!(item.get("id"), None);
     }

@@ -1775,6 +1775,13 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread() -> Resu
 
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
+    // Keep the initial skill-catalog shape independent of globally installed host skills.
+    write_skill(
+        &home.path().join("skills/fixture"),
+        "fixture",
+        "A stable local fixture skill",
+        "Use the installed Notes plugin after refresh.",
+    )?;
     let config = "[features]\nplugins = true\n\n[skills.bundled]\nenabled = false\n";
     fs::write(home.path().join("config.toml"), config)?;
     let lookup = r#"text(ALL_TOOLS.filter(({ name }) => name === "mcp__notes__echo").map(({ name }) => name));"#;

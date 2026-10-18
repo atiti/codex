@@ -279,7 +279,7 @@ impl SamplingExecution {
                         auth.as_ref(),
                         self.config.provider.info(),
                         &self.request.model,
-                        None,
+                        /*provider_id*/ None,
                         Some(program),
                         self.config.api_key_cyber_access_programs,
                     )

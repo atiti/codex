@@ -30,9 +30,13 @@ fn reviewer_prompt_is_bounded_and_includes_recent_evidence() {
             role: "assistant".into(),
             content: vec![ContentItem::OutputText {
                 text: "older".repeat(20_000),
+                annotations: None,
+                logprobs: None,
             }],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
+            encrypted_content: None,
+            status: None,
         },
         ResponseItem::Message {
             id: None,
@@ -42,6 +46,8 @@ fn reviewer_prompt_is_bounded_and_includes_recent_evidence() {
             }],
             phase: None,
             internal_chat_message_metadata_passthrough: None,
+            encrypted_content: None,
+            status: None,
         },
     ];
     let prompt = completion_review::review_prompt(&goal, &history);
@@ -68,9 +74,13 @@ fn multibyte_history_and_objective_stay_within_byte_cap() {
         role: "assistant".into(),
         content: vec![ContentItem::OutputText {
             text: "ü".repeat(10_000),
+            annotations: None,
+            logprobs: None,
         }],
         phase: None,
         internal_chat_message_metadata_passthrough: None,
+        encrypted_content: None,
+        status: None,
     }];
     let prompt = completion_review::review_prompt(&goal, &history);
     assert!(prompt.len() < 10_000);

@@ -574,7 +574,10 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
     for directory in ["bin", "codex-path", "codex-resources"] {
         std::fs::create_dir_all(package.join(directory))?;
     }
-    copy_executable(&daemon.codex, &package.join("bin/codex"))?;
+    let package_binary = package.join("bin/codex");
+    if std::fs::hard_link(&daemon.codex, &package_binary).is_err() {
+        copy_executable(&daemon.codex, &package_binary)?;
+    }
     daemon.codex = package.join("bin/codex");
     for helper in [
         "bin/codex-code-mode-host",

@@ -803,12 +803,19 @@ enabled = true
         .await?;
 
     let requests = mock.requests();
+    let developer_text = requests[0].message_input_texts("developer").join("\n");
+    assert!(developer_text.contains("calendar:agenda"));
+    assert!(developer_text.contains("final-check"));
+    assert!(developer_text.contains("outline"));
+    assert!(!developer_text.contains("notes:summarize"));
     insta::assert_snapshot!(
         "astra_plugin_policy_limits_visible_skills",
         context_snapshot::format_request_history_snapshot(
             "Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.",
             &requests,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())

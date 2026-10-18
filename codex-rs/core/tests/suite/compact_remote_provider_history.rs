@@ -2,6 +2,65 @@ use super::*;
 use pretty_assertions::assert_eq;
 use test_case::test_case;
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resumed_provider_switch_filters_foreign_reasoning_before_ordinary_sampling() -> Result<()>
+{
+    skip_if_no_network!(Ok(()));
+    let server = wiremock::MockServer::start().await;
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                json!({"type": "response.output_item.done", "item": {
+                    "type": "reasoning", "id": "rs_azure_ordinary", "summary": [],
+                    "encrypted_content": "AZURE_ONLY_ORDINARY_CIPHERTEXT"
+                }}),
+                responses::ev_assistant_message("msg-before-ordinary", "saved answer"),
+                responses::ev_completed("resp-before-ordinary"),
+            ]),
+            sse(vec![responses::ev_completed("resp-after-ordinary")]),
+        ],
+    )
+    .await;
+    let initial = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider_id = "agentroute-azure".to_string();
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    initial.submit_turn("retain ordinary user context").await?;
+    let home = initial.home.clone();
+    let path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+    initial.codex.shutdown_and_wait().await?;
+    let resumed = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider.supports_websockets = false;
+        })
+        .resume(&server, home, path)
+        .await?;
+    resumed.submit_turn("continue without compaction").await?;
+    resumed.codex.shutdown_and_wait().await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .body_json()
+            .to_string()
+            .contains("retain ordinary user context")
+    );
+    assert!(!requests[1].input().iter().any(|item| {
+        item.get("encrypted_content") == Some(&json!("AZURE_ONLY_ORDINARY_CIPHERTEXT"))
+    }));
+    Ok(())
+}
+
 #[test_case(false; "automatic")]
 #[test_case(true; "manual")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

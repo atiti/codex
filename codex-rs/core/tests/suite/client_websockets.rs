@@ -60,6 +60,7 @@ use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::start_websocket_server;
+
 use core_test_support::responses::start_websocket_server_with_headers;
 use core_test_support::responses_metadata as test_responses_metadata;
 use core_test_support::skip_if_no_network;
@@ -162,6 +163,48 @@ fn websocket_connection_metadata(harness: &WebsocketTestHarness) -> CodexRespons
         /*turn_id*/ None,
         TestCodexResponsesRequestKind::WebsocketConnection,
     )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn responses_websocket_full_request_filters_foreign_provider_reasoning() {
+    skip_if_no_network!();
+    let server = start_websocket_server(vec![vec![vec![
+        ev_response_created("resp-owned"),
+        ev_completed("resp-owned"),
+    ]]])
+    .await;
+    let harness = websocket_harness_for_codex_backend(&server).await;
+    let foreign_id = ResponseItemId::with_suffix("rs", "foreign");
+    let prompt = prompt_with_input(vec![ResponseItem::Reasoning {
+        id: Some(foreign_id.clone()),
+        summary: Vec::new(),
+        content: None,
+        encrypted_content: Some("FOREIGN_PROVIDER_CIPHERTEXT".to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }]);
+    let mut client_session = harness.client.new_session_for_mixed_provider_history(
+        codex_model_provider::create_model_provider(
+            ModelProviderInfo::create_openai_provider(Some(format!("{}/v1", server.uri()))),
+            Some(Arc::clone(&harness.auth_manager)),
+        ),
+        std::collections::HashSet::from([foreign_id]),
+    );
+    stream_until_complete_with_model_info(
+        &mut client_session,
+        &harness,
+        &prompt,
+        &harness.model_info,
+        "resp-owned",
+    )
+    .await;
+    let connection = server.single_connection();
+    assert_eq!(connection.len(), 1);
+    assert!(
+        connection[0].body_json()["input"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

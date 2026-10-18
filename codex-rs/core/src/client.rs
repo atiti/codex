@@ -2092,6 +2092,8 @@ impl ResponsesHttpExecutor<'_> {
     pub(crate) async fn stream_responses_http(
         &self,
         turn_state: &Arc<OnceLock<String>>,
+        foreign_provider_state_ids: &HashSet<ResponseItemId>,
+        strip_unattributed_provider_state: bool,
         expected_auth_owner: Option<u64>,
         event_sender: Option<&Sender<ProtocolEvent>>,
         prompt: &Prompt,
@@ -2194,8 +2196,8 @@ impl ResponsesHttpExecutor<'_> {
             )?;
             self.client.prepare_response_items_for_request(
                 &mut request.input,
-                &HashSet::new(),
-                false,
+                foreign_provider_state_ids,
+                strip_unattributed_provider_state,
             );
             if crate::guardian::is_basic_session_source(&self.client.state.session_source) {
                 crate::guardian::observe_guardian_request(session_telemetry, &request);
@@ -2429,8 +2431,8 @@ impl ModelClientSession {
             }
             self.client.prepare_response_items_for_request(
                 &mut request.input,
-                &HashSet::new(),
-                false,
+                &self.foreign_provider_state_ids,
+                self.strip_unattributed_provider_state,
             );
             let (continuation, mode, reason, previous_item_type, current_item_type) =
                 match self.prepare_websocket_request(&request) {
@@ -2733,6 +2735,8 @@ impl ModelClientSession {
                 ResponsesHttpExecutor::new(&self.client)
                     .stream_responses_http(
                         &self.turn_state,
+                        &self.foreign_provider_state_ids,
+                        self.strip_unattributed_provider_state,
                         /*expected_auth_owner*/ None,
                         self.client.event_sender.as_ref(),
                         prompt,

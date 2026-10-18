@@ -518,3 +518,47 @@ fn large_rewrite_returns_promptly_and_preserves_exact_content() {
         new_content
     );
 }
+
+#[tokio::test]
+async fn oversized_file_releases_prior_tracking_without_undoing_patch() {
+    let dir = tempdir().expect("tempdir");
+    let mut tracker = tracker_with_root(dir.path());
+    let small = apply_verified_patch(
+        dir.path(),
+        "*** Begin Patch\n*** Add File: small.txt\n+small\n*** End Patch",
+    )
+    .await;
+    tracker.track_delta("", &small);
+    let content = "x".repeat(MAX_TRACKED_FILE_BYTES + 1);
+    let patch = format!("*** Begin Patch\n*** Add File: large.txt\n+{content}\n*** End Patch");
+    let large = apply_verified_patch(dir.path(), &patch).await;
+    tracker.track_delta("", &large);
+    assert_eq!(tracker.get_unified_diff(), None);
+    assert_eq!(
+        tracker.baseline_by_path.len()
+            + tracker.current_by_path.len()
+            + tracker.rendered_diffs.len(),
+        0
+    );
+    assert_eq!(
+        fs::read_to_string(dir.path().join("large.txt")).unwrap(),
+        format!("{content}\n")
+    );
+    tracker.track_delta("", &small);
+    assert_eq!(tracker.get_unified_diff(), None);
+}
+
+#[test]
+fn invalidation_releases_retained_content_capacities() {
+    let mut tracker = TurnDiffTracker::new();
+    let path = TrackedPath::new(
+        "",
+        &PathUri::from_host_native_path(Path::new("/tmp/baseline")).unwrap(),
+    );
+    let content = tracker.tracked_content("baseline");
+    tracker.baseline_by_path.insert(path, content);
+    tracker.invalidate();
+    assert_eq!(tracker.baseline_by_path.capacity(), 0);
+    assert_eq!(tracker.current_by_path.capacity(), 0);
+    assert_eq!(tracker.rendered_diffs.capacity(), 0);
+}

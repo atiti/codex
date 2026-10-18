@@ -664,3 +664,18 @@ fn mcp_result_preview_preserves_source_text_and_excludes_tree_gutters() {
         );
     }
 }
+
+#[test]
+fn large_mcp_result_stays_exact_after_spilling() {
+    let output = "retained MCP result\n".repeat(8000);
+    let result = result::McpToolResult::new(
+        CallToolResult {
+            content: vec![json!({"type": "text", "text": output})],
+            structured_content: None,
+            is_error: None,
+            meta: None,
+        },
+        result::McpResultKind::Standard,
+    );
+    assert_eq!(result.content[0].render_full(), output);
+}

@@ -1106,3 +1106,54 @@ async fn writable_pool_reads_do_not_wait_for_an_existing_writer() {
         );
     }
 }
+
+#[tokio::test]
+async fn stable_upgrade_keeps_installed_task_work_migration_checksums() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("upgrade.sqlite");
+    let pool = sqlx_sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(
+            sqlx_sqlite::SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true),
+        )
+        .await
+        .unwrap();
+    let installed = sqlx::migrate::Migrator {
+        migrations: std::borrow::Cow::Owned(
+            STATE_MIGRATOR
+                .migrations
+                .iter()
+                .filter(|migration| migration.version <= 61)
+                .cloned()
+                .collect(),
+        ),
+        ..super::runtime_state_migrator()
+    };
+    installed.run(&pool).await.unwrap();
+    let before: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT version, checksum FROM _sqlx_migrations WHERE version IN (60,61) ORDER BY version",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    super::runtime_state_migrator().run(&pool).await.unwrap();
+    let after: Vec<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT version, checksum FROM _sqlx_migrations WHERE version IN (60,61) ORDER BY version",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    pretty_assertions::assert_eq!(before, after);
+    let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('task_work','guardian_review_feedback','thread_read_receipts') ORDER BY name")
+        .fetch_all(&pool).await.unwrap();
+    pretty_assertions::assert_eq!(
+        tables,
+        vec![
+            "guardian_review_feedback",
+            "task_work",
+            "thread_read_receipts"
+        ]
+    );
+}

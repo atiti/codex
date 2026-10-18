@@ -408,6 +408,8 @@ pub(crate) fn normalize_response_items_for_provider(
                     content: vec![codex_protocol::models::ContentItem::InputText { text }],
                     phase: None,
                     internal_chat_message_metadata_passthrough: None,
+                    encrypted_content: None,
+                    status: None,
                 };
             }
             let unsupported_custom_calls = input
@@ -666,7 +668,8 @@ fn neutralize_harness_identity_in_input(input: &mut [ResponseItem]) {
             && matches!(role.as_str(), "system" | "developer")
         {
             for part in content {
-                if let ContentItem::InputText { text } | ContentItem::OutputText { text } = part {
+                if let ContentItem::InputText { text } | ContentItem::OutputText { text, .. } = part
+                {
                     *text = neutralize_harness_identity(text);
                 }
             }
@@ -771,6 +774,7 @@ impl ModelClient {
             include_timing_metrics,
             beta_features_header,
             concurrent_reasoning_summaries_enabled,
+            output_token_replay_enabled,
             attestation_provider,
             http_client_factory,
             workspace_routing,
@@ -792,6 +796,7 @@ impl ModelClient {
         include_timing_metrics: bool,
         beta_features_header: Option<String>,
         concurrent_reasoning_summaries_enabled: bool,
+        output_token_replay_enabled: bool,
         attestation_provider: Option<Arc<dyn AttestationProvider>>,
         http_client_factory: HttpClientFactory,
         workspace_routing: WorkspaceRoutingContext,
@@ -962,6 +967,7 @@ impl ModelClient {
                 concurrent_reasoning_summaries_enabled: self
                     .state
                     .concurrent_reasoning_summaries_enabled,
+                output_token_replay_enabled: self.state.output_token_replay_enabled,
                 include_attestation,
                 attestation_provider: self.state.attestation_provider.clone(),
                 disable_websockets: AtomicBool::new(false),
@@ -2188,8 +2194,8 @@ impl ResponsesHttpExecutor<'_> {
             )?;
             self.client.prepare_response_items_for_request(
                 &mut request.input,
-                &self.foreign_provider_state_ids,
-                self.strip_unattributed_provider_state,
+                &HashSet::new(),
+                false,
             );
             if crate::guardian::is_basic_session_source(&self.client.state.session_source) {
                 crate::guardian::observe_guardian_request(session_telemetry, &request);
@@ -2423,8 +2429,8 @@ impl ModelClientSession {
             }
             self.client.prepare_response_items_for_request(
                 &mut request.input,
-                &self.foreign_provider_state_ids,
-                self.strip_unattributed_provider_state,
+                &HashSet::new(),
+                false,
             );
             let (continuation, mode, reason, previous_item_type, current_item_type) =
                 match self.prepare_websocket_request(&request) {

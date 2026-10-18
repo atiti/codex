@@ -280,7 +280,7 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
             });
         drop(history);
         let reviewer = prepared.reviewer_profiles.lock().await.active.clone();
-        let (mut outcome, analytics) = run_guardian_review_session_before_deadline(
+        let (outcome, analytics) = run_guardian_review_session_before_deadline(
             Arc::clone(&self.session),
             prepared.context.clone(),
             reviewer,

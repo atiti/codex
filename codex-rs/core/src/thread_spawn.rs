@@ -71,8 +71,8 @@ pub(crate) async fn spawn(
         reasoning_effort,
     } = request;
     let message_text = match &message {
-        AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text,
-        AgentMessage::Routed { routing_prompt, .. } => routing_prompt,
+        AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text.as_str(),
+        AgentMessage::Routed { routing_prompt, .. } => routing_prompt.as_deref().unwrap_or(""),
     };
     if message_text.trim().is_empty() {
         return Err(ThreadSpawnError::Preparation(
@@ -102,8 +102,8 @@ pub(crate) async fn spawn(
     let routing_prompt = message_text.to_owned();
     let message = AgentMessage::Routed {
         message: Box::new(message),
-        routing_prompt,
-        inherited_model_provider,
+        routing_prompt: Some(routing_prompt),
+        inherited_model_provider: Some(inherited_model_provider),
         requested_backend,
         model_explicit,
     };

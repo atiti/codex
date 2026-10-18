@@ -4186,9 +4186,14 @@ impl Session {
         };
         let provider_id = match &installation {
             CompactedHistoryInstallation::Complete(metadata) => metadata.model_provider_id.clone(),
-            CompactedHistoryInstallation::Prefix { .. } => {
-                reference_context_item.model_provider_id.clone()
-            }
+            CompactedHistoryInstallation::Prefix { .. } => self
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .original_config_do_not_use
+                .model_provider_id
+                .clone(),
         };
         for envelope in &mut items {
             Self::assign_missing_response_item_id(&mut envelope.item);
@@ -4280,6 +4285,7 @@ impl Session {
                             compaction_response_id: Some(compaction_response_id),
                             compaction_model_hash: model_info.comp_hash.clone(),
                             reviewer_compaction_hash,
+                            model_provider_id: provider_id.clone(),
                         },
                         started_item.map(|item| (turn_context, item)),
                     )

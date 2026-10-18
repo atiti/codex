@@ -115,9 +115,6 @@ async fn handle_spawn_agent(
     let args: SpawnAgentArgs = parse_arguments(&arguments)?;
     let fork_mode = args.fork_mode()?;
     let message = message_content(args.message)?;
-    let routing_prompt = Some(args.task_name.clone());
-    let inherited_model_provider = Some(turn.model_provider_id());
-    let model_explicit = args.model.is_some();
     let role_name = args
         .agent_type
         .as_deref()

@@ -44,7 +44,10 @@ pub(super) fn enabled(turn_context: &TurnContext) -> bool {
         .enabled(Feature::AsyncCompaction)
         && !turn_context.config.features.enabled(Feature::TokenBudget)
         && matches!(
-            turn_context.provider.capabilities().remote_compaction,
+            turn_context
+                .model_provider()
+                .capabilities()
+                .remote_compaction,
             RemoteCompactionSupport::V2
         )
 }

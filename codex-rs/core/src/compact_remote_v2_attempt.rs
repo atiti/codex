@@ -23,7 +23,6 @@ use codex_analytics::CompactionPhase;
 use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_history::CodexHarnessMetadata;
-use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
@@ -129,14 +128,6 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let trace_input_history = compaction_trace
                 .is_enabled()
                 .then(|| history.raw_items().cloned().collect());
-            let (mut input, metadata): (Vec<_>, Vec<_>) = history
-                .for_prompt_annotated(&model_info.input_modalities)
-                .into_iter()
-                .map(|envelope| (envelope.item, envelope.metadata))
-                .unzip();
-            sess.services
-                .executed_tool_calls
-                .attach_to_compaction_prompt(&mut input);
             let client_session = client_session.unwrap_or_else(|| {
                 owned_client_session.insert(
                     sess.services
@@ -153,6 +144,15 @@ pub(super) async fn run_remote_compact_v2_attempt(
                         }),
                 )
             });
+            let (mut input, metadata): (Vec<_>, Vec<_>) = history
+                .for_prompt_annotated(&model_info.input_modalities)
+                .into_iter()
+                .map(|envelope| (envelope.item, envelope.metadata))
+                .unzip();
+            sess.services
+                .executed_tool_calls
+                .attach_to_compaction_prompt(&mut input);
+
             (
                 model_info,
                 input_goal_ids,

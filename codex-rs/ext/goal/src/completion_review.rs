@@ -22,7 +22,7 @@ pub(crate) fn review_prompt(goal: &ThreadGoal, history: &[ResponseItem]) -> Stri
         let text = content
             .iter()
             .filter_map(|part| match part {
-                ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                     Some(text.as_str())
                 }
                 _ => None,

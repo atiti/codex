@@ -114,3 +114,25 @@ fn dynamic_preview_reports_hidden_lines_and_retains_full_output() {
     }
     insta::assert_snapshot!(snapshots.join("\n\n"));
 }
+
+#[test]
+fn large_dynamic_output_stays_exact_when_expanded_after_spilling() {
+    let output = "large retained result\n".repeat(8000);
+    let cell =
+        DynamicToolCallCell::from_item(item(DynamicToolCallStatus::Completed, Some(&output)))
+            .unwrap();
+    let raw = cell
+        .raw_lines()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(raw.ends_with(output.trim_end_matches('\n')));
+    insta::assert_snapshot!(
+        cell.display_lines(/*width*/ 80)
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}

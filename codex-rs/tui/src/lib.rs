@@ -134,6 +134,7 @@ mod experimental_features;
 mod markdown_copy;
 mod permission_discovery;
 mod pets;
+mod retained_text;
 mod security_setup;
 mod worktree_browser;
 pub use custom_terminal::Terminal;

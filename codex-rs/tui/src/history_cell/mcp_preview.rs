@@ -80,17 +80,17 @@ impl McpToolCallCell {
                             if text.starts_with("Script completed\n")
                                 && let Some((_, output)) = text.split_once("\nOutput:\n")
                             {
-                                Cow::Borrowed(output)
+                                Cow::Owned(output.to_owned())
                             } else if let Ok(output) =
-                                serde_json::from_str::<NodeReplExecOutput>(text)
+                                serde_json::from_str::<NodeReplExecOutput>(&text)
                                 && output.exit_code == 0
                             {
                                 Cow::Owned(output.output)
                             } else {
-                                Cow::Borrowed(block.render_full())
+                                Cow::Borrowed(block.preview_text())
                             }
                         } else {
-                            Cow::Borrowed(block.render_full())
+                            Cow::Borrowed(block.preview_text())
                         };
                         push_tail(&mut details, &output);
                         // A code-mode image can also carry text; its marker precedes that output.

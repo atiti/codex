@@ -33,14 +33,14 @@ pub(super) struct McpContentBlock {
     display: McpContentDisplay,
     pub(super) is_image: bool,
     /// Code mode uses a top-level `text` field even on malformed or non-text blocks.
-    original_text: Option<String>,
+    original_text: Option<crate::retained_text::RetainedText>,
 }
 
 #[derive(Debug)]
 enum McpContentDisplay {
-    Text(String),
+    Text(crate::retained_text::RetainedText),
     Summary(Cow<'static, str>),
-    Json(String),
+    Json(crate::retained_text::RetainedText),
 }
 
 impl McpToolResult {
@@ -64,10 +64,12 @@ impl McpToolResult {
                     (_, McpResultKind::NodeRepl) => block
                         .get("text")
                         .and_then(serde_json::Value::as_str)
-                        .map(str::to_owned),
+                        .map(|text| crate::retained_text::RetainedText::new(text.to_owned())),
                 };
                 let display = match parsed {
-                    Ok(ContentBlock::Text(text)) => McpContentDisplay::Text(text.text),
+                    Ok(ContentBlock::Text(text)) => {
+                        McpContentDisplay::Text(crate::retained_text::RetainedText::new(text.text))
+                    }
                     Ok(ContentBlock::Image(image)) => {
                         // Computer activity previews require a valid image. Stop decoding once
                         // one has been found; the result text only retains a readable marker.
@@ -92,7 +94,9 @@ impl McpToolResult {
                     Ok(ContentBlock::ResourceLink(link)) => {
                         McpContentDisplay::Summary(format!("link: {}", link.uri).into())
                     }
-                    Ok(_) | Err(_) => McpContentDisplay::Json(block.to_string()),
+                    Ok(_) | Err(_) => McpContentDisplay::Json(
+                        crate::retained_text::RetainedText::new(block.to_string()),
+                    ),
                 };
                 McpContentBlock {
                     display,
@@ -112,43 +116,46 @@ impl McpToolResult {
 
 impl McpContentBlock {
     /// Returns all retained text, with honest markers for media and embedded resource bodies.
-    pub(super) fn render_full(&self) -> &str {
+    /// A bounded view for compact summaries; expanded transcripts use `render_full`.
+    pub(super) fn preview_text(&self) -> &str {
         if let Some(text) = &self.original_text {
-            return text.trim_end_matches('\n');
+            return text.preview();
         }
         match &self.display {
-            McpContentDisplay::Text(text) | McpContentDisplay::Json(text) => {
-                text.trim_end_matches('\n')
-            }
+            McpContentDisplay::Text(text) | McpContentDisplay::Json(text) => text.preview(),
             McpContentDisplay::Summary(summary) => summary,
         }
     }
 
-    /// Returns the untruncated top-level text used by node_repl and cua_repl's compact and
-    /// transcript views.
-    ///
-    /// Valid text blocks reuse their display storage. Only node_repl and cua_repl retain this extra
-    /// field on malformed or non-text blocks, where it takes precedence over the usual display
-    /// content.
-    pub(super) fn text(&self) -> Option<&str> {
+    pub(super) fn render_full(&self) -> Cow<'_, str> {
+        if let Some(text) = &self.original_text {
+            return text.read();
+        }
         match &self.display {
-            McpContentDisplay::Text(text) => Some(text),
-            McpContentDisplay::Summary(_) | McpContentDisplay::Json(_) => {
-                self.original_text.as_deref()
-            }
+            McpContentDisplay::Text(text) | McpContentDisplay::Json(text) => text.read(),
+            McpContentDisplay::Summary(summary) => summary.clone(),
         }
     }
 
-    /// Formats the complete text or fallback JSON. The caller applies a single preview limit
-    /// across all blocks, while transcript and raw output retain the full result.
+    pub(super) fn text(&self) -> Option<Cow<'_, str>> {
+        match &self.display {
+            McpContentDisplay::Text(text) => Some(Cow::Borrowed(text.preview())),
+            McpContentDisplay::Summary(_) | McpContentDisplay::Json(_) => self
+                .original_text
+                .as_ref()
+                .map(|text| Cow::Borrowed(text.preview())),
+        }
+    }
+
     pub(super) fn render(&self) -> Cow<'_, str> {
         match &self.display {
             McpContentDisplay::Text(text) | McpContentDisplay::Json(text) => {
+                let text = text.preview();
                 format_json_compact(text)
                     .map(Cow::Owned)
                     .unwrap_or(Cow::Borrowed(text))
             }
-            McpContentDisplay::Summary(summary) => Cow::Borrowed(summary),
+            McpContentDisplay::Summary(summary) => summary.clone(),
         }
     }
 }

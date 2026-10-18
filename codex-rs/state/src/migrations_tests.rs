@@ -1115,15 +1115,8 @@ async fn stable_upgrade_keeps_installed_task_work_migration_checksums() {
         let _ = std::fs::remove_dir_all(dir);
     });
     let path = dir.join("upgrade.sqlite");
-    let pool = sqlx_sqlite::SqlitePoolOptions::new()
-        .max_connections(1)
-        .connect_with(
-            sqlx_sqlite::SqliteConnectOptions::new()
-                .filename(&path)
-                .create_if_missing(true),
-        )
-        .await
-        .unwrap();
+    let sqlite = crate::SqliteConfig::new_for_testing(dir.as_path().abs());
+    let pool = sqlite.open_read_write_pool(&path).await.unwrap();
     let installed = sqlx::migrate::Migrator {
         migrations: std::borrow::Cow::Owned(
             STATE_MIGRATOR

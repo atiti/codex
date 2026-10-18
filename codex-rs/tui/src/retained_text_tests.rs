@@ -8,7 +8,7 @@ fn large_output_is_spilled_shared_and_removed_after_last_owner() {
     let Storage::File { file, .. } = text.0.as_ref() else {
         panic!("large text must spill");
     };
-    let path = file.path().to_path_buf();
+    let path = file.to_path_buf();
     let shared = text.clone();
     assert_eq!(shared.read(), original);
     drop(text);

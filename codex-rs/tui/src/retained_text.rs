@@ -4,6 +4,7 @@ use std::borrow::Cow;
 use std::io::Write;
 use std::sync::Arc;
 use tempfile::NamedTempFile;
+use tempfile::TempPath;
 
 const INLINE_TEXT_BYTES: usize = 64 * 1024;
 
@@ -13,10 +14,7 @@ pub(crate) struct RetainedText(Arc<Storage>);
 #[derive(Debug)]
 enum Storage {
     Inline(String),
-    File {
-        file: NamedTempFile,
-        preview: String,
-    },
+    File { file: TempPath, preview: String },
 }
 
 impl RetainedText {
@@ -35,7 +33,10 @@ impl RetainedText {
                         &text[..head],
                         &text[tail..]
                     );
-                    return Self(Arc::new(Storage::File { file, preview }));
+                    return Self(Arc::new(Storage::File {
+                        file: file.into_temp_path(),
+                        preview,
+                    }));
                 }
                 Err(error) => {
                     tracing::warn!(%error, bytes = text.len(), "could not spill transcript text")
@@ -56,7 +57,7 @@ impl RetainedText {
     pub(crate) fn read(&self) -> Cow<'_, str> {
         match self.0.as_ref() {
             Storage::Inline(text) => Cow::Borrowed(text),
-            Storage::File { file, .. } => match std::fs::read_to_string(file.path()) {
+            Storage::File { file, .. } => match std::fs::read_to_string(file) {
                 Ok(text) => Cow::Owned(text),
                 Err(error) => {
                     tracing::warn!(%error, "could not read retained transcript text");

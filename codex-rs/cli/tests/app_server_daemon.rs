@@ -575,6 +575,11 @@ fn packaged_daemon_launch(action: &str, initial: InitialDaemon) -> Result<()> {
         std::fs::create_dir_all(package.join(directory))?;
     }
     let package_binary = package.join("bin/codex");
+    // macOS current_exe may resolve a hard link to the original executable path,
+    // which hides the package manifest beside this fixture.
+    #[cfg(target_os = "macos")]
+    copy_executable(&daemon.codex, &package_binary)?;
+    #[cfg(not(target_os = "macos"))]
     if std::fs::hard_link(&daemon.codex, &package_binary).is_err() {
         copy_executable(&daemon.codex, &package_binary)?;
     }

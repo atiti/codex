@@ -247,6 +247,14 @@ async fn model_switch_program_pair(
                         .enable(Feature::ApiKeyCyberAccessPrograms)
                         .expect("enable API-key Cyber access programs");
                 } else if matches!(history, History::ApiKeyResume) {
+                    config.model_provider.name = "OpenAI".to_owned();
+                    config.model_provider.capabilities =
+                        Some(codex_model_provider_info::ModelProviderCapabilities {
+                            remote_compaction: Some(
+                                codex_model_provider_info::RemoteCompactionSupport::Unsupported,
+                            ),
+                            ..Default::default()
+                        });
                     config
                         .features
                         .disable(Feature::ApiKeyCyberAccessPrograms)

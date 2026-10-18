@@ -140,12 +140,16 @@ async fn unavailable_board_calls_return_model_errors(
         requests[1]
             .function_call_output_text("missing-board")
             .as_deref(),
-        Some("unsupported call: collaborationpost")
+        Some("unsupported call: agentroute_collaborationpost")
     );
     for name in ["post", "send_message", "followup_task"] {
         assert!(
-            responses::namespace_child_tool(&requests[0].body_json(), "collaboration", name)
-                .is_none()
+            responses::namespace_child_tool(
+                &requests[0].body_json(),
+                "agentroute_collaboration",
+                name
+            )
+            .is_none()
         );
     }
     assert!(
@@ -1031,7 +1035,7 @@ async fn codex_instances_share_board_with_fixed_access() -> anyhow::Result<()> {
                 .features
                 .disable(Feature::EnableRequestCompression)
                 .expect("capture gated requests");
-            config.multi_agent_v2.tool_namespace = Some("collaboration".into());
+            config.multi_agent_v2.tool_namespace = Some("agentroute_collaboration".into());
             config.current_time_reminder = Some(codex_core::config::CurrentTimeReminderConfig {
                 clock_source: codex_features::CurrentTimeSource::External,
                 ..Default::default()
@@ -1087,7 +1091,7 @@ async fn codex_instances_share_board_with_fixed_access() -> anyhow::Result<()> {
                 "search_posts",
                 "subscribe",
             ]
-            .map(|name| ToolName::namespaced("collaboration", name)),
+            .map(|name| ToolName::namespaced("agentroute_collaboration", name)),
         );
         options.thread_extension_init.insert(policy);
         options.thread_extension_init.insert(connection);

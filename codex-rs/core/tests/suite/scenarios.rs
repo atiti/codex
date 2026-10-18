@@ -2302,7 +2302,12 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
             compaction_chunk(
                 Some(foreground_gate),
                 vec![
-                    ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
+                    ev_function_call_with_namespace(
+                        "team",
+                        "agentroute_collaboration",
+                        "list_agents",
+                        "{}",
+                    ),
                     ev_completed_with_tokens(
                         "team-response",
                         /*total_tokens*/ if over_budget { 9_000 } else { 75_000 },
@@ -2595,7 +2600,12 @@ async fn async_compaction_reuses_pending_work(
     if !manual {
         responses.push(immediate(response(
             "second",
-            ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
+            ev_function_call_with_namespace(
+                "team",
+                "agentroute_collaboration",
+                "list_agents",
+                "{}",
+            ),
             /*tokens*/ if over_budget { 9_000 } else { 91_000 },
         )));
     }

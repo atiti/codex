@@ -82,7 +82,7 @@ async fn idle_eviction_preserves_worker_context_for_followup() -> Result<()> {
             sse(vec![
                 ev_function_call_with_namespace(
                     &call_id,
-                    "collaboration",
+                    "agentroute_collaboration",
                     tool,
                     &arguments.to_string(),
                 ),

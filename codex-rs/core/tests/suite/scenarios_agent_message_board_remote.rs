@@ -323,7 +323,9 @@ async fn remote_board_effective_permissions_and_denials(code_mode: bool) -> anyh
                 responses::ev_custom_tool_call(
                     call_id,
                     "exec",
-                    &format!("text(await tools.collaboration__{tool_name}({arguments}));"),
+                    &format!(
+                        "text(await tools.agentroute_collaboration__{tool_name}({arguments}));"
+                    ),
                 ),
                 responses::ev_completed(call_id),
             ])

@@ -2343,10 +2343,12 @@ async fn responses_websocket_creates_on_non_prefix(
     assert_eq!(second["model"].as_str(), Some(MODEL));
     assert_eq!(second["stream"], serde_json::Value::Bool(true));
     assert_eq!(second.get("previous_response_id"), None);
-    assert_eq!(
-        second["input"],
-        serde_json::to_value(&prompt_two.input).unwrap()
-    );
+    let mut expected_input = serde_json::to_value(&prompt_two.input).unwrap();
+    // Generic compatible providers omit transport-owned item IDs on full replay.
+    for item in expected_input.as_array_mut().unwrap() {
+        item.as_object_mut().unwrap().remove("id");
+    }
+    assert_eq!(second["input"], expected_input);
 
     assert_continuation_metrics_with_item_types(
         &harness.session_telemetry,

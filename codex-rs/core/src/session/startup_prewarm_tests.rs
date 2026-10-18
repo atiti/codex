@@ -6,6 +6,8 @@ use pretty_assertions::assert_eq;
 
 fn message(role: &str, text: impl Into<String>) -> ResponseItem {
     ResponseItem::Message {
+        encrypted_content: None,
+        status: None,
         id: None,
         role: role.to_string(),
         content: vec![ContentItem::InputText { text: text.into() }],

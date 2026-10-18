@@ -179,6 +179,8 @@ fn final_request_boundary_drops_third_party_encrypted_state() {
         ..Default::default()
     };
     let function_call = ResponseItem::FunctionCall {
+        encrypted_content: None,
+        status: None,
         id: Some(ResponseItemId::with_suffix("fc", "portable")),
         name: "lookup".to_string(),
         namespace: None,
@@ -221,6 +223,8 @@ fn final_request_boundary_drops_third_party_encrypted_state() {
 fn final_request_boundary_drops_unattributed_encrypted_function_args() {
     let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
     let mut input = vec![ResponseItem::FunctionCall {
+        encrypted_content: None,
+        status: None,
         id: None,
         name: "lookup".to_string(),
         namespace: None,
@@ -240,6 +244,8 @@ fn final_request_boundary_drops_unattributed_encrypted_function_args() {
     assert_eq!(
         input,
         vec![ResponseItem::FunctionCall {
+            encrypted_content: None,
+            status: None,
             id: None,
             name: "lookup".to_string(),
             namespace: None,
@@ -277,6 +283,8 @@ fn restricted_provider_downgrades_plaintext_agent_message_to_user_message() {
     assert_eq!(
         input,
         vec![ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
@@ -467,6 +475,8 @@ fn all_provider_requests_keep_guidance_without_harness_identity() -> anyhow::Res
             provenance: None,
         },
         input: vec![ResponseItem::Message {
+            encrypted_content: None,
+            status: None,
             id: None,
             role: "developer".into(),
             content: vec![ContentItem::InputText {

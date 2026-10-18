@@ -190,6 +190,7 @@ fn restricted_provider_prompt_keeps_only_portable_custom_tools() {
         ..Default::default()
     };
     let custom_call = |name: &str, call_id: &str| ResponseItem::CustomToolCall {
+        encrypted_content: None,
         id: Some(ResponseItemId::with_suffix("ctc", call_id)),
         status: Some("completed".to_string()),
         call_id: call_id.to_string(),
@@ -234,6 +235,8 @@ fn compatible_third_party_provider_drops_encrypted_provider_state() {
         ..Default::default()
     };
     let function_call = ResponseItem::FunctionCall {
+        encrypted_content: None,
+        status: None,
         id: Some(ResponseItemId::with_suffix("fc", "portable")),
         name: "lookup".to_string(),
         namespace: None,

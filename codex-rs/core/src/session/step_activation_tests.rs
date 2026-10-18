@@ -713,7 +713,12 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
         ..Default::default()
     };
     session
-        .record_token_usage_info(&turn, &after.settings, Some(&usage))
+        .record_token_usage_info(
+            &turn,
+            &after.settings,
+            Some(&usage),
+            crate::session::TokenUsageContext::Sampling,
+        )
         .await
         .expect("record routed usage");
     assert_eq!(

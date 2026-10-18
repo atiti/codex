@@ -115,7 +115,6 @@ impl McpToolResult {
 }
 
 impl McpContentBlock {
-    /// Returns all retained text, with honest markers for media and embedded resource bodies.
     /// A bounded view for compact summaries; expanded transcripts use `render_full`.
     pub(super) fn preview_text(&self) -> &str {
         if let Some(text) = &self.original_text {
@@ -127,6 +126,7 @@ impl McpContentBlock {
         }
     }
 
+    /// Returns exact retained text for expansion and copying.
     pub(super) fn render_full(&self) -> Cow<'_, str> {
         if let Some(text) = &self.original_text {
             return text.read();

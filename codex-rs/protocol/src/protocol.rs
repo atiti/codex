@@ -4972,7 +4972,13 @@ mod tests {
             panic!("communication should serialize as a response message");
         };
         let serialized = match content.as_slice() {
-            [ContentItem::OutputText { text }] => text,
+            [
+                ContentItem::OutputText {
+                    text,
+                    annotations: _,
+                    logprobs: _,
+                },
+            ] => text,
             other => panic!("unexpected response content: {other:?}"),
         };
 

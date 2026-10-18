@@ -70,6 +70,9 @@ feature-depth = 1
 # A list of advisory IDs to ignore. Note that ignored advisories will still
 # output a note when they are encountered.
 ignore = [
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 4.2 remains through Linux keyring/TUI zbus 4.4; informational unmaintained notice, no vulnerability or in-place patched version; remove when upstream adopts zbus 6 wire" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 4.2 remains through Linux keyring/TUI zbus 4.4; informational unmaintained notice, no vulnerability or in-place patched version; remove when upstream adopts zbus 6 derives" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 3.0 is retained by Linux zbus 4.4 in keyring 3.6 and TUI; informational unmaintained notice, no vulnerability or in-place patched version; remove when keyring and TUI adopt zbus 6 names" },
     # Reviewed 2026-07-02. Keep this list in sync with .cargo/audit.toml.
     # Each exception must identify the dependency path and removal condition.
     { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; pulled in via starlark/starlark_syntax v0.14.2 used by execpolicy/cli/core; no fixed starlark release yet" },

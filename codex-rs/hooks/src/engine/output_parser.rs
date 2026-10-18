@@ -51,6 +51,15 @@ pub(crate) struct UserPromptSubmitOutput {
     pub reason: Option<String>,
     pub invalid_block_reason: Option<String>,
     pub additional_context: Option<String>,
+    pub model: Option<String>,
+    pub model_provider: Option<String>,
+    pub reasoning_effort: Option<codex_protocol::openai_models::ReasoningEffort>,
+    pub route_message: Option<String>,
+    pub strip_prompt_prefix_bytes: Option<usize>,
+    pub strip_provider_state: bool,
+    pub chatgpt_profile_home: Option<String>,
+    pub reviewer_profile_name: Option<String>,
+    pub reviewer_fallback_profiles: Vec<crate::ReviewerFallbackProfile>,
 }
 
 #[derive(Debug, Clone)]
@@ -275,15 +284,67 @@ pub(crate) fn parse_user_prompt_submit(stdout: &str) -> Option<UserPromptSubmitO
     } else {
         None
     };
-    let additional_context = wire
+    let (
+        additional_context,
+        model,
+        model_provider,
+        reasoning_effort,
+        route_message,
+        strip_prompt_prefix_bytes,
+        strip_provider_state,
+        chatgpt_profile_home,
+        reviewer_profile_name,
+        reviewer_fallback_profiles,
+    ) = wire
         .hook_specific_output
-        .and_then(|output| output.additional_context);
+        .map(|output| {
+            (
+                output.additional_context,
+                output.model,
+                output.model_provider,
+                output.reasoning_effort,
+                output.route_message,
+                output.strip_prompt_prefix_bytes,
+                output.strip_provider_state,
+                output.chatgpt_profile_home,
+                output.reviewer_profile_name,
+                output
+                    .reviewer_fallback_profiles
+                    .into_iter()
+                    .map(|profile| crate::ReviewerFallbackProfile {
+                        name: profile.name,
+                        codex_home: profile.codex_home,
+                    })
+                    .collect(),
+            )
+        })
+        .unwrap_or((
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+            None,
+            None,
+            Vec::new(),
+        ));
     Some(UserPromptSubmitOutput {
         universal: UniversalOutput::from(wire.universal),
         should_block: should_block && invalid_block_reason.is_none(),
         reason: wire.reason,
         invalid_block_reason,
         additional_context,
+        model,
+        model_provider,
+        reasoning_effort,
+        route_message,
+        strip_prompt_prefix_bytes,
+        strip_provider_state: strip_provider_state || chatgpt_profile_home.is_some(),
+        chatgpt_profile_home,
+        reviewer_profile_name,
+        reviewer_fallback_profiles,
     })
 }
 
@@ -544,6 +605,27 @@ mod tests {
                 "invalid structured output should fail: {stdout}",
             );
         }
+    }
+
+    #[test]
+    fn user_prompt_submit_parses_model_provider() {
+        let parsed = parse_user_prompt_submit(
+            &json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "UserPromptSubmit",
+                    "model": "deepseek-chat",
+                    "modelProvider": "agentroute-deepseek"
+                }
+            })
+            .to_string(),
+        )
+        .expect("user prompt submit hook output should parse");
+
+        assert_eq!(parsed.model.as_deref(), Some("deepseek-chat"));
+        assert_eq!(
+            parsed.model_provider.as_deref(),
+            Some("agentroute-deepseek")
+        );
     }
 
     #[test]

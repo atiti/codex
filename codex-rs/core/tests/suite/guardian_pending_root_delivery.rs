@@ -42,7 +42,7 @@ async fn confirmed_root_delivery_invalidates_pending_worker_allow() -> Result<()
         sse(vec![
             ev_function_call_with_namespace(
                 SPAWN_CALL_ID,
-                "collaboration",
+                "agentroute_collaboration",
                 "spawn_agent",
                 &json!({"message": INITIAL_TASK, "task_name": "worker"}).to_string(),
             ),

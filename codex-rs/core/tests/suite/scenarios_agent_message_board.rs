@@ -61,7 +61,12 @@ impl codex_core::TimeProvider for BoardClock {
 
 fn tool(call: &str, name: &str, arguments: Value) -> String {
     sse(vec![
-        ev_function_call_with_namespace(call, "collaboration", name, &arguments.to_string()),
+        ev_function_call_with_namespace(
+            call,
+            "agentroute_collaboration",
+            name,
+            &arguments.to_string(),
+        ),
         ev_completed(call),
     ])
 }
@@ -135,12 +140,16 @@ async fn unavailable_board_calls_return_model_errors(
         requests[1]
             .function_call_output_text("missing-board")
             .as_deref(),
-        Some("unsupported call: collaborationpost")
+        Some("unsupported call: agentroute_collaborationpost")
     );
     for name in ["post", "send_message", "followup_task"] {
         assert!(
-            responses::namespace_child_tool(&requests[0].body_json(), "collaboration", name)
-                .is_none()
+            responses::namespace_child_tool(
+                &requests[0].body_json(),
+                "agentroute_collaboration",
+                name
+            )
+            .is_none()
         );
     }
     assert!(
@@ -187,8 +196,12 @@ async fn board_post_and_reads_reach_model_context_without_self_notices(
     let requests = mock.requests();
     assert_eq!(requests.len(), 5);
     assert!(
-        responses::namespace_child_tool(&requests[0].body_json(), "collaboration", "post")
-            .is_some()
+        responses::namespace_child_tool(
+            &requests[0].body_json(),
+            "agentroute_collaboration",
+            "post"
+        )
+        .is_some()
     );
     let channel_result: Value = serde_json::from_str(
         &requests[2]
@@ -645,7 +658,7 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
                 gate: None,
                 body: sse(vec![ev_function_call_with_namespace(
                     "spawn-worker",
-                    "collaboration",
+                    "agentroute_collaboration",
                     "spawn_agent",
                     &json!({"task_name":"worker","message":"Say ready.","fork_turns":"none"})
                         .to_string(),
@@ -657,7 +670,7 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
                 body: sse(vec![
                     ev_function_call_with_namespace(
                         "settle-worker",
-                        "collaboration",
+                        "agentroute_collaboration",
                         "wait_agent",
                         "{}",
                     ),
@@ -859,7 +872,8 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
         let request: Value = serde_json::from_slice(body)?;
         for name in ["send_message", "followup_task"] {
             assert_eq!(
-                responses::namespace_child_tool(&request, "collaboration", name).is_some(),
+                responses::namespace_child_tool(&request, "agentroute_collaboration", name)
+                    .is_some(),
                 !disable_direct_message,
                 "{name}",
             );
@@ -872,7 +886,8 @@ async fn board_unsubscribe_survives_post_and_resume_until_resubscribed(
             "post",
         ] {
             assert!(
-                responses::namespace_child_tool(&request, "collaboration", name).is_some(),
+                responses::namespace_child_tool(&request, "agentroute_collaboration", name)
+                    .is_some(),
                 "{name}"
             );
         }
@@ -1020,7 +1035,7 @@ async fn codex_instances_share_board_with_fixed_access() -> anyhow::Result<()> {
                 .features
                 .disable(Feature::EnableRequestCompression)
                 .expect("capture gated requests");
-            config.multi_agent_v2.tool_namespace = Some("collaboration".into());
+            config.multi_agent_v2.tool_namespace = Some("agentroute_collaboration".into());
             config.current_time_reminder = Some(codex_core::config::CurrentTimeReminderConfig {
                 clock_source: codex_features::CurrentTimeSource::External,
                 ..Default::default()
@@ -1076,7 +1091,7 @@ async fn codex_instances_share_board_with_fixed_access() -> anyhow::Result<()> {
                 "search_posts",
                 "subscribe",
             ]
-            .map(|name| ToolName::namespaced("collaboration", name)),
+            .map(|name| ToolName::namespaced("agentroute_collaboration", name)),
         );
         options.thread_extension_init.insert(policy);
         options.thread_extension_init.insert(connection);

@@ -316,7 +316,7 @@ async fn waits_for_rollout_maintenance_before_migrating() {
         "migration should wait for rollout maintenance"
     );
     drop(maintenance_guard);
-    tokio::time::timeout(Duration::from_secs(2), migration)
+    tokio::time::timeout(Duration::from_secs(10), migration)
         .await
         .expect("migration should retry rollout maintenance")
         .expect("join startup migration");

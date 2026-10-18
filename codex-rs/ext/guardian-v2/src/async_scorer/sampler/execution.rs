@@ -277,6 +277,9 @@ impl SamplingExecution {
                     };
                     cyber_access_program::for_auth(
                         auth.as_ref(),
+                        self.config.provider.info(),
+                        &self.request.model,
+                        /*provider_id*/ None,
                         Some(program),
                         self.config.api_key_cyber_access_programs,
                     )

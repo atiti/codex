@@ -10,6 +10,10 @@ async fn yielded_notifications_keep_originating_budgets_after_model_switch() -> 
     let test = step_settings_test()
         .with_config(|config| {
             config.features.enable(Feature::CodeMode).unwrap();
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process host");
             for model in &mut config.model_catalog.as_mut().expect("models").models {
                 model.tool_mode = Some(ToolMode::CodeModeOnly);
                 model.use_responses_lite = false;

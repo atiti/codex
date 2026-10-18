@@ -728,8 +728,10 @@ impl ChatWidget {
     /// git metadata.
     pub(super) fn status_line_value(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
-            StatusLineItem::ModelName => Some(self.model_display_name().to_string()),
-            StatusLineItem::ModelWithReasoning => Some(self.model_with_reasoning_display_name()),
+            StatusLineItem::ModelName => Some(self.model_with_provider_display_name()),
+            StatusLineItem::ModelWithReasoning => {
+                Some(self.model_with_reasoning_and_provider_display_name())
+            }
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
             StatusLineItem::CurrentDir => {
                 Some(format_directory_display(
@@ -806,6 +808,7 @@ impl ChatWidget {
                     format_tokens_compact(self.status_line_total_usage().output_tokens)
                 )
             }),
+            StatusLineItem::TokensPerSecond => self.output_rate.display(Instant::now()),
             StatusLineItem::ThreadCredits => self
                 .estimated_thread_usage()
                 .map(|usage| usage.estimated_usage_credits_micros)
@@ -888,6 +891,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
             StatusSurfacePreviewItem::TotalOutputTokens => StatusLineItem::TotalOutputTokens,
+            StatusSurfacePreviewItem::TokensPerSecond => StatusLineItem::TokensPerSecond,
             StatusSurfacePreviewItem::ThreadCredits => StatusLineItem::ThreadCredits,
             StatusSurfacePreviewItem::EstimatedThreadCost => StatusLineItem::EstimatedThreadCost,
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
@@ -992,8 +996,45 @@ impl ChatWidget {
     }
 
     fn reasoning_display_name(&self) -> String {
-        let effort = self.effective_reasoning_effort();
+        let effort = self
+            .routed_turn_reasoning_effort
+            .clone()
+            .or_else(|| self.effective_reasoning_effort());
         Self::status_line_reasoning_effort_label(effort.as_ref())
+    }
+
+    fn model_provider_display_name(&self) -> &str {
+        self.routed_turn_model_provider
+            .as_deref()
+            .unwrap_or(self.config.model_provider_id.as_str())
+    }
+
+    fn model_with_provider_display_name(&self) -> String {
+        format!(
+            "{} · {}",
+            self.model_display_name(),
+            self.model_provider_display_name()
+        )
+    }
+
+    fn model_with_reasoning_and_provider_display_name(&self) -> String {
+        let label = self.reasoning_display_name();
+        let service_tier_label = self
+            .current_service_tier()
+            .and_then(|service_tier| {
+                self.current_model_service_tier_commands()
+                    .into_iter()
+                    .find(|tier| tier.id == service_tier)
+                    .map(|tier| tier.name)
+            })
+            .filter(|_| self.has_chatgpt_account)
+            .map(|tier| format!(" {tier}"))
+            .unwrap_or_default();
+        format!(
+            "{} · {} · {label}{service_tier_label}",
+            self.model_display_name(),
+            self.model_provider_display_name()
+        )
     }
 
     fn model_with_reasoning_display_name(&self) -> String {

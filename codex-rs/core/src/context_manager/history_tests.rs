@@ -2722,10 +2722,8 @@ fn normalize_adds_missing_output_for_tool_search_call() {
     );
 }
 
-#[cfg(debug_assertions)]
 #[test]
-#[should_panic]
-fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
+fn normalize_adds_missing_output_for_custom_tool_call_is_idempotent() {
     let items = vec![ResponseItem::CustomToolCall {
         encrypted_content: None,
         id: None,
@@ -2738,6 +2736,9 @@ fn normalize_adds_missing_output_for_custom_tool_call_panics_in_debug() {
     }];
     let mut h = create_history_with_items(items);
     h.normalize_history(&default_input_modalities());
+    let recovered = raw_items(&h);
+    h.normalize_history(&default_input_modalities());
+    assert_eq!(raw_items(&h), recovered);
 }
 
 #[cfg(debug_assertions)]

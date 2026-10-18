@@ -14,6 +14,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::Wrap;
@@ -1606,6 +1607,10 @@ impl Renderable for ListSelectionView {
         if area.height == 0 || area.width == 0 {
             return;
         }
+
+        // Modal rows must not leave the composer's wider footer visible underneath.
+        Clear.render(area, buf);
+
         let search_field_visible = self.search_field_visible();
         let inner_width = popup_content_width(area.width);
         let side_w = self.side_layout_width(inner_width);

@@ -428,6 +428,22 @@ impl ChatWidget {
                 AgentMessageContent::Text { text } => message.push_str(text),
             }
         }
+        if item.id.starts_with("agentroute-route-") {
+            if let Some((model, model_provider, effort)) = super::parse_model_route(&message) {
+                self.routed_turn_model = Some(model);
+                self.routed_turn_model_provider = model_provider;
+                self.routed_turn_reasoning_effort = effort;
+                self.refresh_status_surfaces();
+            }
+            self.add_to_history(history_cell::new_agentroute_route_event(message));
+            self.request_redraw();
+            return;
+        }
+        if item.id.starts_with("agentroute-task-overlap-") {
+            self.add_to_history(history_cell::new_agentroute_task_overlap_event(message));
+            self.request_redraw();
+            return;
+        }
         let parsed = parse_assistant_markdown(&message, self.config.cwd.as_path());
         if from_replay && self.stream_controller.is_none() && !parsed.visible_markdown.is_empty() {
             self.prepare_assistant_message();
@@ -567,6 +583,7 @@ impl ChatWidget {
     }
 
     pub(super) fn handle_stream_finished(&mut self) {
+        self.refresh_status_line();
         if self.task_complete_pending {
             self.bottom_pane.hide_status_indicator();
             self.task_complete_pending = false;
@@ -577,6 +594,9 @@ impl ChatWidget {
 
     #[inline]
     pub(super) fn handle_streaming_delta(&mut self, delta: String) {
+        if self.output_rate.observe(&delta, Instant::now()) {
+            self.refresh_status_line();
+        }
         if !delta.is_empty() {
             self.mark_safety_buffering_agent_message_started();
         }

@@ -22,6 +22,7 @@ async fn harness_authored_configuration_updates_preserve_metadata_and_resume() {
         },
         metadata: Some(CodexHarnessMetadata {
             harness_authored_configuration: true,
+            model_provider_id: Some(turn_context.model_provider_id()),
             ..Default::default()
         }),
     };

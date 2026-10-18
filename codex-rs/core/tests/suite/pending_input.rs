@@ -702,7 +702,7 @@ async fn steer_interrupts_wait_agent_and_is_sent_in_follow_up_request() {
     const WAIT_CALL_ID: &str = "wait-call";
     const INITIAL_PROMPT: &str = "wait for an agent";
     const STEER_PROMPT: &str = "stop waiting and continue";
-    const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+    const MULTI_AGENT_V2_NAMESPACE: &str = "agentroute_collaboration";
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
@@ -993,11 +993,11 @@ async fn queued_inter_agent_mail_triggers_follow_up_after_reasoning_item() {
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_reasoning_item_added("reason-1", &["thinking"])),
+        chunk(ev_reasoning_item_added("rs_reason-1", &["thinking"])),
         gated_chunk(
             gate_reasoning_done_rx,
             vec![
-                ev_reasoning_item("reason-1", &["thinking"], &[]),
+                ev_reasoning_item("rs_reason-1", &["thinking"], &[]),
                 ev_function_call(
                     "call-stale",
                     "shell",
@@ -1184,11 +1184,11 @@ async fn injected_response_item_reopens_turn_after_final_answer() {
         })),
         // Keep the response open past an observable event so the answer boundary is established
         // before the late context is injected.
-        chunk(ev_reasoning_item_added("reason-after-final", &["done"])),
+        chunk(ev_reasoning_item_added("rs_reason-after-final", &["done"])),
         gated_chunk(
             gate_completed_rx,
             vec![
-                ev_reasoning_item("reason-after-final", &["done"], &[]),
+                ev_reasoning_item("rs_reason-after-final", &["done"], &[]),
                 ev_completed("resp-1"),
             ],
         ),
@@ -1260,7 +1260,7 @@ async fn steer_interrupts_and_drains_websocket(
         vec![ev_response_created("warm-1"), ev_completed("warm-1")],
         vec![
             ev_response_created("resp-interrupted"),
-            ev_reasoning_item_added("reason-1", &["thinking"]),
+            ev_reasoning_item_added("rs_reason-1", &["thinking"]),
         ],
         // Finish the active response only after receiving response.interrupt.
         [
@@ -1280,7 +1280,7 @@ async fn steer_interrupts_and_drains_websocket(
                     "sequence_number": 4,
                 })
             } else {
-                ev_reasoning_item("reason-1", &["thinking"], &[])
+                ev_reasoning_item("rs_reason-1", &["thinking"], &[])
             }),
             Some(interrupted),
         ]
@@ -1955,11 +1955,11 @@ async fn user_input_does_not_preempt_after_reasoning_item() {
 
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_reasoning_item_added("reason-1", &["thinking"])),
+        chunk(ev_reasoning_item_added("rs_reason-1", &["thinking"])),
         gated_chunk(
             gate_reasoning_done_rx,
             vec![
-                ev_reasoning_item("reason-1", &["thinking"], &[]),
+                ev_reasoning_item("rs_reason-1", &["thinking"], &[]),
                 ev_function_call(
                     "call-preserved",
                     "shell",
@@ -2031,11 +2031,11 @@ async fn interrupt_if_no_pending_input_checks_turn_and_queue(
     let (release_response, response_gate) = oneshot::channel();
     let first_chunks = vec![
         chunk(ev_response_created("resp-1")),
-        chunk(ev_reasoning_item_added("reason-1", &["thinking"])),
+        chunk(ev_reasoning_item_added("rs_reason-1", &["thinking"])),
         gated_chunk(
             response_gate,
             vec![
-                ev_reasoning_item("reason-1", &["thinking"], &[]),
+                ev_reasoning_item("rs_reason-1", &["thinking"], &[]),
                 ev_completed("resp-1"),
             ],
         ),

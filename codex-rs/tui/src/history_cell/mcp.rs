@@ -311,47 +311,29 @@ impl McpToolCallCell {
         block: &'a McpContentBlock,
         mode: McpToolCallRenderMode,
     ) -> Option<Cow<'a, str>> {
-        let node_repl = self.result_kind() == McpResultKind::NodeRepl;
         if mode == McpToolCallRenderMode::Transcript {
-            return Some(Cow::Borrowed(block.render_full()));
+            return Some(block.render_full());
         }
-        if node_repl && self.success() == Some(true) {
-            let meaningful_output = block.text().and_then(|text| {
-                if text.starts_with("Script completed\n") {
-                    return text
-                        .split_once("\nOutput:\n")
-                        .map(|(_, output)| Cow::Borrowed(output));
+        let node_repl = self.result_kind() == McpResultKind::NodeRepl;
+        if node_repl && let Some(text) = block.text() {
+            if self.success() == Some(true) {
+                let output = if text.starts_with("Script completed\n") {
+                    text.split_once("\nOutput:\n")
+                        .map(|(_, output)| output.to_owned())
+                } else {
+                    serde_json::from_str::<NodeReplExecOutput>(&text)
+                        .ok()
+                        .filter(|output| output.exit_code == 0)
+                        .map(|output| output.output)
+                };
+                if let Some(output) = output {
+                    return (!output.is_empty())
+                        .then(|| Cow::Owned(format_json_compact(&output).unwrap_or(output)));
                 }
-                serde_json::from_str::<NodeReplExecOutput>(text)
-                    .ok()
-                    .filter(|output| output.exit_code == 0)
-                    .map(|output| Cow::Owned(output.output))
-            });
-            match meaningful_output {
-                Some(output) if output.is_empty() => None,
-                Some(output) => Some(
-                    format_json_compact(&output)
-                        .map(Cow::Owned)
-                        .unwrap_or(output),
-                ),
-                None => Some(block.text().map_or_else(
-                    || block.render(),
-                    |text| {
-                        format_json_compact(text)
-                            .map(Cow::Owned)
-                            .unwrap_or(Cow::Borrowed(text))
-                    },
-                )),
             }
-        } else if node_repl && let Some(output) = block.text() {
-            Some(
-                format_json_compact(output)
-                    .map(Cow::Owned)
-                    .unwrap_or(Cow::Borrowed(output)),
-            )
-        } else {
-            Some(block.render())
+            return Some(format_json_compact(&text).map(Cow::Owned).unwrap_or(text));
         }
+        Some(block.render())
     }
 }
 
@@ -396,7 +378,7 @@ impl HistoryCell for McpToolCallCell {
                 Ok(McpToolResult { content, .. }) => {
                     for block in content {
                         let text = block.render_full();
-                        lines.extend(raw_lines_from_source(text));
+                        lines.extend(raw_lines_from_source(&text));
                     }
                 }
                 Err(err) => lines.push(Line::from(format!("Error: {err}"))),

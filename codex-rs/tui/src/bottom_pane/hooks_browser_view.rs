@@ -4,6 +4,7 @@ use codex_app_server_protocol::HookMetadata;
 use codex_app_server_protocol::HookSource;
 use codex_app_server_protocol::HookTrustStatus;
 use codex_app_server_protocol::HooksListEntry;
+use codex_config::effective_hook_additional_context_token_limit;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -541,10 +542,11 @@ impl HooksBrowserView {
         }
         lines.push(detail_line("Timeout", &format!("{}s", hook.timeout_sec)));
         if let Some(limit) = hook.additional_context_limit {
-            let value = if limit == 0 {
-                "unlimited".to_string()
+            let effective_limit = effective_hook_additional_context_token_limit(limit);
+            let value = if limit == 0 || limit > effective_limit {
+                format!("limit: {effective_limit} approximate tokens (hard cap)")
             } else {
-                format!("limit: {limit} approximate tokens")
+                format!("limit: {effective_limit} approximate tokens")
             };
             lines.push(detail_line("Context", &value));
         }
@@ -798,6 +800,7 @@ mod tests {
     use codex_app_server_protocol::HookMetadata;
     use codex_app_server_protocol::HookSource;
     use codex_app_server_protocol::HookTrustStatus;
+    use codex_config::MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT;
     use crossterm::event::KeyCode;
     use crossterm::event::KeyEvent;
     use insta::assert_snapshot;
@@ -1140,6 +1143,36 @@ mod tests {
 
         assert_snapshot!(
             "hooks_browser_additional_context_limit",
+            render_lines(&view, /*width*/ 112)
+        );
+    }
+
+    #[test]
+    fn renders_handler_additional_context_limit_above_hard_cap() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let mut configured_hook = hook(
+            "path:context-limit-above-cap",
+            HookEventName::PreToolUse,
+            HookSource::User,
+            /*plugin_id*/ None,
+            "/tmp/pre-tool-use.sh",
+            /*enabled*/ true,
+            /*is_managed*/ false,
+            /*display_order*/ 0,
+        );
+        configured_hook.additional_context_limit =
+            Some(MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT + 1);
+        let mut view = HooksBrowserView::new(
+            vec![configured_hook],
+            Vec::new(),
+            Vec::new(),
+            AppEventSender::new(tx_raw),
+        );
+
+        view.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+        assert_snapshot!(
+            "hooks_browser_additional_context_limit_above_hard_cap",
             render_lines(&view, /*width*/ 112)
         );
     }

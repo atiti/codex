@@ -4,6 +4,9 @@ inputs:
   target:
     description: Target triple used for cache namespacing.
     required: true
+  native-voice:
+    description: Provision pinned native Windows voice tools for jobs that analyze voice targets.
+    default: "false"
 outputs:
   repository-cache-path:
     description: Filesystem path used for the Bazel repository cache.
@@ -92,3 +95,25 @@ runs:
       if: runner.os == 'Windows'
       shell: pwsh
       run: ./.github/scripts/compute-bazel-windows-path.ps1
+
+    - name: Provision pinned native voice build tools (Windows)
+      if: runner.os == 'Windows' && inputs.native-voice == 'true'
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        $manifest = Get-Content -Raw .github/scripts/voice-cygwin-snapshot.json | ConvertFrom-Json
+        $pin = $manifest.archive
+        $source = $manifest.sourceArchive
+        $directory = Join-Path $env:RUNNER_TEMP "voice-cygwin-snapshot"
+        New-Item -ItemType Directory -Path $directory | Out-Null
+        # These inputs are pinned by the upstream manifest, including archive and source hashes.
+        gh release download $pin.tag --repo openai/codex --pattern $pin.name --pattern $source.name --dir $directory
+        if ($LASTEXITCODE -ne 0) { throw "Cannot obtain the pinned public Cygwin inputs and source" }
+        $sourceFile = Join-Path $directory $source.name
+        if ((Get-Item $sourceFile).Length -ne $source.bytes -or
+            (Get-FileHash $sourceFile -Algorithm SHA256).Hash.ToLowerInvariant() -ne $source.sha256) {
+          throw "Public Cygwin source archive mismatch"
+        }
+        & ./.github/scripts/setup-voice-windows.ps1 -Target x86_64-pc-windows-msvc -SnapshotArchive (Join-Path $directory $pin.name)
+        if ($LASTEXITCODE -ne 0) { throw "Cannot provision native voice tools" }

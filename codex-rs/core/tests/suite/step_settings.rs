@@ -640,6 +640,10 @@ async fn custom_tool_output_replay_preserves_originating_budget() -> Result<()> 
     let test = step_settings_test()
         .with_model(MODEL_B)
         .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process host");
             config.features.enable(Feature::CodeMode).unwrap();
             for model in &mut config.model_catalog.as_mut().expect("models").models {
                 model.truncation_policy =
@@ -1751,6 +1755,10 @@ async fn captured_model_enables_and_executes_code_mode() -> Result<()> {
     let test = direct_tool_settings_test()
         .with_config(|config| {
             config
+                .features
+                .enable(Feature::CodeModeHost)
+                .expect("enable process host");
+            config
                 .permissions
                 .set_permission_profile(PermissionProfile::Disabled)
                 .expect("test permissions");
@@ -2264,7 +2272,7 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
             "type": "object",
             "properties": {
                 "target": {"type": "string", "description": format!("Agent on {model}.")},
-                "message": {"type": "string", "encrypted": true},
+                "message": {"type": "string"},
             },
             "required": ["target"],
             "additionalProperties": false,
@@ -2401,13 +2409,13 @@ async fn tool_messages_follow_mid_turn_model_changes() -> Result<()> {
                         .iter().find(|tool| tool["name"] == name).expect(name)
                 };
                 let multi_agent_messages = MULTI_AGENT_TOOLS.map(|name| {
-                    let tool = namespace_child_tool(&body, "collaboration", name).expect(name);
+                    let tool = namespace_child_tool(&body, "agentroute_collaboration", name).expect(name);
                     (name.to_string(), json!({
                         "description": tool["description"].as_str().expect("tool description").trim(),
                         "parameters": tool["parameters"],
                     }))
                 }).into_iter().collect::<serde_json::Map<String, Value>>();
-                let channel_post = namespace_child_tool(&body, "collaboration", "post").expect("post");
+                let channel_post = namespace_child_tool(&body, "agentroute_collaboration", "post").expect("post");
                 json!({
                     "model": body["model"],
                     "async_description": tool("request_user_input_async")["description"],

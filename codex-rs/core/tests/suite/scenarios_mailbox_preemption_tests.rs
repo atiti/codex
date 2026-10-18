@@ -40,11 +40,15 @@ async fn mailbox_preemption_preserves_response_when_deferred(
     boundary: Boundary,
     defer_mailbox_preemption: bool,
 ) -> anyhow::Result<()> {
+    let boundary_id = match boundary {
+        Boundary::Reasoning => "rs_boundary",
+        Boundary::Commentary | Boundary::PartialAnswer => "boundary",
+    };
     let (release, gate) = oneshot::channel();
     let (added, done, boundary_name) = match boundary {
         Boundary::Reasoning => (
-            responses::ev_reasoning_item_added("boundary", &["Preparing the next action"]),
-            responses::ev_reasoning_item("boundary", &["Preparing the next action"], &[]),
+            responses::ev_reasoning_item_added("rs_boundary", &["Preparing the next action"]),
+            responses::ev_reasoning_item("rs_boundary", &["Preparing the next action"], &[]),
             "reasoning",
         ),
         Boundary::Commentary | Boundary::PartialAnswer => {
@@ -115,7 +119,7 @@ async fn mailbox_preemption_preserves_response_when_deferred(
         .await?;
     wait_for_event(
         &test.codex,
-        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "boundary"),
+        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == boundary_id),
     )
     .await;
     for message in ["Worker found the result.", "Worker checked the result."] {

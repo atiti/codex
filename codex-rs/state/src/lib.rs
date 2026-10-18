@@ -40,6 +40,10 @@ pub use runtime::MAX_GUARDIAN_REVIEW_RECORDS;
 pub use runtime::MAX_GUARDIAN_REVIEW_RECORDS_PER_THREAD;
 /// Preferred entrypoint: owns configuration and metrics.
 pub use runtime::StateRuntime;
+pub use runtime::TaskWork;
+pub use runtime::TaskWorkOwner;
+pub use runtime::TaskWorkStatus;
+pub use runtime::TaskWorkTitle;
 pub use sqlite::SqliteConfig;
 
 pub use audit::ThreadStateAuditRow;
@@ -87,6 +91,7 @@ pub use runtime::ExternalAgentConfigImportHistoryRecord;
 pub use runtime::ExternalAgentConfigImportSuccessRecord;
 pub use runtime::GoalAccountingMode;
 pub use runtime::GoalAccountingOutcome;
+pub use runtime::GoalCompletionReview;
 pub use runtime::GoalStore;
 pub use runtime::GoalUpdate;
 pub use runtime::MemoryStore;

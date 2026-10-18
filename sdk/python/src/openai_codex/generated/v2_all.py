@@ -994,7 +994,7 @@ class CommandConfiguredHookHandler(BaseModel):
         int | None,
         Field(
             alias="additionalContextLimit",
-            description="Approximate token threshold for spilling this hook's `additionalContext` to disk. `null` uses 2,500 tokens; `0` disables spilling for this hook. The threshold is evaluated against the original context; a spilled preview also includes recovery metadata.",
+            description="Approximate token threshold for spilling this hook's `additionalContext` to disk. `null` uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context always remains bounded.",
             ge=0,
         ),
     ] = None
@@ -8497,7 +8497,7 @@ class HookMetadata1(BaseModel):
         int | None,
         Field(
             alias="additionalContextLimit",
-            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` disables spilling.",
+            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context always remains bounded.",
             ge=0,
         ),
     ] = None
@@ -8527,7 +8527,7 @@ class HookMetadata2(BaseModel):
         int | None,
         Field(
             alias="additionalContextLimit",
-            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` disables spilling.",
+            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context always remains bounded.",
             ge=0,
         ),
     ] = None
@@ -8557,7 +8557,7 @@ class PromptHookMetadata(BaseModel):
         int | None,
         Field(
             alias="additionalContextLimit",
-            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` disables spilling.",
+            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context always remains bounded.",
             ge=0,
         ),
     ] = None
@@ -8585,7 +8585,7 @@ class AgentHookMetadata(BaseModel):
         int | None,
         Field(
             alias="additionalContextLimit",
-            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` disables spilling.",
+            description="Configured `additionalContext` spill threshold. `null` uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context always remains bounded.",
             ge=0,
         ),
     ] = None

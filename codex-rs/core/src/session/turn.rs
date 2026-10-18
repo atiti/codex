@@ -16,9 +16,12 @@ use crate::context::UserVerificationNotice;
 use crate::cyber_access_program;
 use crate::environment_selection::TurnEnvironmentSnapshot;
 use crate::feedback_tags;
+use crate::hook_runtime::HookRuntimeOutcome;
 use crate::hook_runtime::drain_async_hook_results;
 use crate::hook_runtime::inspect_pending_input;
+use crate::hook_runtime::inspect_pending_session_start_hooks;
 use crate::hook_runtime::record_additional_contexts;
+use crate::hook_runtime::record_deferred_context_items;
 use crate::hook_runtime::record_pending_input;
 use crate::hook_runtime::run_legacy_after_agent_hook;
 use crate::hook_runtime::run_pending_session_start_hooks;
@@ -184,27 +187,65 @@ pub(crate) async fn run_turn(
     // Record results from hooks that finished after the previous turn before this turn's user prompt.
     drain_async_hook_results(&sess, &turn_context, /*before_user_prompt*/ true).await;
 
-    let mut client_session =
-        prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut client_session = prewarmed_client_session.unwrap_or_else(|| {
+        sess.services
+            .model_client
+            .new_session_for_provider(turn_context.model_provider())
+    });
+    // Route the turn before pre-sampling compaction. A resumed mixed-provider thread may contain
+    // encrypted reasoning owned by the previous provider, and compaction is itself a model request.
+    // Waiting until after compaction to install the mixed-provider client session can therefore
+    // fail before the routed turn gets its first ordinary sample.
+    let session_start_outcome = inspect_pending_session_start_hooks(&sess, &turn_context).await;
+    if session_start_outcome.should_stop {
+        record_additional_contexts(
+            &sess,
+            &turn_context,
+            session_start_outcome.additional_contexts,
+        )
+        .await;
+        return Ok(None);
+    }
+    let mut hook_outcomes = inspect_input_hooks(&sess, &turn_context, &input).await;
+    let strip_provider_state = refresh_client_session_after_hooks(
+        &sess,
+        &turn_context,
+        &hook_outcomes,
+        &mut client_session,
+    )
+    .await;
     // TODO(ccunningham): Pre-turn compaction runs before context updates and the
     // new user message are recorded. Estimate pending incoming items (context
     // diffs/full reinjection + user input) and trigger compaction preemptively
     // when they would push the thread over the compaction threshold.
-    if auto_compaction_enabled
-        && let Err(err) = run_pre_sampling_compact(
+    let compaction_result = if auto_compaction_enabled {
+        run_pre_sampling_compact(
             &sess,
             &turn_context,
             &mut client_session,
+            strip_provider_state,
             &cancellation_token,
         )
         .await
-    {
+    } else {
+        Ok(())
+    };
+    // Run startup hooks before routing, but inject their context after compaction so a resumed
+    // turn cannot lose it. Hooks with external side effects are never rerun for reinjection.
+    record_additional_contexts(
+        &sess,
+        &turn_context,
+        session_start_outcome.additional_contexts,
+    )
+    .await;
+    if let Err(err) = compaction_result {
         // Compaction runs before the new input is recorded, so preserve it on every failure.
-        run_hooks_and_record_inputs(
+        record_inputs_with_hook_outcomes(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
             &input,
+            hook_outcomes,
             PersistContext::Standard,
         )
         .await;
@@ -219,7 +260,11 @@ pub(crate) async fn run_turn(
             .await;
         // Publish the failure only after prompt hooks finish, so clients cannot react to
         // an error by steering follow-up input into a turn still preserving its prompt.
-        let message_prefix = match turn_context.provider.capabilities().remote_compaction {
+        let message_prefix = match turn_context
+            .model_provider()
+            .capabilities()
+            .remote_compaction
+        {
             RemoteCompactionSupport::V2 => Some("Error running remote compact task".to_string()),
             RemoteCompactionSupport::Unsupported => None,
         };
@@ -249,11 +294,12 @@ pub(crate) async fn run_turn(
         {
             Ok(requirements) => requirements,
             Err(err) => {
-                run_hooks_and_record_inputs(
+                record_inputs_with_hook_outcomes(
                     &sess,
                     &turn_context,
                     &turn_context.capture_current_model_info(),
                     &input,
+                    hook_outcomes,
                     PersistContext::Standard,
                 )
                 .await;
@@ -277,11 +323,12 @@ pub(crate) async fn run_turn(
     {
         Ok(step_context) => step_context,
         Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-            run_hooks_and_record_inputs(
+            record_inputs_with_hook_outcomes(
                 &sess,
                 &turn_context,
                 &turn_context.capture_current_model_info(),
                 &input,
+                hook_outcomes,
                 PersistContext::Standard,
             )
             .await;
@@ -333,6 +380,11 @@ pub(crate) async fn run_turn(
     if run_pending_session_start_hooks(&sess, &turn_context).await {
         return Ok(None);
     }
+    let had_pending_guardian_input = sess
+        .services
+        .thread_extension_data
+        .get::<crate::guardian::PendingReviewContext>()
+        .is_some();
     if crate::guardian::is_basic_session_source(&turn_context.session_source)
         && let Err(error) = crate::guardian::finalize_guardian_input(
             &sess,
@@ -375,12 +427,23 @@ pub(crate) async fn run_turn(
         )
         .await?;
     }
+    // Guardian finalization can expand its validated marker into native messages and text.
+    // Record every admitted segment, preserving the marker hook's stop decision and emitting
+    // its additional context once. Generated evidence must not run user hooks again.
+    if had_pending_guardian_input && let [marker_outcome] = hook_outcomes.as_slice() {
+        let should_stop = marker_outcome.should_stop;
+        hook_outcomes.resize_with(input.len(), || HookRuntimeOutcome {
+            should_stop,
+            ..Default::default()
+        });
+    }
     let mut can_drain_pending_input = input.is_empty();
-    if run_hooks_and_record_inputs(
+    if record_inputs_with_hook_outcomes(
         &sess,
         &turn_context,
         &first_step_context.settings.model_info,
         &input,
+        hook_outcomes,
         PersistContext::TurnStart,
     )
     .await
@@ -400,9 +463,9 @@ pub(crate) async fn run_turn(
     sess.merge_connector_selection(explicitly_enabled_connectors.clone())
         .await;
     sess.set_previous_turn_settings(Some(PreviousTurnSettings {
-        model: turn_context.model_info().slug.clone(),
+        model: first_step_context.settings.model_info.slug.clone(),
         cyber_access_program: turn_context.cyber_access_program,
-        comp_hash: turn_context.model_info().comp_hash.clone(),
+        comp_hash: first_step_context.settings.model_info.comp_hash.clone(),
         realtime_active: Some(turn_context.realtime_active),
     }))
     .await;
@@ -464,11 +527,24 @@ pub(crate) async fn run_turn(
             Vec::new()
         };
 
-        if run_hooks_and_record_inputs(
+        let pending_hook_outcomes = inspect_input_hooks(&sess, &turn_context, &pending_input).await;
+        if !pending_input.is_empty() {
+            // A queued prompt can change providers within this turn. Rebuild the connection
+            // before sampling with the routed model, just as for the initial prompt.
+            refresh_client_session_after_hooks(
+                &sess,
+                &turn_context,
+                &pending_hook_outcomes,
+                &mut client_session,
+            )
+            .await;
+        }
+        if record_inputs_with_hook_outcomes(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
             &pending_input,
+            pending_hook_outcomes,
             PersistContext::SteeredUserInput,
         )
         .await
@@ -592,11 +668,14 @@ pub(crate) async fn run_turn(
                 let (has_pending_input, token_status) = async {
                     let has_pending_input =
                         sess.input_queue.has_pending_input(&sess.active_turn).await;
-                    let token_status = super::context_window::context_window_token_status(
-                        sess.as_ref(),
-                        turn_context.as_ref(),
-                    )
-                    .await;
+                    let token_status =
+                        super::context_window::context_window_token_status_for_model(
+                            sess.as_ref(),
+                            turn_context.config.as_ref(),
+                            turn_context.as_ref(),
+                            step_context.settings.model_info.as_ref(),
+                        )
+                        .await;
                     (has_pending_input, token_status)
                 }
                 .instrument(trace_span!("run_turn.collect_post_sampling_state"))
@@ -937,6 +1016,98 @@ pub(crate) async fn run_hooks_and_record_inputs(
     input: &[TurnInput],
     persist_context: PersistContext,
 ) -> bool {
+    let hook_outcomes = inspect_input_hooks(sess, turn_context, input).await;
+    record_inputs_with_hook_outcomes(
+        sess,
+        turn_context,
+        model_info,
+        input,
+        hook_outcomes,
+        persist_context,
+    )
+    .await
+}
+
+// Keep the sampled connection and provider-owned history aligned with hook routing.
+async fn refresh_client_session_after_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    hook_outcomes: &[HookRuntimeOutcome],
+    client_session: &mut ModelClientSession,
+) -> bool {
+    let active_provider_id = turn_context.model_provider_id();
+    let history = sess.clone_history().await;
+    let explicit_strip_provider_state = hook_outcomes
+        .iter()
+        .any(|outcome| outcome.strip_provider_state);
+    let foreign_provider_state_ids = history
+        .annotated_items()
+        .iter()
+        .filter(|envelope| {
+            explicit_strip_provider_state
+                || envelope
+                    .metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.model_provider_id.as_deref())
+                    != Some(active_provider_id.as_str())
+        })
+        .filter_map(|envelope| envelope.item.id().cloned())
+        .collect::<HashSet<_>>();
+    let history_has_foreign_provider_state = history.annotated_items().iter().any(|envelope| {
+        envelope
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.model_provider_id.as_deref())
+            != Some(active_provider_id.as_str())
+            && matches!(
+                &envelope.item,
+                ResponseItem::Reasoning { .. }
+                    | ResponseItem::Compaction { .. }
+                    | ResponseItem::ContextCompaction { .. }
+                    | ResponseItem::FunctionCall {
+                        encrypted_function_args: Some(_),
+                        ..
+                    }
+            )
+    });
+    let strip_provider_state = history_has_foreign_provider_state || explicit_strip_provider_state;
+    if hook_outcomes.iter().any(|outcome| outcome.settings_updated) || strip_provider_state {
+        *client_session = if strip_provider_state {
+            sess.services
+                .model_client
+                .new_session_for_mixed_provider_history(
+                    turn_context.model_provider(),
+                    foreign_provider_state_ids,
+                )
+        } else {
+            sess.services
+                .model_client
+                .new_session_for_provider(turn_context.model_provider())
+        };
+    }
+    strip_provider_state
+}
+
+async fn inspect_input_hooks(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    input: &[TurnInput],
+) -> Vec<HookRuntimeOutcome> {
+    let mut outcomes = Vec::with_capacity(input.len());
+    for input_item in input {
+        outcomes.push(inspect_pending_input(sess, turn_context, input_item).await);
+    }
+    outcomes
+}
+
+async fn record_inputs_with_hook_outcomes(
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    model_info: &ModelInfo,
+    input: &[TurnInput],
+    hook_outcomes: Vec<HookRuntimeOutcome>,
+    persist_context: PersistContext,
+) -> bool {
     // Cancellation can reach this path before Guardian's tools and context are
     // resolved. Only finalized evidence may enter reusable reviewer history.
     if sess
@@ -949,10 +1120,11 @@ pub(crate) async fn run_hooks_and_record_inputs(
     }
     let mut blocked_input = false;
     let mut accepted_user_input = false;
-    for input_item in input {
-        let hook_outcome = inspect_pending_input(sess, turn_context, input_item).await;
+    for (input_item, hook_outcome) in input.iter().zip(hook_outcomes) {
         if hook_outcome.should_stop {
             blocked_input = true;
+            record_deferred_context_items(sess, turn_context, hook_outcome.deferred_context_items)
+                .await;
             record_additional_contexts(sess, turn_context, hook_outcome.additional_contexts).await;
         } else {
             if matches!(input_item, TurnInput::UserInput { content, .. } if !content.is_empty()) {
@@ -966,18 +1138,65 @@ pub(crate) async fn run_hooks_and_record_inputs(
             } else {
                 persist_context
             };
+            let mut recorded_input = input_item.clone();
+            if let Some(prefix_bytes) = hook_outcome.strip_prompt_prefix_bytes {
+                strip_text_prefix(&mut recorded_input, prefix_bytes);
+            }
             record_pending_input(
                 sess,
                 turn_context,
                 model_info,
-                input_item.clone(),
+                recorded_input,
                 hook_outcome.additional_contexts,
+                hook_outcome.deferred_context_items,
                 input_persist_context,
             )
             .await;
         }
     }
     blocked_input && !accepted_user_input
+}
+
+fn strip_text_prefix(input: &mut TurnInput, prefix_bytes: usize) {
+    let TurnInput::UserInput { content, .. } = input else {
+        return;
+    };
+    let Some(UserInput::Text {
+        text,
+        text_elements,
+    }) = content
+        .iter_mut()
+        .find(|item| matches!(item, UserInput::Text { .. }))
+    else {
+        return;
+    };
+    if prefix_bytes <= text.len() && text.is_char_boundary(prefix_bytes) {
+        text.drain(..prefix_bytes);
+        // Rich spans refer to the original byte offsets. Routing directives are
+        // plain prefix text, so discarding stale spans is safer than misplacing them.
+        text_elements.clear();
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn route_directive_prefix_is_not_recorded_as_user_task_text() {
+    let mut input = TurnInput::UserInput {
+        content: vec![UserInput::Text {
+            text: "@azure check CRM sync status".to_string(),
+            text_elements: Vec::new(),
+        }],
+        client_id: None,
+        metadata: Default::default(),
+    };
+
+    strip_text_prefix(&mut input, "@azure ".len());
+
+    assert!(matches!(
+        input,
+        TurnInput::UserInput { content, .. }
+            if matches!(&content[0], UserInput::Text { text, .. } if text == "check CRM sync status")
+    ));
 }
 
 fn turn_user_input(input: &[TurnInput]) -> Vec<UserInput> {
@@ -1373,10 +1592,21 @@ async fn run_pre_sampling_compact(
     sess: &Arc<Session>,
     turn_context: &Arc<TurnContext>,
     client_session: &mut ModelClientSession,
+    skip_previous_model_compact: bool,
     cancellation_token: &CancellationToken,
 ) -> CodexResult<()> {
-    maybe_run_previous_model_inline_compact(sess, turn_context, client_session, cancellation_token)
+    // A provider switch deliberately drops provider-owned opaque state. Compacting with the
+    // previous model would pair that model name with the newly selected provider (and can also
+    // reintroduce the provider boundary we just removed), so compact only with the routed model.
+    if !skip_previous_model_compact {
+        maybe_run_previous_model_inline_compact(
+            sess,
+            turn_context,
+            client_session,
+            cancellation_token,
+        )
         .await?;
+    }
     let token_status =
         super::context_window::context_window_token_status(sess.as_ref(), turn_context.as_ref())
             .await;
@@ -1409,6 +1639,17 @@ fn comp_hash_changed(previous: Option<&str>, current: Option<&str>) -> bool {
         .is_some_and(|(previous, current)| previous != current)
 }
 
+fn previous_turn_matches_model(
+    previous_turn_settings: &PreviousTurnSettings,
+    current_model_info: &ModelInfo,
+) -> bool {
+    previous_turn_settings.model == current_model_info.slug
+        && !comp_hash_changed(
+            previous_turn_settings.comp_hash.as_deref(),
+            current_model_info.comp_hash.as_deref(),
+        )
+}
+
 /// Runs pre-sampling compaction against the previous model when its compaction compatibility
 /// hash changed or when switching to a smaller context-window model.
 ///
@@ -1422,12 +1663,13 @@ async fn maybe_run_previous_model_inline_compact(
     let Some(previous_turn_settings) = sess.previous_turn_settings().await else {
         return Ok(());
     };
+    let current_model_info = turn_context.capture_current_model_info();
     let should_compact_for_comp_hash_change = comp_hash_changed(
         previous_turn_settings.comp_hash.as_deref(),
-        turn_context.model_info().comp_hash.as_deref(),
+        current_model_info.comp_hash.as_deref(),
     );
-    let previous_model = previous_turn_settings.model;
-    if !should_compact_for_comp_hash_change && previous_model == turn_context.model_info().slug {
+    let previous_model = previous_turn_settings.model.clone();
+    if previous_turn_matches_model(&previous_turn_settings, current_model_info.as_ref()) {
         return Ok(());
     }
     let mut previous_model_turn_context = turn_context
@@ -1449,15 +1691,14 @@ async fn maybe_run_previous_model_inline_compact(
         let Some(old_context_window) = previous_model_turn_context.model_context_window() else {
             return Ok(());
         };
-        let Some(new_context_window) = turn_context.model_context_window() else {
+        let Some(new_context_window) = current_model_info.usable_context_window() else {
             return Ok(());
         };
         let active_context_tokens = sess.get_total_token_usage().await;
         let previous_model_limit_reached =
             match turn_context.config.model_auto_compact_token_limit_scope {
                 AutoCompactTokenLimitScope::Total => {
-                    let new_auto_compact_limit = turn_context
-                        .model_info()
+                    let new_auto_compact_limit = current_model_info
                         .auto_compact_token_limit()
                         .unwrap_or(i64::MAX);
                     active_context_tokens > new_auto_compact_limit
@@ -1468,7 +1709,7 @@ async fn maybe_run_previous_model_inline_compact(
                 }
             };
         if !previous_model_limit_reached
-            || previous_model_turn_context.model_info().slug == turn_context.model_info().slug
+            || previous_model_turn_context.model_info().slug == current_model_info.slug
             || old_context_window <= new_context_window
         {
             return Ok(());
@@ -1543,7 +1784,11 @@ async fn run_auto_compact(
         return Ok(true);
     }
 
-    match turn_context.provider.capabilities().remote_compaction {
+    match turn_context
+        .model_provider()
+        .capabilities()
+        .remote_compaction
+    {
         RemoteCompactionSupport::V2 => {
             let has_candidate = candidate.is_some();
             if !has_candidate {
@@ -1599,8 +1844,9 @@ async fn run_auto_compact(
             );
             run_inline_auto_compact_task(
                 Arc::clone(sess),
-                Arc::clone(turn_context),
+                Arc::clone(&step_context),
                 replacement_step_context,
+                client_session,
                 world_state,
                 reason,
                 phase,
@@ -1691,6 +1937,7 @@ pub(crate) fn build_prompt(
             &turn_context.session_source,
         ),
         cyber_access_program: turn_context.cyber_access_program,
+        model_provider_id: Some(turn_context.model_provider_id()),
     }
 }
 
@@ -1734,7 +1981,7 @@ async fn run_sampling_request(
         Arc::clone(&step_context),
         Arc::clone(&turn_diff_tracker),
     );
-    let max_retries = turn_context.provider.info().stream_max_retries();
+    let max_retries = turn_context.model_provider().info().stream_max_retries();
     record_registration_metrics(&step_context.tool_router, &step_context.session_telemetry);
     let mut retry_state = ResponsesStreamRetryState::default();
     let mut initial_input = Some(input);
@@ -2643,7 +2890,7 @@ async fn try_run_sampling_request(
     let inference_trace = sess.services.rollout_thread_trace.inference_trace_context(
         turn_context.sub_id.as_str(),
         step_context.settings.model_info.slug.as_str(),
-        turn_context.provider.info().name.as_str(),
+        turn_context.model_provider().info().name.as_str(),
     );
     let sampling_timing_guard = turn_context.turn_timing_state.begin_sampling();
     if client_session.inference_tools_changed(&step_context.tool_router.model_visible_specs()) {
@@ -2660,7 +2907,7 @@ async fn try_run_sampling_request(
         .config
         .features
         .enabled(Feature::ConcurrentReasoningSummaries)
-        && turn_context.provider.info().is_openai();
+        && turn_context.model_provider().info().is_openai();
     let mut preempt = step_context.preempt.clone().unwrap_or_default();
     let effort = sess
         .reasoning_effort_for_request(&step_context.settings, super::RequestEffortUsage::Sampling)

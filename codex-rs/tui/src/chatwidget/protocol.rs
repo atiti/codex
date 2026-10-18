@@ -117,7 +117,9 @@ impl ChatWidget {
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.restore_realtime_transcripts_before_turn(&notification.turn_id);
-                if !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
+                if !notification.item_id.starts_with("agentroute-route-")
+                    && !notification.item_id.starts_with("agentroute-task-overlap-")
+                    && !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
                     && (from_replay
                         || !self.is_realtime_delegated_agent_item(
                             &notification.turn_id,
@@ -561,6 +563,8 @@ impl ChatWidget {
                 self.remember_realtime_delegated_reasoning_turn(&notification.turn_id);
             }
             ThreadItem::AgentMessage { id, .. } if replay_kind.is_none() => {
+                self.output_rate.reset();
+                self.refresh_status_line();
                 self.is_realtime_delegated_agent_item(&notification.turn_id, &id);
             }
             ThreadItem::Reasoning { id, .. } => {

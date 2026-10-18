@@ -88,12 +88,16 @@ mod extension_sandbox;
 mod external_auth;
 mod fork_thread;
 mod git_enrichment;
+mod goal_completion_review;
 mod guardian_authorization;
 mod guardian_authorization_refresh;
 #[path = "guardian_cached_score_tests.rs"]
 mod guardian_cached_score;
 #[path = "guardian_checkpoint_migration_tests.rs"]
 mod guardian_checkpoint_migration;
+mod task_work;
+mod task_work_lease;
+mod task_work_prompt_overlap;
 // Uses the same command-approval harness as guardian_review below.
 mod canonical_plugin_connectors;
 mod gateway_auth;

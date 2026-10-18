@@ -219,3 +219,32 @@ fn thread_event_store_coalesces_only_adjacent_matching_agent_message_deltas() {
     );
     assert!(store.has_pending_thread_approvals());
 }
+
+#[test]
+fn completed_tool_payloads_obey_total_replay_byte_budget() {
+    let thread_id = ThreadId::new();
+    let mut store = ThreadEventStore::new(/*capacity*/ 100);
+    for index in 0..12 {
+        let mut event = turn_started_notification(thread_id, &format!("turn-{index}"));
+        if let ServerNotification::TurnStarted(ref mut notification) = event {
+            notification
+                .turn
+                .items
+                .push(codex_app_server_protocol::ThreadItem::AgentMessage {
+                    id: format!("item-{index}"),
+                    text: "x".repeat(1024 * 1024),
+                    phase: None,
+                    memory_citation: None,
+                    questions: None,
+                    delivery: None,
+                });
+        }
+        store.push_notification(event);
+    }
+    assert!(store.buffered_event_bytes <= MAX_BUFFERED_EVENT_BYTES);
+    assert!(store.buffer.len() < 12);
+    assert_eq!(store.buffer.len(), store.buffered_event_sizes.len());
+    store.rebase_buffer_after_session_refresh();
+    assert_eq!(store.buffered_event_bytes, 0);
+    assert_eq!(store.buffered_event_sizes.len(), 0);
+}

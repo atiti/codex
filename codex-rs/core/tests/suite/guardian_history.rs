@@ -335,6 +335,7 @@ async fn guardian_history_uses_deltas_between_eviction_batches(
             "replacement_history": [{
                 "type": "compaction", "id": "old", "encrypted_content": "opaque checkpoint"
             }],
+            "replacement_history_metadata": [{"model_provider_id": test.config.model_provider_id}],
             "guardian_history": history.review_items().cloned().collect::<Vec<_>>()
         }
     }))?;

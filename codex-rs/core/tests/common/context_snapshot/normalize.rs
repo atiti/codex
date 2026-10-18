@@ -304,6 +304,14 @@ fn known_segment_name(text: &str, source: TextSource<'_>) -> Option<String> {
         TextSource::Message("developer") => &[
             (GUARDIAN_INSTRUCTIONS_PREFIX, "GUARDIAN_INSTRUCTIONS"),
             (GUARDIAN_PROVENANCE_PREFIX, "GUARDIAN_INSTRUCTIONS"),
+            (
+                "You are `/root`, the primary agent in a team",
+                "MULTI_AGENT_ROLE",
+            ),
+            (
+                "You are an agent in a team of agents collaborating",
+                "MULTI_AGENT_ROLE",
+            ),
         ],
         TextSource::Message("user") => &[
             ("# AGENTS.md instructions", "AGENTS_MD"),
@@ -527,18 +535,49 @@ pub(super) fn portable_tool_schema(tool: &Value) -> Value {
 
 pub(super) fn is_bundled_model_instructions(text: &str) -> bool {
     static PROMPTS: OnceLock<Vec<String>> = OnceLock::new();
-    text == codex_models_manager::model_info::BASE_INSTRUCTIONS
-        || PROMPTS
-            .get_or_init(|| {
-                codex_models_manager::bundled_models_response()
-                    .expect("bundled model catalog")
-                    .models
-                    .into_iter()
-                    .filter_map(|model| model.model_messages?.instructions_template)
-                    .collect()
-            })
-            .iter()
-            .any(|prompt| prompt == text)
+    PROMPTS
+        .get_or_init(|| {
+            std::iter::once(codex_models_manager::model_info::BASE_INSTRUCTIONS.to_string())
+                .chain(
+                    codex_models_manager::bundled_models_response()
+                        .expect("bundled model catalog")
+                        .models
+                        .into_iter()
+                        .filter_map(|model| model.model_messages?.instructions_template),
+                )
+                .flat_map(|prompt| {
+                    // The client removes harness identity before sending catalog guidance.
+                    // Match complete transformed candidates, never an arbitrary text prefix.
+                    let neutral = neutralize_bundled_model_instructions(&prompt);
+                    [prompt, neutral]
+                })
+                .collect()
+        })
+        .iter()
+        .any(|prompt| prompt == text)
+}
+
+pub(super) fn neutralize_bundled_model_instructions(text: &str) -> String {
+    let mut neutral = text
+        .lines()
+        .map(|line| {
+            let line = if line.starts_with("You are Codex,") || line.starts_with("You are ChatGPT,")
+            {
+                line.split_once(". ").map_or("", |(_, guidance)| guidance)
+            } else {
+                line
+            };
+            ["As Codex, you ", "As Codex, You ", "As ChatGPT, you "]
+                .iter()
+                .find_map(|prefix| line.strip_prefix(prefix))
+                .map_or_else(|| line.to_string(), |guidance| format!("You {guidance}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        neutral.push('\n');
+    }
+    neutral
 }
 
 // Only complete, balanced wrappers identify guidance. Adjacent or malformed wrappers remain text.

@@ -20,7 +20,7 @@ async fn spawn_inherits_captured_settings_after_a_turn_update(
     let namespace = if multi_agent_v2 {
         spawn_arguments["task_name"] = json!("worker");
         spawn_arguments["fork_turns"] = json!("none");
-        "collaboration"
+        "agentroute_collaboration"
     } else {
         "multi_agent_v1"
     };

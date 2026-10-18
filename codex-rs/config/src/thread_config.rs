@@ -318,6 +318,8 @@ mod tests {
             supports_standalone_web_search: true,
             capabilities: None,
             include_internal_metadata: false,
+            tool_compatibility: None,
+            approval_review_model: None,
         }
     }
 }

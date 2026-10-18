@@ -1213,6 +1213,9 @@
             "system_proxy_fallback": {
               "type": "boolean"
             },
+            "task_awareness": {
+              "type": "boolean"
+            },
             "telepathy": {
               "type": "boolean"
             },
@@ -2148,7 +2151,7 @@
         {
           "properties": {
             "additionalContextLimit": {
-              "description": "Approximate token threshold for spilling this hook's `additionalContext` to disk. Unset uses 2,500 tokens; `0` disables spilling for this hook. The threshold is evaluated against the original context; a spilled preview also includes recovery metadata.",
+              "description": "Approximate token threshold for spilling this hook's `additionalContext` to disk. Unset uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context always remains bounded.",
               "format": "uint",
               "minimum": 0.0,
               "type": "integer"
@@ -2786,6 +2789,14 @@
       "additionalProperties": false,
       "description": "Overrides for the optional API features supported by a custom provider.",
       "properties": {
+        "context_windows": {
+          "additionalProperties": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "description": "Context windows by model slug, independent of account-specific model metadata. Missing models and nonpositive values retain their catalog metadata.",
+          "type": "object"
+        },
         "external_web_access": {
           "description": "Whether hosted web search may access the live web.",
           "type": "boolean"
@@ -2805,6 +2816,11 @@
       "additionalProperties": false,
       "description": "Serializable representation of a provider definition.",
       "properties": {
+        "approval_review_model": {
+          "default": null,
+          "description": "Optional provider-native model used for automatic approval review.",
+          "type": "string"
+        },
         "auth": {
           "allOf": [
             {
@@ -2915,6 +2931,15 @@
           "default": false,
           "description": "Whether this provider supports the Responses API WebSocket transport.",
           "type": "boolean"
+        },
+        "tool_compatibility": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ToolCompatibility"
+            }
+          ],
+          "default": null,
+          "description": "Optional tool-schema compatibility profile for OpenAI-compatible providers."
         },
         "websocket_connect_timeout_ms": {
           "description": "Maximum time (in milliseconds) to wait for a websocket connection attempt before treating it as failed.",
@@ -4481,6 +4506,25 @@
         }
       },
       "type": "object"
+    },
+    "ToolCompatibility": {
+      "description": "Provider-specific restrictions on the tool schemas accepted by a Responses API.",
+      "oneOf": [
+        {
+          "description": "Function tools plus the Responses API `apply_patch` custom tool.",
+          "enum": [
+            "functions_and_apply_patch"
+          ],
+          "type": "string"
+        },
+        {
+          "description": "Function tools plus `apply_patch`, while retaining same-provider reasoning items.",
+          "enum": [
+            "functions_and_apply_patch_preserve_reasoning"
+          ],
+          "type": "string"
+        }
+      ]
     },
     "ToolExposureSurface": {
       "description": "A model-facing surface on which a tool can be exposed.",
@@ -7539,6 +7583,9 @@
           "type": "boolean"
         },
         "system_proxy_fallback": {
+          "type": "boolean"
+        },
+        "task_awareness": {
           "type": "boolean"
         },
         "telepathy": {

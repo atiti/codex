@@ -302,11 +302,13 @@ async fn run_remote_compaction_request_v2(
             // Replay the routing token without letting this request change foreground routing.
             let turn_state = Arc::new(turn_state.map(OnceLock::from).unwrap_or_default());
             let http_executor = ResponsesHttpExecutor::new(&sess.services.model_client);
+            let foreign_provider_state_ids = std::collections::HashSet::new();
             let stream = tokio::select! {
                 biased;
                 _ = cancellation.cancelled() => return Err(CodexErr::TurnAborted),
                 stream = http_executor.stream_responses_http(
-                    &turn_state, auth_owner_generation, /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
+                    &turn_state, &foreign_provider_state_ids, /*strip_unattributed_provider_state*/ false,
+                    auth_owner_generation, /*event_sender*/ None, prompt, &settings.model_info, &step_context.session_telemetry, effort,
                     settings.reasoning_summary, settings.service_tier.clone(), responses_metadata,
                     &trace,
                 ) => stream?,
@@ -323,7 +325,7 @@ async fn run_remote_compaction_request_v2(
     };
     let settings = &turn_context.initial_settings;
     let max_retries = turn_context
-        .provider
+        .model_provider()
         .info()
         .stream_max_retries()
         .min(MAX_REMOTE_COMPACTION_V2_STREAM_RETRIES);

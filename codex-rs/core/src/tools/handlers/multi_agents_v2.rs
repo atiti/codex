@@ -64,3 +64,86 @@ fn agent_message_from_tool(
         AgentMessage::Encrypted(message)
     }
 }
+
+#[cfg(test)]
+mod routing_prompt_tests {
+    use super::*;
+    use crate::agent::types::MessageDeliveryMode;
+    use codex_protocol::AgentPath;
+
+    #[test]
+    fn encrypted_communication_keeps_ephemeral_routing_prompt_in_memory() {
+        let communication = AgentMessage::Routed {
+            message: Box::new(agent_message_from_tool(
+                "encrypted payload".to_string(),
+                &crate::tools::context::ToolCallSource::Direct,
+            )),
+            routing_prompt: Some("Analyze a high-risk database migration".to_string()),
+            inherited_model_provider: Some("agentroute-azure".to_string()),
+            requested_backend: Some("deepseek".to_string()),
+            model_explicit: true,
+        }
+        .into_communication(
+            AgentPath::root(),
+            AgentPath::root().join("worker").expect("recipient path"),
+            MessageDeliveryMode::TriggerTurn,
+        );
+
+        assert_eq!(communication.content, "");
+        assert_eq!(
+            communication.encrypted_content.as_deref(),
+            Some("encrypted payload")
+        );
+        assert_eq!(
+            communication.routing_prompt.as_deref(),
+            Some("Analyze a high-risk database migration")
+        );
+        assert_eq!(
+            communication.routing_inherited_model_provider.as_deref(),
+            Some("agentroute-azure")
+        );
+        assert_eq!(
+            communication.routing_requested_backend.as_deref(),
+            Some("deepseek")
+        );
+        assert!(communication.routing_model_explicit);
+    }
+
+    #[test]
+    fn plaintext_communication_renders_exact_task_for_cross_provider_delivery() {
+        let communication = AgentMessage::Routed {
+            message: Box::new(agent_message_from_tool(
+                "Reply with exactly: deepseek child ok".to_string(),
+                &crate::tools::context::ToolCallSource::DirectPlaintextMessage,
+            )),
+            routing_prompt: Some("Reply with exactly: deepseek child ok".to_string()),
+            inherited_model_provider: Some("agentroute-azure".to_string()),
+            requested_backend: Some("deepseek".to_string()),
+            model_explicit: true,
+        }
+        .into_communication(
+            AgentPath::root(),
+            AgentPath::root().join("worker").expect("recipient path"),
+            MessageDeliveryMode::TriggerTurn,
+        );
+
+        assert!(communication.encrypted_content.is_none());
+        assert_eq!(
+            communication.content,
+            "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\nReply with exactly: deepseek child ok"
+        );
+        assert_eq!(
+            communication.routing_prompt.as_deref(),
+            Some("Reply with exactly: deepseek child ok")
+        );
+        assert_eq!(
+            communication.routing_inherited_model_provider.as_deref(),
+            Some("agentroute-azure")
+        );
+        assert_eq!(
+            communication.routing_requested_backend.as_deref(),
+            Some("deepseek")
+        );
+        assert!(communication.routing_model_explicit);
+    }
+}

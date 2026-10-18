@@ -1109,8 +1109,12 @@ async fn writable_pool_reads_do_not_wait_for_an_existing_writer() {
 
 #[tokio::test]
 async fn stable_upgrade_keeps_installed_task_work_migration_checksums() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("upgrade.sqlite");
+    let dir = crate::runtime::test_support::unique_temp_dir();
+    tokio::fs::create_dir_all(&dir).await.unwrap();
+    let _cleanup = scopeguard::guard(dir.clone(), |dir| {
+        let _ = std::fs::remove_dir_all(dir);
+    });
+    let path = dir.join("upgrade.sqlite");
     let pool = sqlx_sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(

@@ -201,7 +201,10 @@ impl HistoryCell for DynamicToolCallCell {
         let mut lines = vec![clipped_line(data.header(), width)];
         let (skip, output) = match &data.output {
             Some(output) if !output.is_empty() => {
-                let retained = output.iter().map(super::super::retained_text::RetainedText::preview).collect::<Vec<_>>();
+                let retained = output
+                    .iter()
+                    .map(super::super::retained_text::RetainedText::preview)
+                    .collect::<Vec<_>>();
                 let output = retained.iter().flat_map(|text| text.split_terminator('\n'));
                 let skip = output.clone().count().saturating_sub(DETAIL_PREVIEW_LINES);
                 let tail = output

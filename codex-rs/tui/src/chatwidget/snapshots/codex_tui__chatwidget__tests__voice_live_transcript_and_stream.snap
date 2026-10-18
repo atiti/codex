@@ -10,7 +10,7 @@ expression: normalized_backend_snapshot(terminal.backend())
 "                                                            "
 "                                                            "
 "                                                            "
-" voice ● listening                  ⌃x mute     /voice stop "
+" voice ● listening                  f9 mute     /voice stop "
 "                                                            "
 "› Ask Codex to do anything                                  "
 "                                                            "

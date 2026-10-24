@@ -17,12 +17,140 @@ use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
 use codex_app_server_protocol::UserInput;
 use core_test_support::responses;
+use core_test_support::streaming_sse::StreamingSseChunk;
+use core_test_support::streaming_sse::start_streaming_sse_server;
 use pretty_assertions::assert_eq;
 use tempfile::TempDir;
+use tokio::sync::oneshot;
 use tokio::time::Duration;
 use tokio::time::timeout;
 
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[tokio::test]
+async fn task_titles_refresh_during_running_turn_and_preserve_manual_rename() -> Result<()> {
+    use codex_app_server_protocol::ThreadReadParams;
+    use codex_app_server_protocol::ThreadReadResponse;
+    use codex_app_server_protocol::TurnStartResponse;
+    use codex_state::TaskWork;
+    use codex_state::TaskWorkStatus;
+
+    let (change_scope, scope_gate) = oneshot::channel();
+    let (continue_after_rename, rename_gate) = oneshot::channel();
+    let mut replies = Vec::new();
+    for (index, title, gate) in [
+        (0, "Arenti: inspect camera wakes", None),
+        (1, "Arenti: reduce camera wakes", Some(scope_gate)),
+        (2, "Arenti: verify battery protection", Some(rename_gate)),
+    ] {
+        let args = serde_json::to_string(&TaskWork {
+            title: title.into(),
+            summary: "Working on the current topic".into(),
+            status: TaskWorkStatus::Working,
+            resources: Vec::new(),
+        })?;
+        let response_id = format!("task-{index}");
+        replies.push(vec![StreamingSseChunk {
+            gate,
+            body: responses::sse(vec![
+                responses::ev_response_created(&response_id),
+                responses::ev_function_call(&format!("update-{index}"), "update_task", &args),
+                responses::ev_completed(&response_id),
+            ]),
+        }]);
+    }
+    replies.push(vec![StreamingSseChunk {
+        gate: None,
+        body: responses::sse(vec![
+            responses::ev_response_created("done"),
+            responses::ev_assistant_message("message", "Done"),
+            responses::ev_completed("done"),
+        ]),
+    }]);
+    let (server, _completions) = start_streaming_sse_server(replies).await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(server.uri())
+        .enable_feature(codex_features::Feature::TaskAwareness)
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .build_initialized_with_timeout(READ_TIMEOUT)
+        .await?;
+    let ThreadStartResponse { thread, .. } = app
+        .start_thread(ThreadStartParams {
+            history_mode: Some(ThreadHistoryMode::Paginated),
+            ..Default::default()
+        })
+        .await?;
+    let thread_id = thread.id;
+    let start = app
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread_id.clone(),
+            input: vec![UserInput::Text {
+                text: "Investigate and reduce camera wake attempts".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let _: TurnStartResponse = timeout(READ_TIMEOUT, app.read_response(start)).await??;
+
+    // The next model response is gated: these updates must arrive before turn completion.
+    for (title, release) in [
+        ("Arenti: inspect camera wakes", Some(change_scope)),
+        ("Arenti: reduce camera wakes", None),
+    ] {
+        let updated: ThreadNameUpdatedNotification =
+            timeout(READ_TIMEOUT, app.read_notification("thread/name/updated")).await??;
+        assert_eq!(
+            updated,
+            ThreadNameUpdatedNotification {
+                thread_id: thread_id.clone(),
+                thread_name: Some(title.into()),
+            }
+        );
+        let read = app
+            .send_thread_read_request(ThreadReadParams {
+                thread_id: thread_id.clone(),
+                include_turns: false,
+            })
+            .await?;
+        let read: ThreadReadResponse = timeout(READ_TIMEOUT, app.read_response(read)).await??;
+        assert_eq!(read.thread.name.as_deref(), Some(title));
+        if let Some(release) = release {
+            release.send(()).expect("scope response is still waiting");
+        }
+    }
+
+    let rename = app
+        .send_thread_set_name_request(ThreadSetNameParams {
+            thread_id: thread_id.clone(),
+            name: "My camera project".into(),
+        })
+        .await?;
+    let _: ThreadSetNameResponse = timeout(READ_TIMEOUT, app.read_response(rename)).await??;
+    let pinned: ThreadNameUpdatedNotification =
+        timeout(READ_TIMEOUT, app.read_notification("thread/name/updated")).await??;
+    assert_eq!(pinned.thread_name.as_deref(), Some("My camera project"));
+    continue_after_rename
+        .send(())
+        .expect("next task update is still waiting");
+    timeout(
+        READ_TIMEOUT,
+        app.read_stream_until_notification_message("turn/completed"),
+    )
+    .await??;
+    let read = app
+        .send_thread_read_request(ThreadReadParams {
+            thread_id,
+            include_turns: false,
+        })
+        .await?;
+    let read: ThreadReadResponse = timeout(READ_TIMEOUT, app.read_response(read)).await??;
+    assert_eq!(read.thread.name.as_deref(), Some("My camera project"));
+    server.shutdown().await;
+    Ok(())
+}
 
 #[tokio::test]
 async fn named_empty_paginated_thread_resumes_after_restart() -> Result<()> {

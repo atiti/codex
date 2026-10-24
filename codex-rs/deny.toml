@@ -71,6 +71,11 @@ feature-depth = 1
 # output a note when they are encountered.
 ignore = [
     { id = "RUSTSEC-2026-0374", reason = "basic-toml is pulled in by age 0.12.1 through i18n-embed for bundled localization config; RustSec reports no safe upgrade; remove when age/i18n-embed replaces basic-toml" },
+    # Temporary exception approved by Attila on 2026-10-24; review by 2026-11-07.
+    # crypto-bigint 0.5.5 arrives through elliptic-curve/age. RustSec reports timing
+    # variability in operations intended to be constant-time; retain only while this
+    # dependency path cannot move to the patched >=0.7.6 line, then remove this entry.
+    { id = "RUSTSEC-2026-0387", reason = "temporary release exception approved 2026-10-24; crypto-bigint 0.5.5 is constrained through elliptic-curve/age; timing side-channel advisory remains accepted only until that dependency path can upgrade to >=0.7.6; review by 2026-11-07 and remove on upgrade" },
     { id = "RUSTSEC-2026-0370", reason = "zvariant 4.2 remains through Linux keyring/TUI zbus 4.4; informational unmaintained notice, no vulnerability or in-place patched version; remove when upstream adopts zbus 6 wire" },
     { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 4.2 remains through Linux keyring/TUI zbus 4.4; informational unmaintained notice, no vulnerability or in-place patched version; remove when upstream adopts zbus 6 derives" },
     { id = "RUSTSEC-2026-0371", reason = "zbus_names 3.0 is retained by Linux zbus 4.4 in keyring 3.6 and TUI; informational unmaintained notice, no vulnerability or in-place patched version; remove when keyring and TUI adopt zbus 6 names" },

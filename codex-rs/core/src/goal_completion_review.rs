@@ -117,6 +117,7 @@ pub(crate) async fn run(
         cancellation_token,
         prompt,
         REVIEW_INSTRUCTIONS,
+        /*progress_route*/ false,
     )
     .await
     .map(|(text, _)| text)
@@ -128,6 +129,7 @@ pub(crate) async fn run_with_instructions(
     cancellation_token: CancellationToken,
     prompt: String,
     instructions: &'static str,
+    progress_route: bool,
 ) -> Result<(String, Option<codex_protocol::protocol::TokenUsage>), String> {
     let mut config = ctx.config.as_ref().clone();
     let model = ctx.capture_current_model_info().slug.clone();
@@ -135,6 +137,28 @@ pub(crate) async fn run_with_instructions(
     config.model = Some(model);
     config.model_provider_id = provider_id;
     config.model_provider = ctx.model_provider().info().clone();
+    if progress_route {
+        if let Some(provider_id) = config.progress_review_provider.clone() {
+            if config
+                .config_layer_stack
+                .required_model_provider()
+                .is_some_and(|required| required != provider_id)
+            {
+                return Err(
+                    "progress review provider conflicts with managed requirements".to_string(),
+                );
+            }
+            config.model_provider = config
+                .model_providers
+                .get(&provider_id)
+                .cloned()
+                .ok_or_else(|| format!("progress review provider `{provider_id}` not found"))?;
+            config.model_provider_id = provider_id;
+        }
+        if let Some(model) = config.progress_review_model.clone() {
+            config.model = Some(model);
+        }
+    }
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     config
         .permissions

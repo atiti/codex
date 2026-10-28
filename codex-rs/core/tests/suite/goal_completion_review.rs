@@ -138,7 +138,15 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
             let hooks = serde_json::json!({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": format!("{python} \"{}\"", script.display())}]}]}});
             std::fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks");
         })
-        .with_config(core_test_support::hooks::trust_discovered_hooks)
+        .with_config(|config| {
+            core_test_support::hooks::trust_discovered_hooks(config);
+            config.progress_review_model = Some("independent-review-model".to_string());
+            config.progress_review_provider = Some("review-provider".to_string());
+            config.model_providers.insert(
+                "review-provider".to_string(),
+                config.model_provider.clone(),
+            );
+        })
         .build_with_auto_env(&server)
         .await?;
     let started = test
@@ -176,7 +184,8 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
             .contains("Independently assess progress")
     );
     assert!(!request.body_contains_text("ordinary task stays active"));
-    assert_eq!(
+    assert_eq!(request.body_json()["model"], "independent-review-model");
+    assert_ne!(
         request.body_json()["model"],
         root.requests()[0].body_json()["model"]
     );

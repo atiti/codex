@@ -158,9 +158,9 @@ impl<C: Send + Sync + 'static> TokenUsageContributor for ProgressReview<C> {
         usage: &'a TokenUsageInfo,
     ) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
-            if !thread_store
+            if thread_store
                 .get::<Enabled>()
-                .is_some_and(|enabled| enabled.path.is_some())
+                .is_none_or(|enabled| enabled.path.is_none())
             {
                 return;
             }
@@ -212,10 +212,10 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
     fn on_turn_start<'a>(&'a self, input: TurnStartInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if input.token_usage_at_turn_start.is_none()
-                || !input
+                || input
                     .thread_store
                     .get::<Enabled>()
-                    .is_some_and(|enabled| enabled.path.is_some())
+                    .is_none_or(|enabled| enabled.path.is_none())
                 || input.collaboration_mode.mode == codex_protocol::config_types::ModeKind::Plan
             {
                 return;
@@ -450,9 +450,9 @@ impl<C: Send + Sync + 'static> ToolContributor for ProgressReview<C> {
         _session_store: &ExtensionData,
         thread_store: &ExtensionData,
     ) -> Vec<Arc<dyn for<'call> ToolExecutor<ToolCall<'call>>>> {
-        if !thread_store
+        if thread_store
             .get::<Enabled>()
-            .is_some_and(|enabled| enabled.path.is_some())
+            .is_none_or(|enabled| enabled.path.is_none())
         {
             return Vec::new();
         }
@@ -469,10 +469,10 @@ impl<C: Send + Sync + 'static> ToolContributor for ProgressReview<C> {
 impl<C: Send + Sync + 'static> ToolLifecycleContributor for ProgressReview<C> {
     fn on_tool_finish<'a>(&'a self, input: ToolFinishInput<'a>) -> ToolLifecycleFuture<'a> {
         Box::pin(async move {
-            if !input
+            if input
                 .thread_store
                 .get::<Enabled>()
-                .is_some_and(|enabled| enabled.path.is_some())
+                .is_none_or(|enabled| enabled.path.is_none())
             {
                 return;
             }

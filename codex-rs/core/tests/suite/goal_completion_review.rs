@@ -93,3 +93,69 @@ async fn goal_reviewer_uses_active_provider_with_isolated_read_only_context() ->
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
+    let server = start_mock_server().await;
+    let root = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            String::from_utf8_lossy(&request.body).contains("ordinary task stays active")
+        },
+        sse_response(sse(vec![ev_response_created("root"), ev_completed("root")]))
+            .set_delay(Duration::from_secs(10)),
+    )
+    .await;
+    let reviewer = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            String::from_utf8_lossy(&request.body).contains("review recent trajectory")
+        },
+        sse_response(sse(vec![
+            ev_response_created("review"),
+            ev_assistant_message(
+                "decision",
+                r#"{"decision":"adjust","reason":"Return to the requested feature"}"#,
+            ),
+            ev_completed("review"),
+        ])),
+    )
+    .await;
+    let test = test_codex().build_with_auto_env(&server).await?;
+    let started = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "ordinary task stays active".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let codex_core::TurnInputSubmission::Started { turn_id, .. } = started else {
+        panic!("turn did not start");
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnStarted(_))
+    })
+    .await;
+    let (result, _) = test
+        .codex
+        .review_progress(&turn_id, "review recent trajectory".into())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    assert!(result.contains("adjust"));
+    let request = reviewer
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("review recent trajectory"))
+        .expect("review request");
+    assert!(
+        request
+            .instructions_text()
+            .contains("Independently assess progress")
+    );
+    assert!(!request.body_contains_text("ordinary task stays active"));
+    assert_eq!(
+        request.body_json()["model"],
+        root.requests()[0].body_json()["model"]
+    );
+    Ok(())
+}

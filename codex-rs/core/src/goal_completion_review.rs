@@ -99,6 +99,24 @@ pub(crate) async fn run(
     cancellation_token: CancellationToken,
     prompt: String,
 ) -> Result<String, String> {
+    run_with_instructions(
+        session,
+        ctx,
+        cancellation_token,
+        prompt,
+        REVIEW_INSTRUCTIONS,
+    )
+    .await
+    .map(|(text, _)| text)
+}
+
+pub(crate) async fn run_with_instructions(
+    session: Arc<Session>,
+    ctx: Arc<TurnContext>,
+    cancellation_token: CancellationToken,
+    prompt: String,
+    instructions: &'static str,
+) -> Result<(String, Option<codex_protocol::protocol::TokenUsage>), String> {
     let mut config = ctx.config.as_ref().clone();
     let model = ctx.capture_current_model_info().slug.clone();
     let provider_id = ctx.model_provider_id();
@@ -121,7 +139,7 @@ pub(crate) async fn run(
         .mcp_servers
         .set(std::collections::HashMap::new())
         .map_err(|err| format!("MCP isolation unavailable: {err}"))?;
-    config.base_instructions = Some(REVIEW_INSTRUCTIONS.to_string());
+    config.base_instructions = Some(instructions.to_string());
     config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
     let review_token = cancellation_token.child_token();
     let (_, io) = run_codex_thread_one_shot(
@@ -143,11 +161,18 @@ pub(crate) async fn run(
     .await
     .map_err(|err| format!("goal reviewer could not start: {err}"))?;
     let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 120), async {
+        let mut usage = None;
         while let Ok(event) = io.rx_event.recv().await {
             match event.msg {
+                EventMsg::TokenCount(count) => {
+                    if let Some(info) = count.info {
+                        usage = Some(info.total_token_usage);
+                    }
+                }
                 EventMsg::TurnComplete(done) if done.error.is_none() => {
                     return done
                         .last_agent_message
+                        .map(|text| (text, usage))
                         .ok_or_else(|| "goal reviewer returned no decision".to_string());
                 }
                 EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {

@@ -73,6 +73,17 @@ pub(crate) fn thread_extensions(
     }
     codex_history_notes_extension::install(&mut builder, auth_manager.clone());
     codex_core::install_agent_message_board(&mut builder, thread_manager.clone());
+    codex_goal_extension::install_progress_review(
+        &mut builder,
+        thread_manager.clone(),
+        state_db.clone(),
+        |config: &Config| {
+            config
+                .features
+                .enabled(codex_features::Feature::ProgressReview)
+                .then(|| config.codex_home.as_path().to_path_buf())
+        },
+    );
     if let Some(state_db) = state_db {
         codex_goal_extension::install_with_backend(
             &mut builder,

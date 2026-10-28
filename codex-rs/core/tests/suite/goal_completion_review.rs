@@ -102,6 +102,7 @@ async fn goal_reviewer_uses_active_provider_with_isolated_read_only_context() ->
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
     let server = start_mock_server().await;
+    let review_server = start_mock_server().await;
     let root = mount_response_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -112,7 +113,7 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
     )
     .await;
     let reviewer = mount_response_once_match(
-        &server,
+        &review_server,
         |request: &wiremock::Request| {
             String::from_utf8_lossy(&request.body).contains("review recent trajectory")
         },
@@ -126,6 +127,7 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
         ])),
     )
     .await;
+    let review_url = format!("{}/v1", review_server.uri());
     let test = test_codex()
         .with_pre_build_hook(|home| {
             let script = home.join("review_hook.py");
@@ -138,14 +140,13 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
             let hooks = serde_json::json!({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": format!("{python} \"{}\"", script.display())}]}]}});
             std::fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks");
         })
-        .with_config(|config| {
+        .with_config(move |config| {
             core_test_support::hooks::trust_discovered_hooks(config);
             config.progress_review_model = Some("independent-review-model".to_string());
             config.progress_review_provider = Some("review-provider".to_string());
-            config.model_providers.insert(
-                "review-provider".to_string(),
-                config.model_provider.clone(),
-            );
+            let mut provider = config.model_provider.clone();
+            provider.base_url = Some(review_url);
+            config.model_providers.insert("review-provider".to_string(), provider);
         })
         .build_with_auto_env(&server)
         .await?;

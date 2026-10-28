@@ -72,12 +72,15 @@ struct ActiveClock(Mutex<Clock>);
 struct Clock {
     active: Option<(String, std::time::Instant)>,
     accumulated: Duration,
+    report_accumulated: Duration,
 }
 
 impl Clock {
     fn start(&mut self, turn: &str, now: std::time::Instant) {
         if let Some((_, started)) = self.active.take() {
-            self.accumulated += now.saturating_duration_since(started);
+            let elapsed = now.saturating_duration_since(started);
+            self.accumulated += elapsed;
+            self.report_accumulated += elapsed;
         }
         self.active = Some((turn.to_string(), now));
     }
@@ -86,7 +89,9 @@ impl Clock {
         if self.active.as_ref().is_some_and(|(id, _)| id == turn)
             && let Some((_, started)) = self.active.take()
         {
-            self.accumulated += now.saturating_duration_since(started);
+            let elapsed = now.saturating_duration_since(started);
+            self.accumulated += elapsed;
+            self.report_accumulated += elapsed;
         }
     }
 
@@ -101,10 +106,30 @@ impl Clock {
         INTERVAL.saturating_sub(self.remaining(now))
     }
 
+    fn report_remaining(&self, now: std::time::Instant) -> Duration {
+        let active = self.active.as_ref().map_or(Duration::ZERO, |(_, started)| {
+            now.saturating_duration_since(*started)
+        });
+        INTERVAL.saturating_sub(self.report_accumulated + active)
+    }
+
+    fn reported(&mut self, turn: &str, now: std::time::Instant) {
+        if let Some((id, started)) = &mut self.active
+            && id == turn
+        {
+            self.accumulated += now.saturating_duration_since(*started);
+            self.report_accumulated = Duration::ZERO;
+            *started = now;
+        }
+    }
+
     fn reviewed(&mut self, turn: &str, now: std::time::Instant) {
-        if self.active.as_ref().is_some_and(|(id, _)| id == turn) {
+        if let Some((id, started)) = &mut self.active
+            && id == turn
+        {
+            self.report_accumulated += now.saturating_duration_since(*started);
             self.accumulated = Duration::ZERO;
-            self.active = Some((turn.to_string(), now));
+            *started = now;
         }
     }
 }
@@ -202,6 +227,7 @@ impl<C: Send + Sync + 'static> ThreadLifecycleContributor<C> for ProgressReview<
                 .insert(PreviousVerdict(Mutex::new(saved.previous)));
             input.thread_store.insert(ActiveClock(Mutex::new(Clock {
                 accumulated: Duration::from_secs(saved.active_seconds),
+                report_accumulated: Duration::from_secs(saved.report_seconds),
                 active: None,
             })));
         })
@@ -247,7 +273,11 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                     let remaining = clock
                         .0
                         .lock()
-                        .map(|value| value.remaining(std::time::Instant::now()))
+                        .map(|value| {
+                            value
+                                .remaining(std::time::Instant::now())
+                                .min(value.report_remaining(std::time::Instant::now()))
+                        })
                         .unwrap_or(INTERVAL);
                     tokio::select! {
                         _ = tokio::time::sleep(remaining) => {},
@@ -256,7 +286,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                                 tokio::time::sleep_until(last_review + Duration::from_secs(120)).await;
                             }
                         },
-                    }
+                    };
                     last_review = tokio::time::Instant::now();
                     let Ok(thread) = manager.get_thread(thread_id).await else {
                         break;
@@ -264,12 +294,38 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                     if thread.current_turn_model(&turn_id).await.is_none() {
                         break;
                     }
+                    let history = thread.conversation_history_snapshot().await;
+                    let revision = history.user_message_revision();
+                    let now = std::time::Instant::now();
+                    let report_due = clock
+                        .0
+                        .lock()
+                        .map(|value| value.report_remaining(now).is_zero())
+                        .unwrap_or(false);
+                    if report_due {
+                        let reminder: ResponseItem = ContextualUserFragment::into(
+                            InternalModelContextFragment::new(
+                                InternalContextSource::from_static("progress_review"),
+                                "At the next safe boundary, give the user a concise progress update: the overall objective, evidence of progress, remaining work or blockers, and the next useful step. Continue working; do not interrupt a running operation just to report.".to_string(),
+                            ),
+                        );
+                        let delivered = thread
+                            .deliver_progress_review(&turn_id, revision, reminder)
+                            .await;
+                        if !delivered {
+                            // A new user revision can invalidate the snapshot. Retry without
+                            // resetting the reporting clock or spinning while the turn ends.
+                            tokio::time::sleep(Duration::from_secs(1)).await;
+                            continue;
+                        }
+                        if let Ok(mut value) = clock.0.lock() {
+                            value.reported(&turn_id, std::time::Instant::now());
+                        }
+                    }
                     if let Ok(mut value) = clock.0.lock() {
                         value.reviewed(&turn_id, std::time::Instant::now());
                     }
                     persist(&enabled, &clock, &previous_verdict);
-                    let history = thread.conversation_history_snapshot().await;
-                    let revision = history.user_message_revision();
                     let original =
                         history
                             .review_items_with_sources()
@@ -536,6 +592,9 @@ fn persist(enabled: &Enabled, clock: &ActiveClock, previous: &PreviousVerdict) {
     };
     let state = SavedReview {
         active_seconds: clock.elapsed(std::time::Instant::now()).as_secs(),
+        report_seconds: INTERVAL
+            .saturating_sub(clock.report_remaining(std::time::Instant::now()))
+            .as_secs(),
         previous: previous.clone(),
     };
     if let Err(error) = progress_persistence::save(path, &state) {

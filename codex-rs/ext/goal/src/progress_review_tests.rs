@@ -95,3 +95,20 @@ fn clock_counts_active_turns_and_excludes_idle_time() {
         INTERVAL - std::time::Duration::from_secs(10)
     );
 }
+
+#[test]
+fn early_reviews_do_not_reset_reporting_cadence() {
+    let base = std::time::Instant::now();
+    let mut clock = Clock::default();
+    clock.start("a", base);
+    clock.reviewed("a", base + std::time::Duration::from_secs(300));
+    assert_eq!(
+        clock.report_remaining(base + std::time::Duration::from_secs(600)),
+        std::time::Duration::ZERO
+    );
+    clock.reported("a", base + std::time::Duration::from_secs(600));
+    assert_eq!(
+        clock.report_remaining(base + std::time::Duration::from_secs(600)),
+        INTERVAL
+    );
+}

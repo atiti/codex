@@ -11,6 +11,8 @@ use serde::Serialize;
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct SavedReview {
     pub active_seconds: u64,
+    #[serde(default)]
+    pub report_seconds: u64,
     pub previous: Option<(u64, String)>,
 }
 
@@ -26,6 +28,7 @@ pub(crate) fn load(path: &Path) -> SavedReview {
         .and_then(|data| serde_json::from_slice::<SavedReview>(&data).ok())
         .filter(|state| {
             state.active_seconds <= 600
+                && state.report_seconds <= 600
                 && state
                     .previous
                     .as_ref()

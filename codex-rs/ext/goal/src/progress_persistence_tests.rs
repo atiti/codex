@@ -11,12 +11,14 @@ fn saves_and_restores_bounded_thread_state() {
         &file,
         &SavedReview {
             active_seconds: 311,
+            report_seconds: 400,
             previous: Some((5, "adjust: verify the release".into())),
         },
     )
     .unwrap();
     let restored = load(&file);
     assert_eq!(restored.active_seconds, 311);
+    assert_eq!(restored.report_seconds, 400);
     assert_eq!(
         restored.previous,
         Some((5, "adjust: verify the release".into()))
@@ -25,6 +27,7 @@ fn saves_and_restores_bounded_thread_state() {
         &file,
         &SavedReview {
             active_seconds: 42,
+            report_seconds: 0,
             previous: None,
         },
     )

@@ -279,15 +279,26 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                                 .min(value.report_remaining(std::time::Instant::now()))
                         })
                         .unwrap_or(INTERVAL);
-                    tokio::select! {
-                        _ = tokio::time::sleep(remaining) => {},
+                    let signalled = tokio::select! {
+                        _ = tokio::time::sleep(remaining) => false,
                         _ = signals.notify.notified() => {
                             if last_review.elapsed() < Duration::from_secs(120) {
-                                tokio::time::sleep_until(last_review + Duration::from_secs(120)).await;
+                                let report_remaining = clock.0.lock()
+                                    .map(|value| value.report_remaining(std::time::Instant::now()))
+                                    .unwrap_or(INTERVAL);
+                                tokio::select! {
+                                    _ = tokio::time::sleep_until(last_review + Duration::from_secs(120)) => true,
+                                    _ = tokio::time::sleep(report_remaining) => {
+                                        // Preserve the event for after the report and cooldown.
+                                        signals.notify.notify_one();
+                                        false
+                                    },
+                                }
+                            } else {
+                                true
                             }
                         },
                     };
-                    last_review = tokio::time::Instant::now();
                     let Ok(thread) = manager.get_thread(thread_id).await else {
                         break;
                     };
@@ -322,6 +333,16 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             value.reported(&turn_id, std::time::Instant::now());
                         }
                     }
+                    let review_due = clock
+                        .0
+                        .lock()
+                        .map(|value| value.remaining(std::time::Instant::now()).is_zero())
+                        .unwrap_or(false);
+                    if !signalled && !review_due {
+                        persist(&enabled, &clock, &previous_verdict);
+                        continue;
+                    }
+                    last_review = tokio::time::Instant::now();
                     if let Ok(mut value) = clock.0.lock() {
                         value.reviewed(&turn_id, std::time::Instant::now());
                     }

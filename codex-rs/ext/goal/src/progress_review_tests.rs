@@ -111,4 +111,9 @@ fn early_reviews_do_not_reset_reporting_cadence() {
         clock.report_remaining(base + std::time::Duration::from_secs(600)),
         INTERVAL
     );
+    // A reporting deadline alone must not make an early review due again.
+    assert_eq!(
+        clock.remaining(base + std::time::Duration::from_secs(600)),
+        std::time::Duration::from_secs(300)
+    );
 }

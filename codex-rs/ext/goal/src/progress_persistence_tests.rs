@@ -44,3 +44,15 @@ fn saves_and_restores_bounded_thread_state() {
     std::fs::write(&file, b"broken").unwrap();
     assert_eq!(load(&file).active_seconds, 0);
 }
+
+#[test]
+fn loads_state_written_before_reporting_clock_existed() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = path(dir.path(), "legacy");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, br#"{"active_seconds":311,"previous":[5,"adjust"]}"#).unwrap();
+    let restored = load(&file);
+    assert_eq!(restored.active_seconds, 311);
+    assert_eq!(restored.report_seconds, 0);
+    assert_eq!(restored.previous, Some((5, "adjust".into())));
+}

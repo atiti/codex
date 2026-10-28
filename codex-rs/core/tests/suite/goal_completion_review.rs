@@ -12,6 +12,7 @@ use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
 use core_test_support::responses::ev_completed;
+use core_test_support::responses::ev_completed_with_tokens;
 use core_test_support::responses::ev_response_created;
 use core_test_support::responses::mount_response_once_match;
 use core_test_support::responses::sse;
@@ -121,7 +122,7 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
                 "decision",
                 r#"{"decision":"adjust","reason":"Return to the requested feature"}"#,
             ),
-            ev_completed("review"),
+            ev_completed_with_tokens("review", 123),
         ])),
     )
     .await;
@@ -140,12 +141,13 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
         matches!(event, EventMsg::TurnStarted(_))
     })
     .await;
-    let (result, _) = test
+    let (result, usage) = test
         .codex
         .review_progress(&turn_id, "review recent trajectory".into())
         .await
         .map_err(anyhow::Error::msg)?;
     assert!(result.contains("adjust"));
+    assert_eq!(usage.map(|usage| usage.input_tokens), Some(123));
     let request = reviewer
         .requests()
         .into_iter()

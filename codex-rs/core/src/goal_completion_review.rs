@@ -154,7 +154,7 @@ pub(crate) async fn run_with_instructions(
     config.base_instructions = Some(instructions.to_string());
     config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
     let review_token = cancellation_token.child_token();
-    let (_, io) = run_codex_thread_one_shot(
+    let (review_session, io) = run_codex_thread_one_shot(
         config,
         Arc::clone(&session.services.auth_manager),
         Arc::clone(&session.services.models_manager),
@@ -173,15 +173,12 @@ pub(crate) async fn run_with_instructions(
     .await
     .map_err(|err| format!("goal reviewer could not start: {err}"))?;
     let result = tokio::time::timeout(Duration::from_secs(/*secs*/ 120), async {
-        let mut usage = None;
         while let Ok(event) = io.rx_event.recv().await {
             match event.msg {
-                EventMsg::TokenCount(count) => {
-                    if let Some(info) = count.info {
-                        usage = Some(info.total_token_usage);
-                    }
-                }
                 EventMsg::TurnComplete(done) if done.error.is_none() => {
+                    // Delegate event forwarding intentionally filters TokenCount;
+                    // read the isolated session's recorded usage directly.
+                    let usage = review_session.total_token_usage().await;
                     return done
                         .last_agent_message
                         .map(|text| (text, usage))

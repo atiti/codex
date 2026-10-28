@@ -65,12 +65,12 @@ fn repeated_failures_trigger_once_and_success_resets_the_sequence() {
 #[test]
 fn context_pressure_triggers_once_until_usage_recovers() {
     let signals = Signals::default();
-    assert!(!signals.observe_context(79, Some(100)));
-    assert!(signals.observe_context(80, Some(100)));
-    assert!(!signals.observe_context(90, Some(100)));
-    assert!(!signals.observe_context(10, Some(100)));
-    assert!(signals.observe_context(81, Some(100)));
-    assert!(!signals.observe_context(100, None));
+    assert!(!signals.observe_context(/*input*/ 79, Some(100)));
+    assert!(signals.observe_context(/*input*/ 80, Some(100)));
+    assert!(!signals.observe_context(/*input*/ 90, Some(100)));
+    assert!(!signals.observe_context(/*input*/ 10, Some(100)));
+    assert!(signals.observe_context(/*input*/ 81, Some(100)));
+    assert!(!signals.observe_context(/*input*/ 100, /*window*/ None));
 }
 
 #[test]

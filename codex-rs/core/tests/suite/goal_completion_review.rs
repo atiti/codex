@@ -122,7 +122,7 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
                 "decision",
                 r#"{"decision":"adjust","reason":"Return to the requested feature"}"#,
             ),
-            ev_completed_with_tokens("review", 123),
+            ev_completed_with_tokens("review", /*total_tokens*/ 123),
         ])),
     )
     .await;

@@ -10,6 +10,10 @@ use codex_protocol::openai_models::ModelInfo;
 
 impl Session {
     /// Queue review advice only for the turn and user revision it reviewed.
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "turn identity and user revision must remain stable while advice is queued"
+    )]
     pub(crate) async fn inject_progress_review(
         &self,
         turn_id: &str,

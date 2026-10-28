@@ -1096,6 +1096,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "progress_review": {
+              "type": "boolean"
+            },
             "psp": {
               "type": "boolean"
             },
@@ -7466,6 +7469,9 @@
           "type": "boolean"
         },
         "prevent_idle_sleep": {
+          "type": "boolean"
+        },
+        "progress_review": {
           "type": "boolean"
         },
         "psp": {

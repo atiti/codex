@@ -67,7 +67,7 @@ pub(crate) fn evidence_packet(
                     .iter()
                     .filter_map(|part| match part {
                         ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
-                            Some(clipped(text, 2000))
+                            Some(clipped(text, /*limit*/ 2000))
                         }
                         _ => None,
                     })
@@ -77,9 +77,9 @@ pub(crate) fn evidence_packet(
             }
             ResponseItem::FunctionCall {
                 name, arguments, ..
-            } => format!("tool {name}: {}", clipped(arguments, 2000)),
+            } => format!("tool {name}: {}", clipped(arguments, /*limit*/ 2000)),
             ResponseItem::CustomToolCall { name, input, .. } => {
-                format!("tool {name}: {}", clipped(input, 2000))
+                format!("tool {name}: {}", clipped(input, /*limit*/ 2000))
             }
             ResponseItem::FunctionCallOutput { output, .. }
             | ResponseItem::CustomToolCallOutput { output, .. } => {
@@ -87,7 +87,7 @@ pub(crate) fn evidence_packet(
                     "tool result: {}",
                     clipped(
                         output.text_content().unwrap_or("[non-text output omitted]"),
-                        2000
+                        /*limit*/ 2000
                     )
                 )
             }
@@ -116,10 +116,10 @@ pub(crate) fn evidence_packet(
     format!(
         "First retained user message (may precede the current task): {}\nCurrent turn request (unavailable when provenance is missing): {}\nActive or stored goal (if any): {}\nLatest user request/correction: {}\nPrevious review: {}\nRecent trajectory (bounded; older content may be omitted):\n{}\nAssess whether the next work advances the user's complete request. Identify neglected requirements and unnecessary detours. Return JSON with decision continue, adjust, or replan and a concise evidence-based reason covering observed progress, what remains, and the next useful step when supported by the evidence. Explicitly state uncertainty where evidence is missing.",
         &original[..original_end],
-        clipped(turn_request.unwrap_or("unavailable"), 4000),
-        clipped(goal.unwrap_or("none"), 4000),
+        clipped(turn_request.unwrap_or("unavailable"), /*limit*/ 4000),
+        clipped(goal.unwrap_or("none"), /*limit*/ 4000),
         &user[..user_end],
-        clipped(prior.unwrap_or("unavailable"), 1200),
+        clipped(prior.unwrap_or("unavailable"), /*limit*/ 1200),
         selected.join("\n")
     )
 }

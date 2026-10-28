@@ -352,7 +352,15 @@ impl CodexThread {
         &self,
         turn_id: &str,
         prompt: String,
-    ) -> Result<(String, Option<codex_protocol::protocol::TokenUsage>), String> {
+    ) -> Result<
+        (
+            String,
+            Option<codex_protocol::protocol::TokenUsage>,
+            String,
+            String,
+        ),
+        String,
+    > {
         let (ctx, cancellation_token) = {
             let active = self.session.active_turn.lock().await;
             let task = active

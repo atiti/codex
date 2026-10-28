@@ -120,7 +120,7 @@ pub(crate) async fn run(
         /*progress_route*/ false,
     )
     .await
-    .map(|(text, _)| text)
+    .map(|(text, _, _, _)| text)
 }
 
 pub(crate) async fn run_with_instructions(
@@ -130,7 +130,15 @@ pub(crate) async fn run_with_instructions(
     prompt: String,
     instructions: &'static str,
     progress_route: bool,
-) -> Result<(String, Option<codex_protocol::protocol::TokenUsage>), String> {
+) -> Result<
+    (
+        String,
+        Option<codex_protocol::protocol::TokenUsage>,
+        String,
+        String,
+    ),
+    String,
+> {
     let mut config = ctx.config.as_ref().clone();
     let model = ctx.capture_current_model_info().slug.clone();
     let provider_id = ctx.model_provider_id();
@@ -210,9 +218,10 @@ pub(crate) async fn run_with_instructions(
                     // Delegate event forwarding intentionally filters TokenCount;
                     // read the isolated session's recorded usage directly.
                     let usage = review_session.total_token_usage().await;
+                    let route = review_session.thread_config_snapshot().await;
                     return done
                         .last_agent_message
-                        .map(|text| (text, usage))
+                        .map(|text| (text, usage, route.model, route.model_provider_id))
                         .ok_or_else(|| "goal reviewer returned no decision".to_string());
                 }
                 EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {

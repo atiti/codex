@@ -164,12 +164,14 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
         matches!(event, EventMsg::TurnStarted(_))
     })
     .await;
-    let (result, usage) = test
+    let (result, usage, model, provider) = test
         .codex
         .review_progress(&turn_id, "review recent trajectory".into())
         .await
         .map_err(anyhow::Error::msg)?;
     assert!(result.contains("adjust"));
+    assert_eq!(model, "independent-review-model");
+    assert_eq!(provider, "review-provider");
     let hook_log = std::fs::read_to_string(test.codex_home_path().join("review_hook.log"))?;
     assert!(hook_log.contains("ordinary task stays active"));
     assert!(!hook_log.contains("review recent trajectory"));

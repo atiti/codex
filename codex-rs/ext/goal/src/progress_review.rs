@@ -323,7 +323,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         )
                         .await;
                     let result = thread.review_progress(&turn_id, prompt).await;
-                    let Ok((raw, usage)) = result else {
+                    let Ok((raw, usage, model, provider)) = result else {
                         thread
                             .report_goal_completion_review(
                                 &turn_id,
@@ -385,8 +385,11 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                     persist(&enabled, &clock, &previous_verdict);
                     let display = match usage {
                         Some(usage) => format!(
-                            "{message}\nReviewer usage: input={} cached={} output={}",
-                            usage.input_tokens, usage.cached_input_tokens, usage.output_tokens
+                            "{message}\nReviewer route: {}\nReviewer usage: input={} cached={} output={}",
+                            serde_json::json!({"model": model, "provider": provider, "cache_write_input_tokens": usage.cache_write_input_tokens}),
+                            usage.input_tokens,
+                            usage.cached_input_tokens,
+                            usage.output_tokens
                         ),
                         None => format!("{message}\nReviewer usage: unavailable"),
                     };

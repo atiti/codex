@@ -16,6 +16,7 @@ use codex_core::config::ThreadStoreConfig;
 use codex_features::Feature;
 use codex_history::InitialHistory;
 use codex_history::RolloutItem;
+use codex_model_provider_info::ModelProviderCapabilities;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::bundled_models_response;
@@ -6498,6 +6499,103 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
                 .contains("not configured")
         );
     }
+    Ok(())
+}
+
+#[test_case::test_case(None, 828_400; "catalog limit")]
+#[test_case::test_case(Some(700_000), 665_000; "explicit startup limit")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_model_provider_switch_restores_destination_context(
+    startup_context_window: Option<i64>,
+    expected_usable_window: i64,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let source_server = start_mock_server().await;
+    let destination_server = start_mock_server().await;
+    let source_response = mount_sse_once(
+        &source_server,
+        sse(vec![
+            ev_response_created("wrong-source"),
+            ev_completed_with_tokens("wrong-source", /*total_tokens*/ 100),
+        ]),
+    )
+    .await;
+    let destination_response = mount_sse_once(
+        &destination_server,
+        sse(vec![
+            ev_response_created("destination-response"),
+            ev_completed_with_tokens("destination-response", /*total_tokens*/ 100),
+        ]),
+    )
+    .await;
+    let destination_provider = non_openai_model_provider(&destination_server);
+    let mut builder = test_codex()
+        .with_model("gpt-6.1-sol")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "unused blocked prompt", "unused context")
+                .expect("write provider switch hook");
+            let path = home.join("user_prompt_submit_hook.py");
+            let mut hook = fs::read_to_string(&path).expect("read provider switch hook");
+            hook.push_str(
+                "else:\n    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'model': 'gpt-6.1-sol', 'modelProvider': 'destination-test'}}))\n",
+            );
+            fs::write(path, hook).expect("write provider switch output");
+        })
+        .with_config(move |config| {
+            trust_discovered_hooks(config);
+            config.features.enable(Feature::StepModelSwitching).expect("enable model switching");
+            config.model_context_window = startup_context_window;
+            config.model_auto_compact_token_limit = None;
+            let mut model = bundled_models_response()
+                .expect("bundled models")
+                .models
+                .into_iter()
+                .find(|model| model.slug == "gpt-6.1-sol")
+                .expect("bundled Sol");
+            model.context_window = Some(872_000);
+            model.max_context_window = Some(872_000);
+            model.effective_context_window_percent = 95;
+            model.auto_compact_token_limit = None;
+            config.model_catalog = Some(ModelsResponse { models: vec![model] });
+            config.model_provider.capabilities = Some(ModelProviderCapabilities {
+                context_windows: [("gpt-6.1-sol".to_string(), 922_000)].into(),
+                ..Default::default()
+            });
+            config.model_providers.insert("destination-test".to_string(), destination_provider);
+        });
+    // Command hooks need the host-native environment, matching the existing route tests.
+    let test = builder.build(&source_server).await?;
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "switch providers while retaining Sol".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let token_count = wait_for_event_match(&test.codex, |event| match event {
+        EventMsg::TokenCount(count)
+            if count
+                .info
+                .as_ref()
+                .is_some_and(|info| info.last_token_usage.total_tokens == 100) =>
+        {
+            count.info.clone()
+        }
+        _ => None,
+    })
+    .await;
+    assert_eq!(
+        token_count.model_context_window,
+        Some(expected_usable_window)
+    );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    assert!(source_response.requests().is_empty());
+    assert_eq!(
+        destination_response.single_request().body_json()["model"],
+        "gpt-6.1-sol"
+    );
     Ok(())
 }
 

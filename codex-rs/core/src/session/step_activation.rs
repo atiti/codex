@@ -388,9 +388,15 @@ impl Session {
         let prepared = if updates_step_settings {
             let current_environments = self.services.turn_environments.selections();
             let proposed = environments.as_deref().unwrap_or(&current_environments);
-            self.prepare_step_settings_activation(&turn_context, &current, &update, proposed)
-                .await
-                .map(Some)
+            self.prepare_step_settings_activation(
+                &turn_context,
+                &current,
+                &update,
+                requested_provider.as_ref().map(|(id, _, _)| id.as_str()),
+                proposed,
+            )
+            .await
+            .map(Some)
         } else {
             Ok(None)
         };
@@ -504,6 +510,7 @@ impl Session {
         turn_context: &TurnContext,
         current: &ResolvedStepSettings,
         update: &StepSettingsUpdate,
+        model_provider: Option<&str>,
         environments: &[TurnEnvironmentSelection],
     ) -> Result<ResolvedStepSettings, String> {
         let (requirements, overrides, trusted_guardian_reviewer) = {
@@ -525,6 +532,24 @@ impl Session {
                 environments,
             ),
         };
+        let mut current = current.clone();
+        if model_provider.is_some_and(|provider| provider != turn_context.model_provider_id())
+            && update
+                .model
+                .as_deref()
+                .is_none_or(|model| model == current.selected_collaboration_mode().model())
+        {
+            // A provider override may have replaced the pinned catalog limits. Reload
+            // the catalog and explicit startup overrides before applying the destination
+            // provider, even when the model slug is unchanged. Do this outside the
+            // publication locks; the admitted authority is preserved by the caller.
+            current.model_info = Arc::new(
+                current
+                    .selected()
+                    .resolve_model_info(self.services.models_manager.as_ref(), &overrides)
+                    .await,
+            );
+        }
         current
             .apply_update(
                 update,

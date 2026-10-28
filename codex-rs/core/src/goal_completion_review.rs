@@ -29,6 +29,18 @@ use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
 
 impl CodexThread {
+    /// Deliver fallible progress advice only to the reviewed active turn and revision.
+    pub async fn deliver_progress_review(
+        &self,
+        turn_id: &str,
+        user_revision: u64,
+        item: codex_protocol::models::ResponseItem,
+    ) -> bool {
+        self.session
+            .inject_progress_review(turn_id, user_revision, item)
+            .await
+    }
+
     /// Publish bounded reviewer activity through the normal client and rollout lifecycle.
     /// These display items do not add messages to the model's conversation history.
     pub async fn report_goal_completion_review(&self, turn_id: &str, mut message: String) {

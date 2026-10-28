@@ -9,6 +9,43 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::ModelInfo;
 
 impl Session {
+    /// Queue review advice only for the turn and user revision it reviewed.
+    pub(crate) async fn inject_progress_review(
+        &self,
+        turn_id: &str,
+        user_revision: u64,
+        item: ResponseItem,
+    ) -> bool {
+        let mut active = self.active_turn.lock().await;
+        let Some(turn) = active.as_mut().filter(|turn| turn.finishing.is_none()) else {
+            return false;
+        };
+        let Some(task) = turn.task.as_ref() else {
+            return false;
+        };
+        if task.turn_context.sub_id != turn_id || task.cancellation_token.is_cancelled() {
+            return false;
+        }
+        let state = self.state.lock().await;
+        if state
+            .history
+            .conversation_history_snapshot()
+            .user_message_revision()
+            != user_revision
+        {
+            return false;
+        }
+        self.input_queue
+            .extend_pending_input_and_accept_mailbox_delivery_for_turn_state(
+                turn.turn_state.as_ref(),
+                vec![PendingTurnInput::ResponseItem(ResponseItemEnvelope::new(
+                    item,
+                ))],
+            )
+            .await;
+        true
+    }
+
     /// Returns the input if there is no active turn to inject into.
     #[expect(
         clippy::await_holding_invalid_type,

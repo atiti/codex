@@ -13,10 +13,7 @@ use crate::progress_evidence::parse_verdict;
 use crate::progress_evidence::user_text;
 use crate::progress_persistence::SavedReview;
 use crate::progress_persistence::{self};
-use codex_core::SteerSubmission;
 use codex_core::ThreadManager;
-use codex_core::TurnInput;
-use codex_core::TurnInputRequest;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::InternalContextSource;
 use codex_core::context::InternalModelContextFragment;
@@ -407,13 +404,10 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             ),
                         ),
                     );
-                    let delivered = thread
-                        .steer_turn(
-                            TurnInputRequest::new(TurnInput::ResponseItem(item)),
-                            turn_id.clone(),
-                        )
-                        .await;
-                    if !matches!(delivered, Ok(SteerSubmission::Steered { .. })) {
+                    if !thread
+                        .deliver_progress_review(&turn_id, revision, item)
+                        .await
+                    {
                         thread
                             .report_goal_completion_review(
                                 &turn_id,

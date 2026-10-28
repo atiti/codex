@@ -4,6 +4,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use codex_core::TurnInputRequest;
+use codex_core::context::ContextualUserFragment;
+use codex_core::context::InternalContextSource;
+use codex_core::context::InternalModelContextFragment;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::user_input::UserInput;
 use core_test_support::responses::ev_assistant_message;
@@ -156,6 +160,32 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
     assert_eq!(
         request.body_json()["model"],
         root.requests()[0].body_json()["model"]
+    );
+    let revision = test
+        .codex
+        .conversation_history_snapshot()
+        .await
+        .user_message_revision();
+    let advice: ResponseItem = ContextualUserFragment::into(InternalModelContextFragment::new(
+        InternalContextSource::from_static("progress_review"),
+        "Return to the requested feature".to_string(),
+    ));
+    assert!(
+        !test
+            .codex
+            .deliver_progress_review("wrong-turn", revision, advice.clone())
+            .await
+    );
+    assert!(
+        !test
+            .codex
+            .deliver_progress_review(&turn_id, revision + 1, advice.clone())
+            .await
+    );
+    assert!(
+        test.codex
+            .deliver_progress_review(&turn_id, revision, advice)
+            .await
     );
     Ok(())
 }

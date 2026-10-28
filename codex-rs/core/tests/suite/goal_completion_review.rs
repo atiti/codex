@@ -126,7 +126,21 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
         ])),
     )
     .await;
-    let test = test_codex().build_with_auto_env(&server).await?;
+    let test = test_codex()
+        .with_pre_build_hook(|home| {
+            let script = home.join("review_hook.py");
+            std::fs::write(
+                &script,
+                "import json, sys\nfrom pathlib import Path\np = json.load(sys.stdin)\nwith Path(__file__).with_suffix('.log').open('a') as f: f.write(p.get('prompt', '') + '\\n')\nprint('{}')\n",
+            )
+            .expect("write hook");
+            let python = if cfg!(windows) { "python" } else { "python3" };
+            let hooks = serde_json::json!({"hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": format!("{python} \"{}\"", script.display())}]}]}});
+            std::fs::write(home.join("hooks.json"), hooks.to_string()).expect("write hooks");
+        })
+        .with_config(core_test_support::hooks::trust_discovered_hooks)
+        .build_with_auto_env(&server)
+        .await?;
     let started = test
         .codex
         .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
@@ -147,6 +161,9 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     assert!(result.contains("adjust"));
+    let hook_log = std::fs::read_to_string(test.codex_home_path().join("review_hook.log"))?;
+    assert!(hook_log.contains("ordinary task stays active"));
+    assert!(!hook_log.contains("review recent trajectory"));
     assert_eq!(usage.map(|usage| usage.input_tokens), Some(123));
     let request = reviewer
         .requests()

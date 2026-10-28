@@ -147,6 +147,13 @@ pub(crate) async fn run_with_instructions(
     let _ = config.features.disable(Feature::Collab);
     let _ = config.features.disable(Feature::MultiAgentV2);
     let _ = config.features.disable(Feature::Goals);
+    // Hooks execute outside the reviewer's model sandbox. Do not run inherited
+    // commands or notify handlers as part of a read-only isolated review.
+    config
+        .features
+        .disable(Feature::CodexHooks)
+        .map_err(|err| format!("hook isolation unavailable: {err}"))?;
+    config.notify = None;
     config
         .mcp_servers
         .set(std::collections::HashMap::new())

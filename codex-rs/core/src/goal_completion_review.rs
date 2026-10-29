@@ -34,6 +34,18 @@ use crate::session::turn_context::TurnContext;
 use crate::turn_timing::now_unix_timestamp_ms;
 
 impl CodexThread {
+    /// Deliver fallible progress advice only to the reviewed active turn and revision.
+    pub async fn deliver_progress_review(
+        &self,
+        turn_id: &str,
+        user_revision: u64,
+        item: codex_protocol::models::ResponseItem,
+    ) -> bool {
+        self.session
+            .inject_progress_review(turn_id, user_revision, item)
+            .await
+    }
+
     /// Publish bounded reviewer activity through the normal client and rollout lifecycle.
     /// These display items do not add messages to the model's conversation history.
     pub async fn report_goal_completion_review(&self, turn_id: &str, mut message: String) {
@@ -113,12 +125,65 @@ pub(crate) async fn run(
     let initial_history = Some(InitialHistory::Forked(vec![RolloutItem::ResponseItem(
         ContextualUserFragment::into(evidence).into(),
     )]));
+    run_with_instructions(
+        session,
+        ctx,
+        cancellation_token,
+        "Independently verify whether the supplied goal is complete.".to_string(),
+        REVIEW_INSTRUCTIONS,
+        /*progress_route*/ false,
+        initial_history,
+    )
+    .await
+    .map(|(text, _, _, _)| text)
+}
+
+pub(crate) async fn run_with_instructions(
+    session: Arc<Session>,
+    ctx: Arc<TurnContext>,
+    cancellation_token: CancellationToken,
+    prompt: String,
+    instructions: &'static str,
+    progress_route: bool,
+    initial_history: Option<InitialHistory>,
+) -> Result<
+    (
+        String,
+        Option<codex_protocol::protocol::TokenUsage>,
+        String,
+        String,
+    ),
+    String,
+> {
+
     let mut config = ctx.config.as_ref().clone();
     let model = ctx.capture_current_model_info().slug.clone();
     let provider_id = ctx.model_provider_id();
     config.model = Some(model);
     config.model_provider_id = provider_id;
     config.model_provider = ctx.model_provider().info().clone();
+    if progress_route {
+        if let Some(provider_id) = config.progress_review_provider.clone() {
+            if config
+                .config_layer_stack
+                .required_model_provider()
+                .is_some_and(|required| required != provider_id)
+            {
+                return Err(
+                    "progress review provider conflicts with managed requirements".to_string(),
+                );
+            }
+            config.model_provider = config
+                .model_providers
+                .get(&provider_id)
+                .cloned()
+                .ok_or_else(|| format!("progress review provider `{provider_id}` not found"))?;
+            config.model_provider_id = provider_id;
+        }
+        if let Some(model) = config.progress_review_model.clone() {
+            config.model = Some(model);
+        }
+    }
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     config
         .permissions
@@ -131,16 +196,28 @@ pub(crate) async fn run(
     let _ = config.features.disable(Feature::Collab);
     let _ = config.features.disable(Feature::MultiAgentV2);
     let _ = config.features.disable(Feature::Goals);
+    // Hooks execute outside the reviewer's model sandbox. Do not run inherited
+    // commands or notify handlers as part of a read-only isolated review.
+    config
+        .features
+        .disable(Feature::CodexHooks)
+        .map_err(|err| format!("hook isolation unavailable: {err}"))?;
+    config.notify = None;
     config
         .mcp_servers
         .set(std::collections::HashMap::new())
         .map_err(|err| format!("MCP isolation unavailable: {err}"))?;
-    config.base_instructions = Some(REVIEW_INSTRUCTIONS.to_string());
+    config.base_instructions = Some(instructions.to_string());
     config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
+    let review_auth_manager = if config.model_provider_id == ctx.model_provider_id() {
+        ctx.model_provider().auth_manager().unwrap_or_else(|| Arc::clone(&session.services.auth_manager))
+    } else {
+        Arc::clone(&session.services.auth_manager)
+    };
     let review_token = cancellation_token.child_token();
-    let (_, io) = run_codex_thread_one_shot(
+    let (review_session, io) = run_codex_thread_one_shot(
         config,
-        Arc::clone(&session.services.auth_manager),
+        review_auth_manager,
         Arc::clone(&session.services.models_manager),
         vec![UserInput::Text {
             text: "Independently verify whether the supplied goal is complete.".to_string(),
@@ -160,8 +237,13 @@ pub(crate) async fn run(
         while let Ok(event) = io.rx_event.recv().await {
             match event.msg {
                 EventMsg::TurnComplete(done) if done.error.is_none() => {
+                    // Delegate event forwarding intentionally filters TokenCount;
+                    // read the isolated session's recorded usage directly.
+                    let usage = review_session.total_token_usage().await;
+                    let route = review_session.thread_config_snapshot().await;
                     return done
                         .last_agent_message
+                        .map(|text| (text, usage, route.model, route.model_provider_id))
                         .ok_or_else(|| "goal reviewer returned no decision".to_string());
                 }
                 EventMsg::TurnComplete(_) | EventMsg::TurnAborted(_) => {

@@ -82,11 +82,11 @@ async fn additional_contexts_apply_limits_individually() -> Result<()> {
                 limit: AdditionalContextLimit::from_config(Some(usize::MAX)),
             },
             AdditionalContext {
-                text: zero_limit_inline_text.clone(),
+                context: crate::HookContext::harness(zero_limit_inline_text.clone()),
                 limit: AdditionalContextLimit::from_config(Some(0)),
             },
             AdditionalContext {
-                text: high_limit_inline_text.clone(),
+                context: crate::HookContext::harness(high_limit_inline_text.clone()),
                 limit: AdditionalContextLimit::from_config(Some(usize::MAX)),
             },
         ])

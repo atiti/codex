@@ -410,6 +410,8 @@ pub enum Feature {
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Independently review the direction of long-running root threads.
+    ProgressReview,
     /// Local current-task titles and exact resource ownership across independent tasks.
     TaskAwareness,
     /// Add current context-window metadata to model-visible context.
@@ -2005,6 +2007,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ProgressReview,
+        key: "progress_review",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TokenBudget,

@@ -246,6 +246,8 @@ async fn new_config(
         daybreak_enabled: false,
         service_tier: None,
         review_model: None,
+        progress_review_model: None,
+        progress_review_provider: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
         model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,

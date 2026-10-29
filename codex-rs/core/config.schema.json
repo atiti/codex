@@ -1123,6 +1123,9 @@
             "prevent_idle_sleep": {
               "type": "boolean"
             },
+            "progress_review": {
+              "type": "boolean"
+            },
             "psp": {
               "type": "boolean"
             },
@@ -7711,6 +7714,9 @@
         "prevent_idle_sleep": {
           "type": "boolean"
         },
+        "progress_review": {
+          "type": "boolean"
+        },
         "psp": {
           "type": "boolean"
         },
@@ -8259,6 +8265,13 @@
       "default": {},
       "description": "Named profiles to facilitate switching between different configurations.",
       "type": "object"
+    },
+    "progress_review_model": {
+      "description": "Optional independent progress reviewer model and provider.",
+      "type": "string"
+    },
+    "progress_review_provider": {
+      "type": "string"
     },
     "project_doc_fallback_filenames": {
       "default": [],

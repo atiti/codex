@@ -2712,3 +2712,55 @@ async fn inference_tools_changes_follow_full_specs_across_turns() {
         );
     }
 }
+
+#[test]
+fn custom_developer_identity_directives_are_preserved() {
+    for directive in [
+        "You are Codex, always confirm before production changes.",
+        "You are ChatGPT, preserve the user's constraints. Ask before deploying.",
+    ] {
+        assert_eq!(neutralize_harness_identity(directive), directive);
+    }
+}
+
+#[test]
+fn upstream_opaque_state_is_removed_only_for_foreign_provider_or_account() {
+    let items = vec![
+        json!({"type":"message", "id":"msg_foreign", "role":"assistant", "encrypted_content":"message-cipher", "content":[{"type":"output_text","text":"plain evidence"}]}),
+        json!({"type":"function_call", "id":"fc_foreign", "call_id":"call-1", "name":"read", "arguments":"{}", "encrypted_content":"call-cipher", "encrypted_function_args":["arg-cipher"]}),
+        json!({"type":"agent_message", "id":"msg_agent", "author":"reviewer", "recipient":"worker", "content":[{"type":"input_text","text":"plain evidence"},{"type":"encrypted_content","encrypted_content":"agent-cipher"}]}),
+        json!({"type":"function_call_output", "call_id":"call-1", "output":[{"type":"input_text","text":"plain evidence"},{"type":"encrypted_content","encrypted_content":"output-cipher"}]}),
+    ];
+    let original: Vec<ResponseItem> = items
+        .into_iter()
+        .map(|item| serde_json::from_value(item).unwrap())
+        .collect();
+    assert!(
+        original
+            .iter()
+            .all(crate::client_provider_history::has_provider_owned_state)
+    );
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let mut same = original.clone();
+    normalize_response_items_for_provider(
+        &mut same,
+        &provider,
+        &HashSet::new(),
+        /*strip_unattributed_provider_state*/ false,
+    );
+    assert_eq!(same, original);
+    let mut foreign = original;
+    normalize_response_items_for_provider(
+        &mut foreign,
+        &provider,
+        &HashSet::from([
+            ResponseItemId::from_server("msg_foreign".into()),
+            ResponseItemId::from_server("fc_foreign".into()),
+            ResponseItemId::from_server("msg_agent".into()),
+        ]),
+        /*strip_unattributed_provider_state*/ true,
+    );
+    let wire = serde_json::to_string(&foreign).unwrap();
+    assert!(!wire.contains("cipher"));
+    assert!(wire.contains("plain evidence"));
+}

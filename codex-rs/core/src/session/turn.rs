@@ -1076,16 +1076,7 @@ async fn refresh_client_session_after_hooks(
             .as_ref()
             .and_then(|metadata| metadata.model_provider_id.as_deref())
             != Some(active_provider_id.as_str())
-            && matches!(
-                &envelope.item,
-                ResponseItem::Reasoning { .. }
-                    | ResponseItem::Compaction { .. }
-                    | ResponseItem::ContextCompaction { .. }
-                    | ResponseItem::FunctionCall {
-                        encrypted_function_args: Some(_),
-                        ..
-                    }
-            )
+            && crate::client_provider_history::has_provider_owned_state(&envelope.item)
     });
     let strip_provider_state = history_has_foreign_provider_state || explicit_strip_provider_state;
     if hook_outcomes.iter().any(|outcome| outcome.settings_updated) || strip_provider_state {

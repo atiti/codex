@@ -13,6 +13,7 @@ async fn successful_plugin_uninstall_dispatches_plugin_list_refresh() -> Result<
     let mut tui = crate::tui::test_support::make_test_tui()?;
     // This case exercises plugin RPCs, so retain the production plugin configuration.
     let mut app_server = Box::pin(crate::start_app_server_for_picker(
+        crate::backend_id::BackendId::new(),
         app.chat_widget.config_ref(),
         &AppServerTarget::Embedded,
         Vec::new(),

@@ -6388,11 +6388,13 @@ async fn goal_continuation_routes_objective_without_adding_user_message() -> Res
     Ok(())
 }
 
-#[test_case::test_case(true; "applied route")]
-#[test_case::test_case(false; "rejected route")]
+#[test_case::test_case(true, false; "applied route")]
+#[test_case::test_case(false, false; "rejected automatic route")]
+#[test_case::test_case(false, true; "rejected explicit route")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
     route_is_configured: bool,
+    route_required: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let default_server = start_mock_server().await;
@@ -6432,6 +6434,7 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
                     "hookEventName": "UserPromptSubmit",
                     "model": "gpt-5.5",
                     "modelProvider": provider_id,
+                    "requireAppliedRoute": route_required,
                     "reasoningEffort": "high"
                 }
             }))
@@ -6476,6 +6479,11 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
 
     test.submit_turn("route this turn").await?;
 
+    if route_required && !route_is_configured {
+        assert!(default_response.requests().is_empty());
+        assert!(routed_response.requests().is_empty());
+        return Ok(());
+    }
     let (request, expected_provider, expected_status) = if route_is_configured {
         assert!(default_response.requests().is_empty());
         (routed_response.single_request(), provider_id, "applied")

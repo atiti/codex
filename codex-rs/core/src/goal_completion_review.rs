@@ -145,7 +145,7 @@ pub(crate) async fn run_with_instructions(
     prompt: String,
     instructions: &'static str,
     progress_route: bool,
-    initial_history: Option<InitialHistory>,
+    mut initial_history: Option<InitialHistory>,
 ) -> Result<
     (
         String,
@@ -155,7 +155,16 @@ pub(crate) async fn run_with_instructions(
     ),
     String,
 > {
-
+    let prompt = if progress_route {
+        let evidence = crate::context::ProgressReviewEvidence::new(prompt)
+            .ok_or_else(|| "progress evidence exceeds the safe review context limit".to_string())?;
+        initial_history = Some(InitialHistory::Forked(vec![RolloutItem::ResponseItem(
+            ContextualUserFragment::into(evidence).into(),
+        )]));
+        "Assess direction using the quoted progress evidence.".to_string()
+    } else {
+        prompt
+    };
     let mut config = ctx.config.as_ref().clone();
     let model = ctx.capture_current_model_info().slug.clone();
     let provider_id = ctx.model_provider_id();
@@ -210,7 +219,9 @@ pub(crate) async fn run_with_instructions(
     config.base_instructions = Some(instructions.to_string());
     config.base_instructions_provenance = Some(BaseInstructionsProvenance::Custom);
     let review_auth_manager = if config.model_provider_id == ctx.model_provider_id() {
-        ctx.model_provider().auth_manager().unwrap_or_else(|| Arc::clone(&session.services.auth_manager))
+        ctx.model_provider()
+            .auth_manager()
+            .unwrap_or_else(|| Arc::clone(&session.services.auth_manager))
     } else {
         Arc::clone(&session.services.auth_manager)
     };
@@ -220,7 +231,7 @@ pub(crate) async fn run_with_instructions(
         review_auth_manager,
         Arc::clone(&session.services.models_manager),
         vec![UserInput::Text {
-            text: "Independently verify whether the supplied goal is complete.".to_string(),
+            text: prompt,
             text_elements: Vec::new(),
         }],
         session,

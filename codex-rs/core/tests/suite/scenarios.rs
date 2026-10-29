@@ -1,5 +1,6 @@
 //! Multi-turn Astra scenarios snapshot the model-visible request history of shipped features.
 
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol_test_support::ContentItemTestExt;
 use std::collections::HashMap;
 use std::collections::HashSet;

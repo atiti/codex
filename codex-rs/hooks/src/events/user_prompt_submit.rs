@@ -54,6 +54,7 @@ pub struct UserPromptSubmitOutcome {
     pub route_message: Option<String>,
     pub strip_prompt_prefix_bytes: Option<usize>,
     pub strip_provider_state: bool,
+    pub require_applied_route: bool,
     pub chatgpt_profile_home: Option<String>,
     pub reviewer_profile_name: Option<String>,
     pub reviewer_fallback_profiles: Vec<ReviewerFallbackProfile>,
@@ -76,6 +77,7 @@ struct UserPromptSubmitHandlerData {
     route_message: Option<String>,
     strip_prompt_prefix_bytes: Option<usize>,
     strip_provider_state: bool,
+    require_applied_route: bool,
     chatgpt_profile_home: Option<String>,
     reviewer_profile_name: Option<String>,
     reviewer_fallback_profiles: Vec<ReviewerFallbackProfile>,
@@ -116,6 +118,7 @@ pub(crate) async fn run(
             route_message: None,
             strip_prompt_prefix_bytes: None,
             strip_provider_state: false,
+            require_applied_route: false,
             chatgpt_profile_home: None,
             reviewer_profile_name: None,
             reviewer_fallback_profiles: Vec::new(),
@@ -193,6 +196,9 @@ pub(crate) async fn run(
     let strip_provider_state = results
         .iter()
         .any(|result| result.data.strip_provider_state);
+    let require_applied_route = results
+        .iter()
+        .any(|result| result.data.require_applied_route);
     let chatgpt_profile_home = results
         .iter()
         .find_map(|result| result.data.chatgpt_profile_home.clone());
@@ -216,6 +222,7 @@ pub(crate) async fn run(
         route_message,
         strip_prompt_prefix_bytes,
         strip_provider_state,
+        require_applied_route,
         chatgpt_profile_home,
         reviewer_profile_name,
         reviewer_fallback_profiles,
@@ -238,6 +245,7 @@ fn parse_completed(
     let mut route_message = None;
     let mut strip_prompt_prefix_bytes = None;
     let mut strip_provider_state = false;
+    let mut require_applied_route = false;
     let mut chatgpt_profile_home = None;
     let mut reviewer_profile_name = None;
     let mut reviewer_fallback_profiles = Vec::new();
@@ -283,6 +291,7 @@ fn parse_completed(
                         route_message = parsed.route_message;
                         strip_prompt_prefix_bytes = parsed.strip_prompt_prefix_bytes;
                         strip_provider_state = parsed.strip_provider_state;
+                        require_applied_route = parsed.require_applied_route;
                         chatgpt_profile_home = parsed.chatgpt_profile_home;
                         reviewer_profile_name = parsed.reviewer_profile_name;
                         reviewer_fallback_profiles = parsed.reviewer_fallback_profiles;
@@ -382,6 +391,7 @@ fn parse_completed(
             route_message,
             strip_prompt_prefix_bytes,
             strip_provider_state,
+            require_applied_route,
             chatgpt_profile_home,
             reviewer_profile_name,
             reviewer_fallback_profiles,
@@ -402,6 +412,7 @@ fn serialization_failure_outcome(hook_events: Vec<HookCompletedEvent>) -> UserPr
         route_message: None,
         strip_prompt_prefix_bytes: None,
         strip_provider_state: false,
+        require_applied_route: false,
         chatgpt_profile_home: None,
         reviewer_profile_name: None,
         reviewer_fallback_profiles: Vec::new(),
@@ -453,6 +464,7 @@ mod tests {
                 route_message: None,
                 strip_prompt_prefix_bytes: None,
                 strip_provider_state: false,
+                require_applied_route: false,
                 chatgpt_profile_home: None,
                 reviewer_profile_name: None,
                 reviewer_fallback_profiles: Vec::new(),
@@ -501,6 +513,7 @@ mod tests {
                 route_message: None,
                 strip_prompt_prefix_bytes: None,
                 strip_provider_state: false,
+                require_applied_route: false,
                 chatgpt_profile_home: None,
                 reviewer_profile_name: None,
                 reviewer_fallback_profiles: Vec::new(),
@@ -543,6 +556,7 @@ mod tests {
                 route_message: None,
                 strip_prompt_prefix_bytes: None,
                 strip_provider_state: false,
+                require_applied_route: false,
                 chatgpt_profile_home: None,
                 reviewer_profile_name: None,
                 reviewer_fallback_profiles: Vec::new(),
@@ -594,6 +608,7 @@ mod tests {
                 route_message: None,
                 strip_prompt_prefix_bytes: None,
                 strip_provider_state: false,
+                require_applied_route: false,
                 chatgpt_profile_home: None,
                 reviewer_profile_name: None,
                 reviewer_fallback_profiles: Vec::new(),
@@ -624,7 +639,7 @@ mod tests {
             &handler(),
             run_result(
                 Some(0),
-                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","model":"gpt-5.6-sol","reasoningEffort":"high","routeMessage":"route details","stripPromptPrefixBytes":7,"stripProviderState":true,"chatgptProfileHome":"/tmp/codex-work","reviewerProfileName":"markster","reviewerFallbackProfiles":[{"name":"personal","codexHome":"/tmp/codex-personal"}]}}"#,
+                r#"{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","model":"gpt-5.6-sol","reasoningEffort":"high","routeMessage":"route details","stripPromptPrefixBytes":7,"stripProviderState":true,"requireAppliedRoute":true,"chatgptProfileHome":"/tmp/codex-work","reviewerProfileName":"markster","reviewerFallbackProfiles":[{"name":"personal","codexHome":"/tmp/codex-personal"}]}}"#,
                 "",
             ),
             Some("turn-1".to_string()),
@@ -635,6 +650,7 @@ mod tests {
         assert_eq!(parsed.data.route_message.as_deref(), Some("route details"));
         assert_eq!(parsed.data.strip_prompt_prefix_bytes, Some(7));
         assert!(parsed.data.strip_provider_state);
+        assert!(parsed.data.require_applied_route);
         assert_eq!(
             parsed.data.chatgpt_profile_home.as_deref(),
             Some("/tmp/codex-work")

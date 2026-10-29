@@ -12666,11 +12666,17 @@ fn multi_agent_v2_usage_hints_follow_provider_namespace_capability() {
         assert!(
             hint.expect("default usage hints should be present")
                 .body()
+                .into_text()
+                .unwrap()
                 .contains("to=functions.agentroute_collaboration.spawn_agent")
         );
     }
     for hint in [direct.root, direct.subagent] {
-        let hint = hint.expect("default usage hints should be present").body();
+        let hint = hint
+            .expect("default usage hints should be present")
+            .body()
+            .into_text()
+            .unwrap();
         assert!(hint.contains("to=functions.collaboration.spawn_agent"));
         assert!(!hint.contains("functions.agentroute_collaboration.spawn_agent"));
     }

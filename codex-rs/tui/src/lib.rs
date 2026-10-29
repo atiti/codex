@@ -683,7 +683,7 @@ pub(crate) async fn start_embedded_app_server_for_picker(
     let mut config = config.clone();
     config.features.disable(Feature::Plugins)?;
     let mut target = AppServerTarget::Embedded;
-    let mut state_db = init_state_db_for_app_server_target(config, &target).await?;
+    let mut state_db = init_state_db_for_app_server_target(&config, &target).await?;
     // Keep the shared test fixture's frame independent of embedded startup size.
     let app_server = Box::pin(start_app_server(
         &mut target,
@@ -1900,7 +1900,12 @@ async fn run_ratatui_app(
     // Remote startup keeps its existing explicit --cd trust check. Resolving other
     // remote folders requires authoritative project-root information from the server.
     let trust_host = agentroute_local_server::project_trust_host(&app_server_target);
-    if (!matches!(session_selection, resume_picker::SessionSelection::AgentsOverview) || matches!(app_server_target, AppServerTarget::Embedded)) && (trust_host == config_update::ProjectTrustHost::Local || remote_cwd_override.is_some()) {
+    if (!matches!(
+        session_selection,
+        resume_picker::SessionSelection::AgentsOverview
+    ) || matches!(app_server_target, AppServerTarget::Embedded))
+        && (trust_host == config_update::ProjectTrustHost::Local || remote_cwd_override.is_some())
+    {
         let resumed_thread = if trust_host == config_update::ProjectTrustHost::Local
             && !matches!(app_server_target, AppServerTarget::Embedded)
             && let resume_picker::SessionSelection::Resume(target)

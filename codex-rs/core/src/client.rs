@@ -366,6 +366,9 @@ pub(crate) fn normalize_response_items_for_provider(
                 .id()
                 .is_some_and(|id| foreign_provider_state_ids.contains(id));
             let unattributed = item.id().is_none() && strip_unattributed_provider_state;
+            if (foreign || unattributed) && let ResponseItem::AgentMessage { content, .. } = item {
+                return content.iter().any(|part| matches!(part, codex_protocol::models::AgentMessageInputContent::InputText { text } if !text.is_empty()));
+            }
             !(foreign || unattributed)
                 || !matches!(
                     item,
@@ -379,13 +382,31 @@ pub(crate) fn normalize_response_items_for_provider(
                 .id()
                 .is_some_and(|id| foreign_provider_state_ids.contains(id));
             let unattributed = item.id().is_none() && strip_unattributed_provider_state;
-            if (foreign || unattributed)
-                && let ResponseItem::FunctionCall {
-                    encrypted_function_args,
-                    ..
-                } = item
-            {
-                *encrypted_function_args = None;
+            if foreign || unattributed {
+                item.clear_encrypted_content();
+                match item {
+                    ResponseItem::FunctionCall {
+                        encrypted_function_args,
+                        ..
+                    } => *encrypted_function_args = None,
+                    ResponseItem::AgentMessage { content, .. } => content.retain(|part| {
+                        matches!(
+                            part,
+                            codex_protocol::models::AgentMessageInputContent::InputText { .. }
+                        )
+                    }),
+                    ResponseItem::FunctionCallOutput { output, .. }
+                    | ResponseItem::CustomToolCallOutput { output, .. } => {
+                        if let Some(parts) = output.content_items_mut() {
+                            for part in parts {
+                                if matches!(part, codex_protocol::models::FunctionCallOutputContentItem::EncryptedContent { .. }) {
+                                    *part = codex_protocol::models::FunctionCallOutputContentItem::InputText { text: "[Encrypted result from a different provider or account omitted.]".into() };
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
             }
             if foreign {
                 item.set_id(/*new_id*/ None);
@@ -640,9 +661,11 @@ fn neutralize_harness_identity(text: &str) -> String {
     let mut neutral = text
         .lines()
         .map(|line| {
-            let line = if line.starts_with("You are Codex,") || line.starts_with("You are ChatGPT,")
+            let line = if let Some(rest) = line.strip_prefix("You are Codex, an agent based on ") {
+                rest.split_once(". ").map_or(line, |(_, guidance)| guidance)
+            } else if let Some(rest) = line.strip_prefix("You are ChatGPT, a large language model.")
             {
-                line.split_once(". ").map_or("", |(_, guidance)| guidance)
+                rest.strip_prefix(' ').unwrap_or(rest)
             } else {
                 line
             };

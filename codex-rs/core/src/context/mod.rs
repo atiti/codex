@@ -20,6 +20,8 @@ mod guardian_conversation_history;
 mod user_goal;
 pub use guardian_budget_omission::GuardianBudgetOmission;
 mod goal_completion_review_evidence;
+mod progress_review_evidence;
+pub(crate) use progress_review_evidence::ProgressReviewEvidence;
 mod guardian_followup_review_reminder;
 mod guardian_node_repl_policy;
 mod guardian_policy;

@@ -4242,8 +4242,10 @@ impl Session {
         // The routed sender's provider owns encrypted agent-message content. Do
         // not infer ownership from the recipient: it may use another backend.
         if let Some(provider) = communication.routing_inherited_model_provider.as_ref() {
-            response_item.metadata.get_or_insert_default().model_provider_id =
-                Some(provider.clone());
+            response_item
+                .metadata
+                .get_or_insert_default()
+                .model_provider_id = Some(provider.clone());
         }
         // A send confirmed after the pending snapshot must not reach the rollout
         // before this boundary; older readers assign deliveries by physical order.

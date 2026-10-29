@@ -441,6 +441,42 @@ else
     # duplicates large Rust/V8 artifacts and exhausts ephemeral hosted runners.
     # Bound concurrent fixture copies and Wine prefix bootstraps as well.
     bazel_run_args+=(--disk_cache= --local_test_jobs=2)
+    if [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" && "${RUNNER_OS:-}" != "Windows" ]]; then
+      compact_native_build=0
+      case "${bazel_args[0]}" in
+        build | test) compact_native_build=1 ;;
+      esac
+      clippy_only=0
+      explicit_output_groups=0
+      for arg in "${bazel_args[@]}"; do
+        case "$arg" in
+          # Retain caller-selected debug/strip settings and compilation modes.
+          *debuginfo* | *strip* | --config=release | --config | --compilation_mode=dbg | --compilation_mode=opt | --compilation_mode | -c | -cdbg | -copt)
+            compact_native_build=0
+            ;;
+        esac
+        case "$arg" in
+          --config=clippy) clippy_only=1 ;;
+          --output_groups | --output_groups=*) explicit_output_groups=1 ;;
+        esac
+      done
+      if [[ $compact_native_build -eq 1 ]]; then
+        # Hosted runners cannot retain line tables in hundreds of linked Rust
+        # test binaries. Keep symbols, assertions and all tests; published Cargo
+        # release artifacts use their own unchanged profiles.
+        bazel_run_args+=(
+          --@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0
+          --@rules_rust//rust/settings:extra_rustc_flag=-Cstrip=debuginfo
+          --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cdebuginfo=0
+          --@rules_rust//rust/settings:extra_exec_rustc_flag=-Cstrip=debuginfo
+        )
+      fi
+      if [[ $clippy_only -eq 1 && $explicit_output_groups -eq 0 ]]; then
+        # The aspect checks every requested crate without linking its default
+        # binary outputs. Test and release-build jobs still perform those links.
+        bazel_run_args+=(--output_groups=clippy_checks)
+      fi
+    fi
   fi
 fi
 if (( ${#post_config_bazel_args[@]} > 0 )); then
@@ -461,6 +497,20 @@ bazel_status=${PIPESTATUS[0]}
 set -e
 
 if [[ ${bazel_status:-0} -ne 0 ]]; then
+  if [[ "${RUNNER_ENVIRONMENT:-}" == "github-hosted" && "${RUNNER_OS:-}" != "Windows" && -z "${BUILDBUDDY_API_KEY:-}" ]]; then
+    # Preserve the original failure while making hosted storage pressure visible.
+    df -h || true
+    if [[ -n "${BAZEL_OUTPUT_BASE:-}" ]]; then
+      for path in \
+        "$BAZEL_OUTPUT_BASE/external" \
+        "$BAZEL_OUTPUT_BASE/sandbox" \
+        "$BAZEL_OUTPUT_BASE/execroot/_main/bazel-out"; do
+        if [[ -d "$path" ]]; then
+          du -sh "$path" || true
+        fi
+      done
+    fi
+  fi
   if [[ $print_failed_bazel_action_summary -eq 1 ]]; then
     print_bazel_action_failure_summary "$bazel_console_log"
   fi

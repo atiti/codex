@@ -2261,7 +2261,7 @@ dependencies = [
  "tracing",
  "ts-rs",
  "uuid",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -2330,7 +2330,7 @@ dependencies = [
  "tracing",
  "url",
  "uuid",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -2597,7 +2597,7 @@ dependencies = [
  "which 8.0.0",
  "windows-sys 0.61.2",
  "wiremock",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -3069,7 +3069,7 @@ dependencies = [
  "whoami 1.6.1",
  "windows-sys 0.61.2",
  "wiremock",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -3229,7 +3229,7 @@ dependencies = [
  "uuid",
  "walkdir",
  "wiremock",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -3654,7 +3654,7 @@ dependencies = [
  "tracing",
  "uuid",
  "wiremock",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -3782,7 +3782,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "windows-sys 0.61.2",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -4609,7 +4609,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -4900,7 +4900,7 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -5837,7 +5837,7 @@ dependencies = [
  "tracing-subscriber",
  "walkdir",
  "wiremock",
- "zstd 0.13.3",
+ "zstd",
 ]
 
 [[package]]
@@ -18022,7 +18022,7 @@ dependencies = [
  "windows-sys 0.61.2",
  "zeroize",
  "zopfli",
- "zstd 0.14.3",
+ "zstd",
 ]
 
 [[package]]
@@ -18074,25 +18074,7 @@ version = "0.14.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
 dependencies = [
- "zstd-safe 7.2.4",
-]
-
-[[package]]
-name = "zstd"
-version = "0.14.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db3ae9bf90af6e40197bef767eeefc46ad6397420fe873830bd85e5fbbfb3c70"
-dependencies = [
- "zstd-safe 8.2.0",
-]
-
-[[package]]
-name = "zstd-safe"
-version = "8.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ded520f16b29e1a9b771c722221b2b0a0398c2316d9bb3c42b458a5414d7434b"
-dependencies = [
- "zstd-sys",
+ "zstd-safe",
 ]
 
 [[package]]

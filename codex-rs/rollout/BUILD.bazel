@@ -5,8 +5,5 @@ codex_rust_crate(
     crate_name = "codex_rollout",
     # Ownership round-trips require supplementary groups that Linux's Bazel
     # user namespace does not map. Exercise the real host permissions instead.
-    test_tags = select({
-        "@platforms//os:linux": ["no-sandbox"],
-        "//conditions:default": [],
-    }),
+    test_tags = ["no-sandbox"],
 )

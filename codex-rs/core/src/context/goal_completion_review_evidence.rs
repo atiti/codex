@@ -32,7 +32,7 @@ impl GoalCompletionReviewEvidence {
             let text = content
                 .iter()
                 .filter_map(|part| match part {
-                    ContentItem::InputText { text } | ContentItem::OutputText { text } => {
+                    ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
                         Some(text.as_str())
                     }
                     _ => None,
@@ -97,8 +97,8 @@ impl ContextualUserFragment for GoalCompletionReviewEvidence {
         )
     }
 
-    fn body(&self) -> String {
-        self.0.clone()
+    fn body(&self) -> ContentItem {
+        codex_protocol::models::input_text(self.0.clone())
     }
 }
 

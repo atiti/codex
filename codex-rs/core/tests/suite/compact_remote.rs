@@ -1044,7 +1044,8 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
                 Vec::new(),
                 delegated_task_ciphertext.clone(),
                 /*trigger_turn*/ true,
-            ),
+            )
+            .with_routing_provider_context(Some("openai".to_string()), None, false),
             start_options: Default::default(),
         })
         .await?;
@@ -1060,7 +1061,8 @@ async fn remote_compact_v2_reuses_compaction_trigger_for_followups() -> Result<(
                 Vec::new(),
                 descendant_followup_ciphertext.to_string(),
                 /*trigger_turn*/ true,
-            ),
+            )
+            .with_routing_provider_context(Some("openai".to_string()), None, false),
             start_options: Default::default(),
         })
         .await?;

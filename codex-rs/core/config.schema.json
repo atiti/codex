@@ -2223,7 +2223,7 @@
         {
           "properties": {
             "additionalContextLimit": {
-              "description": "Approximate token threshold for spilling this hook's `additionalContext` to disk. Unset uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context always remains bounded.",
+              "description": "Approximate token threshold for spilling this hook's `additionalContext` to disk. Unset uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped at 10,000 tokens so model-visible hook context stays bounded.",
               "format": "uint",
               "minimum": 0.0,
               "type": "integer"

@@ -50,7 +50,7 @@ Settings:
     - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
     - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
 
-02:message/developer[4]:
+02:message/developer[3]:
     [01] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
         Approval policy is currently never. Do not provide the `sandbox_permissions` for any reason, commands will be rejected.
@@ -72,16 +72,6 @@ Settings:
         Never use the `request_user_input` tool for permission requests or permission-related escalations.
         </collaboration_mode>
     [03] <skills_instructions>
-        ## Skills
-        A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...locators can be expanded using the skill roots table. [hash=f00d6a4d3e192f06]
-        ### Skill roots
-        For each alias listed below, this mapping replaces any earlier mapping for that alias. Use it for subsequent skill calls.
-        - `e0` = `skill://user-agent-skills/Users/attilasukosd/.agents/skills`
-        Read a skill package directly with `skills.read({"package":"<package>"})` to read its `SKILL.md`; root a...ackage is not provided, use `skills.list` to find it. [hash=25bf84ea2123d647]
-        ### Available skills
-        - reverse-engineer-anything: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, ...sis. (executor package: e0/reverse-engineer-anything) [hash=ac18d9972e0cdb29]
-        </skills_instructions>
-    [04] <skills_instructions>
         ## Skills
         A skill is a set of instructions provided through a `SKILL.md` source. Below is the list of skills that ...locators can be expanded using the skill roots table. [hash=f00d6a4d3e192f06]
         ### Skill roots

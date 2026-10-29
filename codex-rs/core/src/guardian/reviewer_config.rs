@@ -157,7 +157,14 @@ async fn resolve_review_model_from_catalog(
             .collect(),
     );
     let provider = turn.model_provider();
-    let uses_openai_reviewer = provider.info().is_openai();
+    // Built-in cloud providers declare their own supported reviewer model. Only
+    // custom routed providers fall back to the parent unless explicitly configured.
+    let uses_openai_reviewer = provider.info().is_openai()
+        || matches!(
+            turn.model_provider_id().as_str(),
+            codex_model_provider_info::GCP_PROVIDER_ID
+                | codex_model_provider_info::AMAZON_BEDROCK_PROVIDER_ID
+        );
     let mut provider_parent_model = context.model_info.as_ref().clone();
     if !uses_openai_reviewer {
         provider_parent_model.auto_review_model_override =

@@ -3,4 +3,10 @@ load("//:defs.bzl", "codex_rust_crate")
 codex_rust_crate(
     name = "rollout",
     crate_name = "codex_rollout",
+    # Ownership round-trips require supplementary groups that Linux's Bazel
+    # user namespace does not map. Exercise the real host permissions instead.
+    test_tags = select({
+        "@platforms//os:linux": ["no-sandbox"],
+        "//conditions:default": [],
+    }),
 )

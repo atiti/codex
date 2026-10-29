@@ -686,7 +686,7 @@ pub(crate) async fn start_embedded_app_server_for_picker(
     let mut config = config.clone();
     config.features.disable(Feature::Plugins)?;
     let mut target = AppServerTarget::Embedded;
-    let mut state_db = init_state_db_for_app_server_target(config, &target).await?;
+    let mut state_db = init_state_db_for_app_server_target(&config, &target).await?;
     // Keep the shared test fixture's frame independent of embedded startup size.
     let app_server = Box::pin(start_app_server(
         &mut target,

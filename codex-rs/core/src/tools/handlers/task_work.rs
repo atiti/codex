@@ -97,7 +97,10 @@ impl ToolExecutor<ToolInvocation> for TaskWorkHandler {
             let output = if conflicts.is_empty() {
                 r#"{"accepted":true,"lease_seconds":3600}"#.to_string()
             } else {
-                crate::context::TaskWorkOverlap(conflicts).render().into_text().unwrap_or_default()
+                crate::context::TaskWorkOverlap(conflicts)
+                    .render()
+                    .into_text()
+                    .unwrap_or_default()
             };
             Ok(boxed_tool_output(FunctionToolOutput::from_text(
                 output,

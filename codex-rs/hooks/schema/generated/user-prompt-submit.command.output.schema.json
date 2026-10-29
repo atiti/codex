@@ -60,6 +60,10 @@
           ],
           "default": null
         },
+        "requireAppliedRoute": {
+          "default": false,
+          "type": "boolean"
+        },
         "reviewerFallbackProfiles": {
           "default": [],
           "items": {

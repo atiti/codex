@@ -96,6 +96,7 @@ pub(crate) struct HookRuntimeOutcome {
     pub route_message: Option<String>,
     pub strip_prompt_prefix_bytes: Option<usize>,
     pub strip_provider_state: bool,
+    pub require_applied_route: bool,
     pub chatgpt_profile_home: Option<String>,
     pub reviewer_profile_name: Option<String>,
     pub reviewer_fallback_profiles: Vec<codex_hooks::ReviewerFallbackProfile>,
@@ -141,6 +142,7 @@ impl From<SessionStartOutcome> for ContextInjectingHookOutcome {
                 route_message: None,
                 strip_prompt_prefix_bytes: None,
                 strip_provider_state: false,
+                require_applied_route: false,
                 chatgpt_profile_home: None,
                 reviewer_profile_name: None,
                 reviewer_fallback_profiles: Vec::new(),
@@ -163,6 +165,7 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
             route_message,
             strip_prompt_prefix_bytes,
             strip_provider_state,
+            require_applied_route,
             chatgpt_profile_home,
             reviewer_profile_name,
             reviewer_fallback_profiles,
@@ -179,6 +182,7 @@ impl From<UserPromptSubmitOutcome> for ContextInjectingHookOutcome {
                 route_message,
                 strip_prompt_prefix_bytes,
                 strip_provider_state,
+                require_applied_route,
                 chatgpt_profile_home,
                 reviewer_profile_name,
                 reviewer_fallback_profiles,
@@ -865,6 +869,7 @@ pub(crate) async fn inspect_pending_input(
             route_message: None,
             strip_prompt_prefix_bytes: None,
             strip_provider_state: false,
+            require_applied_route: false,
             chatgpt_profile_home: None,
             reviewer_profile_name: None,
             reviewer_fallback_profiles: Vec::new(),
@@ -929,7 +934,10 @@ pub(crate) async fn inspect_pending_input(
             sess,
             turn_context,
             "task-overlap",
-            format!("◆ TASK OVERLAP\n{}", fragment.render().into_text().unwrap_or_default()),
+            format!(
+                "◆ TASK OVERLAP\n{}",
+                fragment.render().into_text().unwrap_or_default()
+            ),
         )
         .await;
         outcome
@@ -1013,6 +1021,7 @@ pub(crate) async fn inspect_pending_input(
                     });
             }
             TurnSettingsUpdateOutcome::TargetUnavailable => {
+                outcome.should_stop |= outcome.require_applied_route;
                 emit_agentroute_notice(
                     sess,
                     turn_context,
@@ -1033,6 +1042,7 @@ pub(crate) async fn inspect_pending_input(
                     });
             }
             TurnSettingsUpdateOutcome::Rejected { reason } => {
+                outcome.should_stop |= outcome.require_applied_route;
                 emit_agentroute_notice(
                     sess,
                     turn_context,
@@ -1611,7 +1621,7 @@ mod tests {
         assert_eq!(
             routing_prompt_for_pending_input(
                 &turn_context,
-                &crate::session::TurnInput::InterAgentCommunication(communication),
+                &crate::session::TurnInput::InterAgentCommunication(communication.into()),
             )
             .as_deref(),
             Some("Design a zero-downtime database migration")
@@ -1646,7 +1656,7 @@ mod tests {
         assert_eq!(
             routing_provider_context_for_pending_input(
                 &turn_context,
-                &crate::session::TurnInput::InterAgentCommunication(communication),
+                &crate::session::TurnInput::InterAgentCommunication(communication.into()),
             ),
             (
                 Some("agentroute-azure".to_string()),
@@ -1677,7 +1687,7 @@ mod tests {
         assert_eq!(
             routing_provider_context_for_pending_input(
                 &turn_context,
-                &crate::session::TurnInput::InterAgentCommunication(communication),
+                &crate::session::TurnInput::InterAgentCommunication(communication.into()),
             ),
             (None, None, false)
         );
@@ -1706,7 +1716,7 @@ mod tests {
         assert_eq!(
             routing_prompt_for_pending_input(
                 &turn_context,
-                &crate::session::TurnInput::InterAgentCommunication(communication),
+                &crate::session::TurnInput::InterAgentCommunication(communication.into()),
             )
             .as_deref(),
             Some("legacy plaintext task")

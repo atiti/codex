@@ -3,6 +3,7 @@
 use super::image_rollout::RecordingFileAttachmentStore;
 use super::permissions_messages::PermissionPathScenario;
 use codex_attachment_store::AttachmentStoreErrorKind;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol_test_support::ContentItemTestExt;
 use std::collections::HashMap;
 use std::collections::HashSet;

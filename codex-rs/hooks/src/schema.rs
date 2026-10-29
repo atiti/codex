@@ -462,6 +462,8 @@ pub(crate) struct UserPromptSubmitHookSpecificOutputWire {
     #[serde(default)]
     pub strip_provider_state: bool,
     #[serde(default)]
+    pub require_applied_route: bool,
+    #[serde(default)]
     pub chatgpt_profile_home: Option<String>,
     #[serde(default)]
     pub reviewer_profile_name: Option<String>,

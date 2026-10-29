@@ -1,6 +1,7 @@
 ---
 source: core/tests/suite/scenarios_skill_catalog_dedup.rs
-expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.\",\n&requests,\n&ContextSnapshotOptions::default().rewrite_known_segments().include_request_settings(),)"
+assertion_line: 146
+expression: "context_snapshot::format_request_history_snapshot(\"Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.\",\n&requests, &ContextSnapshotOptions::default().include_request_settings(),)"
 ---
 Scenario: Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.
 
@@ -16,7 +17,7 @@ Settings:
   text: {"verbosity":"low"}
   tool_choice: "auto"
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=5e8370540461db70):
+00:additional_tools/developer (3; hash=af12e9cf2dc77ccd):
         - namespace/functions; hash=7d26e086c1dbba28
           - custom/exec
           - function/wait
@@ -32,7 +33,23 @@ Settings:
           - function/spawn_agent
           - function/wait_agent
 01:message/developer:
-    <MODEL_INSTRUCTIONS>
+    You and the user share one workspace, and your job is to collaborate with them until their intended goal is completely handled.
+
+    # When to ask the user for permission
+
+    Use your best judgement given task context for when you really need user permission, like a competent co...ork without ending the turn to clarify with the user. [hash=ca7367e658b51388]
+
+    User authorization and preferences persist across turns. Do not request permission again when the user h... any guidelines provided in skills or external files. [hash=911f91c92c72882c]
+
+    <OMITTED 155 LINES; ~4933 TOKENS; hash=23426e534912791b>
+
+    - Skill naming: If a plugin contributes skills, those skill entries are prefixed with plugin_name: in the Skills list.
+    - MCP naming: Plugin-provided MCP tools keep standard MCP identifiers such as mcp__server__tool; use tool provenance to tell which plugin they come from.
+    - Trigger rules: If the user explicitly names a plugin, prefer capabilities associated with that plugin for that turn.
+    - Relationship to capabilities: Plugins are not invoked directly. Use their underlying skills, MCP tools, and app tools to help solve the task.
+    - Relevance: Determine what a plugin can help with from explicit user mention or from the plugin-associa..., MCP tools, and apps exposed elsewhere in this turn. [hash=620459a4e7b590f0]
+    - Missing/blocked: If the user requests a plugin that does not have relevant callable capabilities for t..., say so briefly and continue with the best fallback. [hash=746b0469a8f6cb3e]
+
 02:message/developer[4]:
     [01] <permissions instructions>
         Filesystem sandboxing defines which files can be read or written. `sandbox_mode` is `danger-full-access`...ll commands are permitted. Network access is enabled. [hash=c134061cebb94a1b]
@@ -75,11 +92,30 @@ Settings:
         - demo:s2: Cloud skill instructions. (cloud package: skill://cloud/s2)
         </skills_instructions>
 03:message/developer:
-    <MULTI_AGENT_ROLE>
+    <multi_agent_role>You are `/root`, the primary agent in a team of agents collaborating to fulfill the user's goals.
+
+    At the start of your turn, you are the active agent.
+    You can spawn sub-agents to handle subtasks, and those sub-agents can spawn their own sub-agents.
+    All agents in the team, including the agents that you can assign tasks to, are equally intelligent and capable, and have access to the same set of tools.
+
+    You can use `spawn_agent` to create a new agent, `followup_task` to give an existing agent a new task an...message to a running agent without triggering a turn. [hash=7d40ff8b58977202]
+    `send_message` calls may be read by a human, so ensure they are legible. Always put proper spaces between words and/or numbers.
+    <OMITTED 17 LINES; ~249 TOKENS; hash=813fd275defcac17>
+    - All agents use the same current working directory.
+    - As a result, edits made by one agent are immediately visible to all other agents.
+
+    When calling `wait_agent`, prefer longer waits (minutes) to avoid busy polling.
+
+    There are 4 available concurrency slots, meaning that up to 4 agents can be active at once, including you.
+
+    Full-history forks (`fork_turns` omitted or `"all"`) inherit the parent model and reasoning effort and d... so, set `fork_turns` to `"none"`.</multi_agent_role> [hash=d5928243dc643bcc]
 04:message/developer:
-    <MULTI_AGENT_MODE>
+    <multi_agent_mode>Any earlier instruction enabling proactive multi-agent delegation no longer applies. D...elegation, or parallel agent work.</multi_agent_mode> [hash=2b6e037067b4390c]
 05:message/user:
-    <ENVIRONMENT_CONTEXT>
+    <environment_context>
+      <current_date><CURRENT_DATE></current_date>
+      <timezone><HOST_TIMEZONE></timezone>
+    </environment_context>
 06:message/user:
     Which skills are available?
 07:configuration_update:reasoning={"effort":"low"}

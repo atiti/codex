@@ -467,9 +467,7 @@ async fn skill_catalog_deltas_survive_resume_and_rebuild_after_compaction() -> R
         context_snapshot::format_request_history_snapshot(
             "Skill additions and edits share the remaining metadata budget across turns and resume. Removals stay silent and do not refund budget. Compaction rebuilds the current catalog and resets the allowance.",
             &requests,
-            &ContextSnapshotOptions::default()
-                .rewrite_known_segments()
-                .include_request_settings(),
+            &ContextSnapshotOptions::default().include_request_settings(),
         )
     );
     Ok(())

@@ -47,10 +47,11 @@ fn needs_repair(rows: &[AppliedMigration], migrator: &Migrator) -> anyhow::Resul
     Ok(true)
 }
 
+/// Returns true when the compatibility transaction also ran the state migrator.
 pub(crate) async fn repair_upstream_165_migration_versions(
     pool: &SqlitePool,
     migrator: &Migrator,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<bool> {
     let mut connection = pool.acquire().await?;
     let exists = sqlx::query_scalar::<_, i64>(
         "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_sqlx_migrations'",
@@ -59,7 +60,7 @@ pub(crate) async fn repair_upstream_165_migration_versions(
     .await?
     .is_some();
     if !exists || !needs_repair(&applied(&mut connection).await?, migrator)? {
-        return Ok(());
+        return Ok(false);
     }
     drop(connection);
 
@@ -76,8 +77,14 @@ pub(crate) async fn repair_upstream_165_migration_versions(
                 .await?;
         }
     }
+    // SQLite's SQLx migration lock is a no-op. Keep writer admission through
+    // pending task migrations so a concurrent startup cannot use a stale ledger
+    // snapshot and replay CREATE TABLE/ALTER TABLE after we commit.
+    migrator
+        .run_direct(/*target*/ None, &mut *transaction, /*skip*/ false)
+        .await?;
     transaction.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 #[cfg(test)]

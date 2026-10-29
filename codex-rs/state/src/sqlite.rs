@@ -381,7 +381,9 @@ impl SqliteConfig {
         let migrate_result = async {
             if matches!(spec.kind, DbKind::State) {
                 repair_legacy_recency_migration_version(&pool, migrator).await?;
-                repair_upstream_165_migration_versions(&pool, migrator).await?;
+                if repair_upstream_165_migration_versions(&pool, migrator).await? {
+                    return Ok(());
+                }
             }
             migrator.run(&pool).await.map_err(anyhow::Error::from)
         }

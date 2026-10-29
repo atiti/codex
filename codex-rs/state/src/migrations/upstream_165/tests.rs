@@ -246,3 +246,52 @@ async fn simultaneous_repairs_are_idempotent() {
     second.unwrap();
     migrator.run(&pool).await.unwrap();
 }
+
+#[tokio::test]
+async fn simultaneous_full_opens_preserve_the_complete_upgrade() {
+    for _ in 0..4 {
+        let (_temp, sqlite, pool) = fixture().await;
+        official_migrator(/*frontier*/ 62).run(&pool).await.unwrap();
+        seed_feedback(&pool).await;
+        let barrier = std::sync::Arc::new(tokio::sync::Barrier::new(4));
+        let mut opens = Vec::new();
+        for _ in 0..4 {
+            let sqlite = sqlite.clone();
+            let barrier = barrier.clone();
+            opens.push(tokio::spawn(async move {
+                barrier.wait().await;
+                sqlite
+                    .open_state_db(&runtime_state_migrator(), /*telemetry_override*/ None)
+                    .await
+            }));
+        }
+        for open in opens {
+            let upgraded = open
+                .await
+                .unwrap()
+                .expect("concurrent complete startup should succeed");
+            verify_feedback(&upgraded).await;
+        }
+        assert_eq!(ledger(&pool).await.len(), 64);
+    }
+}
+
+#[tokio::test]
+async fn migration_failure_rolls_back_the_compatibility_rekey() {
+    let (_temp, sqlite, pool) = fixture().await;
+    official_migrator(/*frontier*/ 62).run(&pool).await.unwrap();
+    seed_feedback(&pool).await;
+    sqlx::query("UPDATE _sqlx_migrations SET checksum = X'1234' WHERE version = 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let before = ledger(&pool).await;
+    assert!(
+        sqlite
+            .open_state_db(&runtime_state_migrator(), /*telemetry_override*/ None)
+            .await
+            .is_err()
+    );
+    assert_eq!(ledger(&pool).await, before);
+    verify_feedback(&pool).await;
+}

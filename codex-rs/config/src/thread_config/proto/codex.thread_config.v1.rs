@@ -87,6 +87,10 @@ pub struct ModelProvider {
     pub credential_file: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag = "23")]
     pub capabilities: ::core::option::Option<ModelProviderCapabilities>,
+    #[prost(string, optional, tag = "24")]
+    pub tool_compatibility: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "25")]
+    pub approval_review_model: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ModelProviderCapabilities {

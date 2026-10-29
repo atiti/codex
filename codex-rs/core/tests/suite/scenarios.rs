@@ -51,7 +51,6 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::openai_models::CodeModeToolMessages;
-use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::ToolMessage;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::protocol::AdditionalContextEntry;
@@ -180,6 +179,8 @@ mod mcp_ema;
 #[path = "scenarios_mcp_sharing.rs"]
 mod mcp_sharing;
 
+#[path = "scenarios_guardian_blocked_history_tests.rs"]
+mod guardian_blocked_history;
 #[path = "scenarios_guardian_agent_messages_tests.rs"]
 mod guardian_agent_messages;
 
@@ -1055,7 +1056,7 @@ async fn astra_switches_environments_for_the_rest_of_the_active_turn() -> Result
         context_snapshot::format_request_history_snapshot(
             "Astra starts in one workspace, switches for the next step of the active turn, and returns to the original workspace on the next turn.",
             &requests,
-            &ContextSnapshotOptions::default(),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
     Ok(())
@@ -1170,7 +1171,9 @@ async fn astra_kickoff_with_skills_plugins_and_remote_compaction() -> Result<()>
         context_snapshot::format_request_history_snapshot(
             "Astra plans a kickoff with local and plugin skills, remotely compacts, and checks an image brief.",
             &requests,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -1255,6 +1258,11 @@ enabled = true
         .await?;
 
     let requests = mock.requests();
+    let developer_text = requests[0].message_input_texts("developer").join("\n");
+    assert!(developer_text.contains("calendar:agenda"));
+    assert!(developer_text.contains("final-check"));
+    assert!(developer_text.contains("outline"));
+    assert!(!developer_text.contains("notes:summarize"));
     insta::assert_snapshot!(
         if omit_descriptions {
             "astra_plugin_policy_without_skill_descriptions"
@@ -1264,7 +1272,9 @@ enabled = true
         context_snapshot::format_request_history_snapshot(
             "Astra sees the permitted calendar plugin and standalone skills, but not the unlisted notes plugin.",
             &requests,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -1560,7 +1570,9 @@ async fn astra_omits_disabled_executor_and_plugin_skills_from_model_context(
         context_snapshot::format_context_snapshot(
             description,
             &entries,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -2042,7 +2054,7 @@ async fn multi_agent_catalog_parameters(disable_native_tools: bool) -> Result<()
                 ev_response_created("agents-response"),
                 ev_function_call_with_namespace(
                     "agents-call",
-                    "collaboration",
+                    "agentroute_collaboration",
                     "list_agents",
                     r#"{"path_prefix":"/root"}"#,
                 ),
@@ -2077,7 +2089,9 @@ async fn multi_agent_catalog_parameters(disable_native_tools: bool) -> Result<()
         context_snapshot::format_request_history_snapshot(
             description,
             &mock.requests(),
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -2134,7 +2148,7 @@ async fn astra_settings_release_check_with_direct_and_code_mode_tools() -> Resul
         vec![
             sse(vec![
                 ev_response_created("agents-response"),
-                ev_function_call_with_namespace("agents-call", "collaboration", "list_agents", "{}"),
+                ev_function_call_with_namespace("agents-call", "agentroute_collaboration", "list_agents", "{}"),
                 ev_completed("agents-response"),
             ]),
             sse(vec![
@@ -2191,7 +2205,9 @@ text(`MCP: ${ping.structuredContent?.echo ?? "missing"}`);"#,
         context_snapshot::format_request_history_snapshot(
             "Astra checks a Settings release using direct collaboration and Code Mode tools.",
             &mock.requests(),
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -2271,7 +2287,7 @@ throw 'boom';"#,
         context_snapshot::format_request_history_snapshot(
             "Astra reads code-mode timings and the collector notice even at zero tokens, then a failed wait and a truncated script error.",
             &mock.requests(),
-            &ContextSnapshotOptions::default(),
+            &ContextSnapshotOptions::default().rewrite_known_segments(),
         )
     );
     Ok(())
@@ -2517,7 +2533,7 @@ async fn astra_continues_after_input_yields_a_code_mode_cell() -> Result<()> {
     let snapshot = context_snapshot::format_request_history_snapshot(
         "Astra continues after new user input yields a running code cell, then waits for its result.",
         &requests,
-        &ContextSnapshotOptions::default(),
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
     )
     .replace("cell ID 1", "cell ID <CELL_ID>")
     .replace("\"cell_id\":\"1\"", "\"cell_id\":\"<CELL_ID>\"");
@@ -2659,7 +2675,9 @@ text(result.tools[0].description);"#,
         context_snapshot::format_request_history_snapshot(
             scenario,
             &requests,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -2676,6 +2694,13 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread(
 
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
+    // Keep the initial skill-catalog shape independent of globally installed host skills.
+    write_skill(
+        &home.path().join("skills/fixture"),
+        "fixture",
+        "A stable local fixture skill",
+        "Use the installed Notes plugin after refresh.",
+    )?;
     let config = format!(
         "[features]\nplugins = true\nsimplified_selection_hints = {simplified_selection_hints}\n\n[skills.bundled]\nenabled = false\n"
     );
@@ -2785,7 +2810,9 @@ async fn astra_refreshes_plugin_tools_and_skills_in_an_existing_thread(
         context_snapshot::format_request_history_snapshot(
             "Astra checks for Notes, refreshes its installed plugin without restarting, and uses the new skill and Code Mode MCP tool across turns.",
             &mock.requests(),
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())
@@ -2899,7 +2926,7 @@ async fn subagent_waits_for_its_inherited_environment_configuration() -> Result<
     let snapshot = context_snapshot::format_context_snapshot(
         "A parent spawns a child before the selected environment is configured. The child sees it starting, waits, and receives the ready result after an ordinary parent turn-settings update.",
         &entries,
-        &ContextSnapshotOptions::default(),
+        &ContextSnapshotOptions::default().rewrite_known_segments(),
     );
     // Keep every request and its environment context; collapse unrelated guidance repeated per window.
     let mut snapshot = snapshot;
@@ -3030,7 +3057,7 @@ async fn guardian_checkpoint_migration_request_history() -> Result<()> {
     use super::guardian_checkpoint_migration::migration_scenario;
     let requests = migration_scenario().await?;
     let mut snapshot = context_snapshot::format_request_history_snapshot(
-        "An old checkpoint retains a user restriction, assistant questions, and a verified answer. Incompatible automatic compaction keeps legacy review across restart with its saved answer; compatible manual compaction immediately activates thread-owned review.",
+        "An ownership-unknown legacy checkpoint is omitted and rebuilt by the current provider. Restrictions and verified answers survive model-hash changes, compaction, and restart in thread-owned review. Mocked checkpoints verify transport, not backend decryption.",
         &requests,
         &ContextSnapshotOptions::default()
             .rewrite_known_segments()
@@ -3092,7 +3119,9 @@ async fn model_catalog_refresh_preserves_tools_and_history() -> Result<()> {
     insta::assert_snapshot!(context_snapshot::format_request_history_snapshot(
         "Catalog refreshes append the updated listing once while preserving tools and prior input.",
         &requests,
-        &ContextSnapshotOptions::default().include_request_settings(),
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
     ));
     Ok(())
 }
@@ -3373,7 +3402,12 @@ async fn astra_async_compaction_keeps_work_added_after_its_snapshot(
             compaction_chunk(
                 Some(foreground_gate),
                 vec![
-                    ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
+                    ev_function_call_with_namespace(
+                        "team",
+                        "agentroute_collaboration",
+                        "list_agents",
+                        "{}",
+                    ),
                     ev_completed_with_tokens(
                         "team-response",
                         /*total_tokens*/ if over_budget { 9_000 } else { 75_000 },
@@ -3672,7 +3706,12 @@ async fn async_compaction_reuses_pending_work(
     if !manual {
         responses.push(immediate(response(
             "second",
-            ev_function_call_with_namespace("team", "collaboration", "list_agents", "{}"),
+            ev_function_call_with_namespace(
+                "team",
+                "agentroute_collaboration",
+                "list_agents",
+                "{}",
+            ),
             /*tokens*/ if over_budget { 9_000 } else { 91_000 },
         )));
     }

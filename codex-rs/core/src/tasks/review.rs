@@ -136,6 +136,7 @@ async fn start_review_conversation(
         SubAgentSource::Review,
         /*final_output_json_schema*/ None,
         /*initial_history*/ None,
+        codex_extension_api::SessionIsolation::Inherit,
     )
     .await)
         .ok()

@@ -733,6 +733,72 @@ fn legacy_capture_emits_output_and_preserves_descendant_after_normal_exit() {
         .expect("sandbox descendant did not exit after release");
 }
 
+fn token_restriction_diagnostic(token: windows_sys::Win32::Foundation::HANDLE) -> String {
+    use windows_sys::Win32::Security::GetLengthSid;
+    use windows_sys::Win32::Security::GetTokenInformation;
+    use windows_sys::Win32::Security::IsTokenRestricted;
+    use windows_sys::Win32::Security::SID_AND_ATTRIBUTES;
+    use windows_sys::Win32::Security::TOKEN_GROUPS;
+    use windows_sys::Win32::Security::TokenRestrictedSids;
+
+    // Diagnostic only: retain the actual token and enforcement assertions.
+    unsafe {
+        let user = crate::token::get_user_sid_bytes(token).expect("query token user");
+        let user = crate::winutil::string_from_sid_bytes(&user).expect("format token user");
+        let mut needed = 0;
+        GetTokenInformation(
+            token,
+            TokenRestrictedSids,
+            std::ptr::null_mut(),
+            0,
+            &mut needed,
+        );
+        assert!(
+            needed > 0 && needed <= 1_048_576,
+            "invalid token group size: {needed}"
+        );
+        let mut buffer = vec![0u8; needed as usize];
+        assert_ne!(
+            GetTokenInformation(
+                token,
+                TokenRestrictedSids,
+                buffer.as_mut_ptr().cast(),
+                needed,
+                &mut needed
+            ),
+            0,
+            "query token restricting SIDs"
+        );
+        let count = std::ptr::read_unaligned(buffer.as_ptr().cast::<u32>()) as usize;
+        let offset = std::mem::offset_of!(TOKEN_GROUPS, Groups);
+        let entry_size = std::mem::size_of::<SID_AND_ATTRIBUTES>();
+        let entry_bytes = (needed as usize).saturating_sub(offset);
+        assert!(
+            count <= entry_bytes / entry_size,
+            "invalid token group count"
+        );
+        let sids = (0..count)
+            .map(|index| {
+                let entry = std::ptr::read_unaligned(
+                    buffer
+                        .as_ptr()
+                        .add(offset + index * entry_size)
+                        .cast::<SID_AND_ATTRIBUTES>(),
+                );
+                let bytes = std::slice::from_raw_parts(
+                    entry.Sid.cast::<u8>(),
+                    GetLengthSid(entry.Sid) as usize,
+                );
+                crate::winutil::string_from_sid_bytes(bytes).expect("format restricting SID")
+            })
+            .collect::<Vec<_>>();
+        format!(
+            "user={user}; restricted={}; restricting_sids={sids:?}",
+            IsTokenRestricted(token)
+        )
+    }
+}
+
 #[test]
 fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
     let _guard = legacy_process_test_guard();
@@ -740,6 +806,25 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
     runtime.block_on(async move {
         // Keep writable roots out of USERPROFILE exclusions such as AppData.
         let test_root = TempDir::new_in(sandbox_cwd()).expect("create legacy delete test root");
+        // The legacy token retains Everyone/logon SIDs. A CI checkout can grant those
+        // inherited mutation rights, so give this disposable fixture an owner-only DACL.
+        // Production sandbox code still has to grant every writable root and protect .git.
+        let fixture_acl = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r#"$ErrorActionPreference = 'Stop'; $path = $env:DELETE_TEST_ROOT; Write-Output ('original=' + (Get-Acl -LiteralPath $path).Sddl); $user = [System.Security.Principal.WindowsIdentity]::GetCurrent().User; $acl = [System.Security.AccessControl.DirectorySecurity]::new(); $acl.SetOwner($user); $acl.SetAccessRuleProtection($true, $false); $rule = [System.Security.AccessControl.FileSystemAccessRule]::new($user, 'FullControl', 'ContainerInherit,ObjectInherit', 'None', 'Allow'); $acl.AddAccessRule($rule); Set-Acl -LiteralPath $path -AclObject $acl; Write-Output ('fixture=' + (Get-Acl -LiteralPath $path).Sddl)"#,
+            ])
+            .env("DELETE_TEST_ROOT", test_root.path())
+            .output()
+            .expect("isolate legacy delete fixture ACL");
+        assert!(
+            fixture_acl.status.success(),
+            "fixture ACL setup failed: stdout={}; stderr={}",
+            String::from_utf8_lossy(&fixture_acl.stdout),
+            String::from_utf8_lossy(&fixture_acl.stderr)
+        );
         let codex_home = sandbox_home("legacy-delete-writable-roots");
         let workspace = test_root.path().join("workspace");
         let temp_root = test_root.path().join("temp");
@@ -801,6 +886,24 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
         ]);
 
         let permission_profile = PermissionProfile::workspace_write();
+        let permissions = crate::resolved_permissions::ResolvedWindowsSandboxPermissions::try_from_permission_profile_for_workspace_roots(
+            &permission_profile, &workspace_roots_for(&workspace)
+        ).expect("resolve legacy delete test permissions");
+        let capability_roots = crate::spawn_prep::legacy_session_capability_roots(
+            &permissions, &workspace, &env_map, codex_home.path()
+        );
+        let security = crate::spawn_prep::prepare_legacy_session_security(
+            /*uses_write_capabilities*/ true, codex_home.path(), &workspace, capability_roots.clone()
+        ).expect("prepare diagnostic legacy token");
+        let base_token = unsafe { OwnedHandle::from_raw_handle(
+            crate::token::get_current_token_for_restriction().expect("open base token") as _
+        ) };
+        let derived_token = unsafe { OwnedHandle::from_raw_handle(security.h_token as _) };
+        let token_diagnostics = format!(
+            "base: {}\nderived: {}\ncapability_roots={capability_roots:?}",
+            token_restriction_diagnostic(base_token.as_raw_handle() as _),
+            token_restriction_diagnostic(derived_token.as_raw_handle() as _),
+        );
         let spawned = spawn_windows_sandbox_session_legacy(
             &permission_profile,
             workspace_roots_for(workspace.as_path()).as_slice(),
@@ -826,6 +929,19 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
                 .await;
         let stdout = String::from_utf8_lossy(&stdout);
 
+        let effective_acl = std::process::Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                r#"$ErrorActionPreference = 'Stop'; foreach ($path in @($env:DELETE_TEST_ROOT, $env:DELETE_TEST_WORKSPACE, $env:DELETE_TEST_OUTSIDE, $env:DELETE_TEST_GIT)) { if (Test-Path -LiteralPath $path) { Write-Output ($path + '=' + (Get-Acl -LiteralPath $path).Sddl) } else { Write-Output ($path + '=missing') } }"#,
+            ])
+            .env("DELETE_TEST_ROOT", test_root.path())
+            .env("DELETE_TEST_WORKSPACE", &workspace)
+            .env("DELETE_TEST_OUTSIDE", &outside_root)
+            .env("DELETE_TEST_GIT", &protected_git_dir)
+            .output()
+            .expect("read effective legacy delete fixture ACLs");
         assert_eq!(
             (
                 exit_code,
@@ -836,7 +952,10 @@ fn legacy_workspace_write_delete_is_limited_to_writable_roots() {
                 protected_git_dir.is_dir(),
             ),
             (0, false, false, false, Some("outside".to_string()), true),
-            "stdout={stdout:?}\n{}",
+            "stdout={stdout:?}\n{token_diagnostics}\nfixture ACLs: {}\neffective ACLs: {}\nACL diagnostics: {}\n{}",
+            String::from_utf8_lossy(&fixture_acl.stdout),
+            String::from_utf8_lossy(&effective_acl.stdout),
+            String::from_utf8_lossy(&effective_acl.stderr),
             sandbox_log(codex_home.path())
         );
     });

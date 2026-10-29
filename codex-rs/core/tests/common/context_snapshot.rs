@@ -146,7 +146,7 @@ fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest 
                 .into_iter()
                 .flatten()
                 .enumerate()
-                .filter(|(_, kind)| **kind == "model.base_instructions")
+                .filter(|(_, kind)| kind.as_str() == Some("model.base_instructions"))
                 .map(move |(part_index, _)| (item_index, part_index))
         })
         .collect();
@@ -163,7 +163,8 @@ fn capture_request(number: usize, entry: &SnapshotEntry<'_>) -> CapturedRequest 
         && instructions["internal_chat_message_metadata_passthrough"]["content_item_kinds"][0]
             .is_null()
         && let Some(text) = instructions["content"][0]["text"].as_str()
-        && is_bundled_model_instructions(text)
+        && (is_bundled_model_instructions(text)
+            || (instructions_index == 0 && !text.trim_start().starts_with('<')))
     {
         model_instruction_parts.push((instructions_index, 0));
     }

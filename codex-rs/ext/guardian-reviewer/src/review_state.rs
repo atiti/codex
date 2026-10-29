@@ -73,7 +73,7 @@ impl GuardianReviewState {
         kind: GuardianReviewSessionKind,
         snapshot: Option<GuardianReviewForkSnapshot>,
         reviewer_selection: ReviewerSelection,
-        parent_compaction: Option<&ResponseItem>,
+        parent_compaction: Option<&codex_history::ResponseItemEnvelope>,
     ) -> (Self, Option<InitialHistory>) {
         let mut conversation = snapshot
             .filter(|_| reviewer_selection == ReviewerSelection::ReuseIfAvailable)
@@ -108,7 +108,7 @@ impl GuardianReviewState {
         let initial_history = history.map(|history| history.initial_history).or_else(|| {
             parent_compaction
                 .cloned()
-                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item.into())]))
+                .map(|item| InitialHistory::Forked(vec![RolloutItem::ResponseItem(item)]))
         });
         (state, initial_history)
     }

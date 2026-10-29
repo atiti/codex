@@ -135,6 +135,15 @@ pub(crate) async fn prepare(
         model,
         reasoning_effort,
     } = request;
+    let message_text = match &message {
+        AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text.as_str(),
+        AgentMessage::Routed { routing_prompt, .. } => routing_prompt.as_deref().unwrap_or(""),
+    };
+    if message_text.trim().is_empty() {
+        return Err(ThreadSpawnError::Preparation(
+            "Empty message can't be sent to an agent".to_string(),
+        ));
+    }
     let role_name = agent_type
         .as_deref()
         .map(str::trim)
@@ -152,6 +161,17 @@ pub(crate) async fn prepare(
     )
     .await
     .map_err(ThreadSpawnError::Preparation)?;
+    let requested_backend = prepared.requested_backend.clone();
+    let inherited_model_provider = turn.model_provider_id();
+    let model_explicit = model.is_some();
+    let routing_prompt = message_text.to_owned();
+    let message = AgentMessage::Routed {
+        message: Box::new(message),
+        routing_prompt: Some(routing_prompt),
+        inherited_model_provider: Some(inherited_model_provider),
+        requested_backend,
+        model_explicit,
+    };
     let config = prepared.config;
     let task_name = turn
         .session_source
@@ -187,6 +207,11 @@ pub(crate) async fn prepare(
             &config.multi_agent_v2,
             child_multi_agent_messages,
             !config.update_plan_enabled && config.model_catalog.is_none(),
+            codex_model_provider::create_model_provider(
+                config.model_provider.clone(),
+                Some(session.services.auth_manager.clone()),
+            )
+            .capabilities(),
         ))
     } else {
         None

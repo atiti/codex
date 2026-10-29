@@ -28,10 +28,10 @@ pub(crate) struct DynamicToolCallCell {
 #[derive(Debug)]
 struct DynamicToolCallData {
     name: String,
-    arguments: Value,
+    arguments: crate::retained_text::RetainedText,
     status: DynamicToolCallStatus,
     interrupted: bool,
-    output: Option<Vec<String>>,
+    output: Option<Vec<crate::retained_text::RetainedText>>,
     duration_ms: Option<i64>,
 }
 
@@ -82,7 +82,9 @@ impl DynamicToolCallCell {
         data.interrupted = true;
         data.output
             .get_or_insert_with(Vec::new)
-            .push("Interrupted before this tool returned a result.".to_owned());
+            .push(crate::retained_text::RetainedText::new(
+                "Interrupted before this tool returned a result.".to_owned(),
+            ));
     }
 }
 
@@ -106,7 +108,7 @@ impl DynamicToolCallData {
             Self {
                 name: namespace
                     .map_or_else(|| tool.clone(), |namespace| format!("{namespace}.{tool}")),
-                arguments,
+                arguments: crate::retained_text::RetainedText::new(arguments.to_string()),
                 status: if success == Some(false) {
                     DynamicToolCallStatus::Failed
                 } else {
@@ -117,12 +119,18 @@ impl DynamicToolCallData {
                     items
                         .into_iter()
                         .map(|item| match item {
-                            DynamicToolCallOutputContentItem::InputText { text } => text,
+                            DynamicToolCallOutputContentItem::InputText { text } => {
+                                crate::retained_text::RetainedText::new(text)
+                            }
                             DynamicToolCallOutputContentItem::InputImage { .. } => {
-                                "<image content>".to_owned()
+                                crate::retained_text::RetainedText::new(
+                                    "<image content>".to_owned(),
+                                )
                             }
                             DynamicToolCallOutputContentItem::InputAudio { .. } => {
-                                "<audio content>".to_owned()
+                                crate::retained_text::RetainedText::new(
+                                    "<audio content>".to_owned(),
+                                )
                             }
                         })
                         .collect()
@@ -164,7 +172,7 @@ impl DynamicToolCallData {
             Some(output) if output.is_empty() => vec![Line::from("(no output)".dim())],
             Some(output) => output
                 .iter()
-                .flat_map(|text| raw_lines_from_source(text))
+                .flat_map(|text| raw_lines_from_source(&text.read()))
                 .collect(),
             None if self.is_active() => Vec::new(),
             None => vec![Line::from("(output unavailable)".dim())],
@@ -193,7 +201,11 @@ impl HistoryCell for DynamicToolCallCell {
         let mut lines = vec![clipped_line(data.header(), width)];
         let (skip, output) = match &data.output {
             Some(output) if !output.is_empty() => {
-                let output = output.iter().flat_map(|text| text.split_terminator('\n'));
+                let retained = output
+                    .iter()
+                    .map(super::super::retained_text::RetainedText::preview)
+                    .collect::<Vec<_>>();
+                let output = retained.iter().flat_map(|text| text.split_terminator('\n'));
                 let skip = output.clone().count().saturating_sub(DETAIL_PREVIEW_LINES);
                 let tail = output
                     .skip(skip)
@@ -233,8 +245,11 @@ impl HistoryCell for DynamicToolCallCell {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mut lines = vec![data.header().into()];
-        let args = serde_json::to_string_pretty(&data.arguments)
-            .unwrap_or_else(|_| data.arguments.to_string());
+        let arguments = data.arguments.read();
+        let args = serde_json::from_str::<Value>(&arguments)
+            .ok()
+            .and_then(|value| serde_json::to_string_pretty(&value).ok())
+            .unwrap_or_else(|| arguments.into_owned());
         let details = raw_lines_from_source(&format!("Arguments: {args}"))
             .into_iter()
             .chain(data.output_lines())
@@ -256,7 +271,7 @@ impl HistoryCell for DynamicToolCallCell {
         let mut lines = vec![data.header()];
         lines.extend(raw_lines_from_source(&format!(
             "Arguments: {}",
-            data.arguments
+            data.arguments.read()
         )));
         lines.extend(data.output_lines());
         super::plain_lines(lines)

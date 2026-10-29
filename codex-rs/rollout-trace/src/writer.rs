@@ -27,6 +27,7 @@ use crate::bundle::TraceBundleManifest;
 use crate::model::AgentThreadId;
 use crate::payload::RawPayloadKind;
 use crate::payload::RawPayloadRef;
+use crate::quota::TraceQuota;
 use crate::raw_event::RAW_TRACE_EVENT_SCHEMA_VERSION;
 use crate::raw_event::RawTraceEvent;
 use crate::raw_event::RawTraceEventContext;
@@ -39,6 +40,7 @@ use crate::raw_event::RawTraceEventPayload;
 #[derive(Debug)]
 pub struct TraceWriter {
     inner: Mutex<TraceWriterInner>,
+    quota: Option<TraceQuota>,
 }
 
 #[derive(Debug)]
@@ -62,12 +64,19 @@ impl TraceWriter {
     ) -> Result<Self> {
         let bundle_dir = bundle_dir.as_ref().to_path_buf();
         let payloads_dir = bundle_dir.join(PAYLOADS_DIR_NAME);
-        std::fs::create_dir_all(&payloads_dir)
-            .with_context(|| format!("create trace payload dir {}", payloads_dir.display()))?;
 
         let started_at_unix_ms = unix_time_ms();
         let manifest =
             TraceBundleManifest::new(trace_id, rollout_id, root_thread_id, started_at_unix_ms);
+        let quota = TraceQuota::from_environment(&bundle_dir);
+        let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        let _reservation = quota
+            .as_ref()
+            .map(|quota| quota.reserve(manifest_bytes.len()))
+            .transpose()?;
+        std::fs::create_dir_all(&payloads_dir)
+            .with_context(|| format!("create trace payload dir {}", payloads_dir.display()))?;
+
         let event_log_path = bundle_dir.join(RAW_EVENT_LOG_FILE_NAME);
         let event_log = OpenOptions::new()
             .create_new(true)
@@ -77,6 +86,7 @@ impl TraceWriter {
         write_json_file(&bundle_dir.join(MANIFEST_FILE_NAME), &manifest)?;
 
         Ok(Self {
+            quota,
             inner: Mutex::new(TraceWriterInner {
                 manifest,
                 payloads_dir,
@@ -104,7 +114,16 @@ impl TraceWriter {
         // Payload files are created before the event that references them. A
         // replay interrupted after an event is appended should never point at a
         // payload file that the writer planned but had not written yet.
-        let result = write_json_file(&absolute_path, value);
+        let result = (|| {
+            let bytes = serde_json::to_vec_pretty(value)?;
+            let _reservation = self
+                .quota
+                .as_ref()
+                .map(|quota| quota.reserve(bytes.len()))
+                .transpose()?;
+            std::fs::write(&absolute_path, bytes)?;
+            Ok(())
+        })();
         inner.record_result(result)?;
         Ok(RawPayloadRef {
             raw_payload_id,
@@ -136,7 +155,13 @@ impl TraceWriter {
             payload,
         };
         let result = (|| {
-            serde_json::to_writer(&mut inner.event_log, &event)?;
+            let bytes = serde_json::to_vec(&event)?;
+            let _reservation = self
+                .quota
+                .as_ref()
+                .map(|quota| quota.reserve(bytes.len() + 1))
+                .transpose()?;
+            inner.event_log.write_all(&bytes)?;
             inner.event_log.write_all(b"\n")?;
             inner.event_log.flush()?;
             Ok(())

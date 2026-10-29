@@ -40,6 +40,20 @@ impl AgentMessage {
                 .unwrap_or_default();
                 InterAgentCommunication::new(author, recipient, Vec::new(), content, trigger_turn)
             }
+            Self::Routed {
+                message,
+                routing_prompt,
+                inherited_model_provider,
+                requested_backend,
+                model_explicit,
+            } => message
+                .into_communication(author, recipient, mode)
+                .with_routing_prompt(routing_prompt)
+                .with_routing_provider_context(
+                    inherited_model_provider,
+                    requested_backend,
+                    model_explicit,
+                ),
         }
     }
 }

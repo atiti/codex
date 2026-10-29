@@ -145,6 +145,7 @@ mod request_serialization;
 mod server_request_error;
 mod skills_watcher;
 mod startup_warnings;
+mod task_work;
 mod thread_sample;
 mod thread_state;
 mod thread_status;

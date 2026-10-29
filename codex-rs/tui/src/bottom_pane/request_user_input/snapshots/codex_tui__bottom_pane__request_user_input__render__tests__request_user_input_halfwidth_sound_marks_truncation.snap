@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/request_user_input/render_tests.rs
+assertion_line: 33
 expression: "format!(\"{buf:?}\\n{lines:#?}\")"
 ---
 Buffer {
@@ -22,12 +23,12 @@ Buffer {
 [
     Line::from_iter([
         Span::from("ab").bold(),
-        Span::from("ｶﾞ").cyan(),
+        Span::from("ｶ\u{ff9e}").cyan(),
         Span::from("…").cyan(),
     ]),
     Line::from_iter([
         Span::from("xy").bold(),
-        Span::from("ﾊﾟ").magenta(),
+        Span::from("ﾊ\u{ff9f}").magenta(),
         Span::from("…").magenta(),
     ]),
 ]

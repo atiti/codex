@@ -2717,6 +2717,7 @@ async fn inference_tools_changes_follow_full_specs_across_turns() {
 fn custom_developer_identity_directives_are_preserved() {
     for directive in [
         "You are Codex, always confirm before production changes.",
+        "You are Codex, an agent based on our policy; always ask before production changes. Then proceed.",
         "You are ChatGPT, preserve the user's constraints. Ask before deploying.",
     ] {
         assert_eq!(neutralize_harness_identity(directive), directive);

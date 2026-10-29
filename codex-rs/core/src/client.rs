@@ -662,7 +662,17 @@ fn neutralize_harness_identity(text: &str) -> String {
         .lines()
         .map(|line| {
             let line = if let Some(rest) = line.strip_prefix("You are Codex, an agent based on ") {
-                rest.split_once(". ").map_or(line, |(_, guidance)| guidance)
+                rest.split_once(". ").map_or(line, |(model, guidance)| {
+                    if model.starts_with("GPT-")
+                        && model
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.' | '_'))
+                    {
+                        guidance
+                    } else {
+                        line
+                    }
+                })
             } else if let Some(rest) = line.strip_prefix("You are ChatGPT, a large language model.")
             {
                 rest.strip_prefix(' ').unwrap_or(rest)

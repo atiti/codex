@@ -36,6 +36,10 @@ impl ExecServerProcess {
     }
 
     pub async fn start_with_version(version: &str) -> Result<Self> {
+        Self::start_with_version_and_env(version, &[]).await
+    }
+
+    pub async fn start_with_version_and_env(version: &str, env: &[(&str, &str)]) -> Result<Self> {
         let codex_home = TempDir::new()?;
         let package = codex_home.path().join("package");
         let bin = package.join("bin");
@@ -49,7 +53,9 @@ impl ExecServerProcess {
             package.join("codex-package.json"),
             serde_json::to_vec(&serde_json::json!({"version": version}))?,
         )?;
-        Self::start_command(Command::new(executable), codex_home).await
+        let mut command = Command::new(executable);
+        command.envs(env.iter().copied());
+        Self::start_command(command, codex_home).await
     }
 
     async fn start_command(mut command: Command, codex_home: TempDir) -> Result<Self> {

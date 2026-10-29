@@ -1,3 +1,6 @@
+mod upstream_165;
+pub(crate) use upstream_165::repair_upstream_165_migration_versions;
+
 use std::borrow::Cow;
 
 use crate::sqlite::SqliteWriteQueryExt;

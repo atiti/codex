@@ -592,12 +592,13 @@ where
                 max_goal_token_budget,
             ),
             GoalToolExecutor::update(
-                runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
                 self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
+                self.thread_manager.clone(),
+                runtime.clone(),
             ),
         ];
         tools

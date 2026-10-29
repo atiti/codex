@@ -166,7 +166,7 @@ impl ChatWidget {
     }
 
     pub(super) fn on_turn_diff(&mut self, unified_diff: String) {
-        debug!("TurnDiffEvent: {unified_diff}");
+        debug!(bytes = unified_diff.len(), "TurnDiffEvent received");
         self.refresh_status_line();
     }
 

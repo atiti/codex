@@ -127,7 +127,7 @@ async fn lost_mutation_reply_preserves_work_without_resubmitting() -> Result<()>
                     .unwrap()
                     .display_lines(/*width*/ 80)
             ),
-            render_bottom_popup(&app.chat_widget, /*width*/ 80)
+            normalize_reconnect_snapshot(&render_bottom_popup(&app.chat_widget, /*width*/ 80))
         )
     );
     let mut keymap = codex_config::types::TuiKeymap::default();
@@ -668,4 +668,14 @@ async fn rejected_initial_thread_start_reconnects_and_submits_prompt_once() -> R
         );
     }
     Ok(())
+}
+
+// Recovery snapshots cover draft preservation, not the wall-clock spinner phase.
+pub(super) fn normalize_reconnect_snapshot(rendered: &str) -> String {
+    regex_lite::Regex::new(
+        r"[•◦] (Reconnect(?:ing to server…| failed — check the endpoint, then relaunch)) \(\d+s\)",
+    )
+    .expect("valid reconnect status pattern")
+    .replace_all(rendered, "• $1 (0s)")
+    .into_owned()
 }

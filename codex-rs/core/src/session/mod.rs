@@ -813,9 +813,17 @@ impl Session {
         // 1. config.base_instructions override
         // 2. conversation history => session_meta.base_instructions
         // 3. rendered instructions_template for current model
-        let model_info = models_manager
+        let mut model_info = models_manager
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
+        if let Some(tool_compatibility) = config.model_provider.tool_compatibility {
+            model_info = step_activation::model_info_for_provider_compatibility(
+                &model_info,
+                &model_info,
+                Some(tool_compatibility),
+            );
+        }
+        step_activation::apply_provider_context_window(&mut model_info, &config.model_provider);
         let auth = auth_manager.auth_cached();
         // Forked subagents keep their parent's activation with the copied history.
         // Fresh children restore configured preferences before applying startup defaults.
@@ -3745,6 +3753,11 @@ impl Session {
         let policy: codex_utils_output_truncation::TruncationPolicy =
             model_info.truncation_policy.into();
         for envelope in &mut items {
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .model_provider_id
+                .get_or_insert_with(|| turn_context.model_provider_id());
             if matches!(
                 envelope.item,
                 ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
@@ -4355,6 +4368,25 @@ impl Session {
             CompactedHistoryInstallation::Complete(metadata) => &metadata.compaction_model_hash,
             CompactedHistoryInstallation::Prefix { model_info, .. } => &model_info.comp_hash,
         };
+        let provider_id = match &installation {
+            CompactedHistoryInstallation::Complete(metadata) => metadata.model_provider_id.clone(),
+            CompactedHistoryInstallation::Prefix { .. } => self
+                .state
+                .lock()
+                .await
+                .session_configuration
+                .original_config_do_not_use
+                .model_provider_id
+                .clone(),
+        };
+        for envelope in &mut items {
+            Self::assign_missing_response_item_id(&mut envelope.item);
+            envelope
+                .metadata
+                .get_or_insert_default()
+                .model_provider_id
+                .get_or_insert_with(|| provider_id.clone());
+        }
         let mcp_revision = self
             .services
             .executed_tool_calls
@@ -4437,6 +4469,7 @@ impl Session {
                             compaction_response_id: Some(compaction_response_id),
                             compaction_model_hash: model_info.comp_hash.clone(),
                             reviewer_compaction_hash,
+                            model_provider_id: provider_id.clone(),
                         },
                         started_item.map(|item| (turn_context, item)),
                     )
@@ -5017,6 +5050,7 @@ impl Session {
                 compaction_response_id: None,
                 compaction_model_hash: None,
                 reviewer_compaction_hash: None,
+                model_provider_id: turn_context.model_provider_id(),
             },
         )
         .await;
@@ -5238,7 +5272,7 @@ impl Session {
                     TokenUsageContext::Sampling => {
                         state.update_token_info_from_usage(
                             token_usage,
-                            turn_context.model_context_window(),
+                            settings.model_info.usable_context_window(),
                         );
                         if matches!(
                             turn_context.config.model_auto_compact_token_limit_scope,
@@ -5252,7 +5286,7 @@ impl Session {
                         let mut info = state.token_info().unwrap_or(TokenUsageInfo {
                             total_token_usage: TokenUsage::default(),
                             last_token_usage: TokenUsage::default(),
-                            model_context_window: turn_context.model_context_window(),
+                            model_context_window: settings.model_info.usable_context_window(),
                         });
                         info.total_token_usage.add_assign(token_usage);
                         state.set_token_info(Some(info.clone()));
@@ -5351,6 +5385,16 @@ impl Session {
             let mut state = self.state.lock().await;
             state.set_rate_limits(new_rate_limits);
         }
+    }
+
+    pub(crate) async fn record_ordinary_usage_allowed(&self, allowed: Option<bool>) {
+        let mut state = self.state.lock().await;
+        state.set_ordinary_usage_allowed(allowed);
+    }
+
+    pub(crate) async fn capacity_snapshot(&self) -> (Option<RateLimitSnapshot>, Option<bool>) {
+        let state = self.state.lock().await;
+        state.capacity_snapshot()
     }
 
     pub(crate) async fn mcp_dependency_prompted(&self) -> HashSet<String> {

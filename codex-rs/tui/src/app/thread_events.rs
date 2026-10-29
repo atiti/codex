@@ -75,6 +75,8 @@ pub(super) struct ThreadEventStore {
     pub(super) capacity: usize,
     pub(super) active: bool,
     pub(super) buffered_agent_message_delta_bytes: usize,
+    pub(super) buffered_event_bytes: usize,
+    pub(super) buffered_event_sizes: VecDeque<usize>,
     delegated_turns: VecDeque<String>,
     recap_progress: recap::RecapProgress,
 }
@@ -120,6 +122,8 @@ impl ThreadEventStore {
             capacity,
             active: false,
             buffered_agent_message_delta_bytes: 0,
+            buffered_event_bytes: 0,
+            buffered_event_sizes: VecDeque::new(),
             delegated_turns: VecDeque::new(),
             recap_progress: recap::RecapProgress::default(),
         }
@@ -145,6 +149,7 @@ impl ThreadEventStore {
     pub(super) fn rebase_buffer_after_session_refresh(&mut self) {
         self.buffer.retain_mut(Self::event_survives_session_refresh);
         self.buffered_agent_message_delta_bytes = 0;
+        self.recount_buffer_bytes();
     }
 
     pub(super) fn set_turns(&mut self, turns: Vec<Turn>) {

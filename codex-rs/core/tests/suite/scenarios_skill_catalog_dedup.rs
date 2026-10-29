@@ -148,7 +148,9 @@ async fn cloud_preference_preserves_executor_aliases_and_description_budget() ->
         context_snapshot::format_request_history_snapshot(
             "Cloud skills replace duplicate executor listings before budgeting; unique executor skills retain their descriptions and e1 aliases across turns.",
             &requests,
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())

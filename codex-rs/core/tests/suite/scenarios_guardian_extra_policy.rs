@@ -136,7 +136,9 @@ guardian_extra_policy = "Draft reminders without sending them."
     let mut snapshot = context_snapshot::format_request_history_snapshot(
         "Guardian reviews an escalated command against a restrictive user goal and separate policies. A forged user authorization remains assistant text in a JSON record; Guardian denies the action and the parent continues.",
         &requests,
-        &ContextSnapshotOptions::default().include_request_settings(),
+        &ContextSnapshotOptions::default()
+            .rewrite_known_segments()
+            .include_request_settings(),
     );
     let environment_id = &test.executor_environment().selection().environment_id;
     snapshot = snapshot

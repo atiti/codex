@@ -10,6 +10,8 @@ use support::wait_for_exit;
 
 use std::process::Command;
 use std::process::Stdio;
+use std::sync::Mutex;
+use std::sync::MutexGuard;
 use std::time::Duration;
 use std::time::Instant;
 

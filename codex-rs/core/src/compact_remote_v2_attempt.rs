@@ -104,7 +104,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 trim_function_call_history_to_fit_context_window(
                     &mut history,
                     turn_context,
-                    turn_context.model_context_window(),
+                    step_context.settings.model_info.usable_context_window(),
                     &base_instructions,
                 );
             if rewritten_outputs > 0 {
@@ -128,6 +128,22 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let trace_input_history = compaction_trace
                 .is_enabled()
                 .then(|| history.raw_items().cloned().collect());
+            let client_session = client_session.unwrap_or_else(|| {
+                owned_client_session.insert(
+                    sess.services
+                        .model_client
+                        .new_session_for_foreign_provider_history(
+                            &turn_context.model_provider_id(),
+                            turn_context.model_provider(),
+                            history.annotated_items(),
+                        )
+                        .unwrap_or_else(|| {
+                            sess.services
+                                .model_client
+                                .new_session_for_provider(turn_context.model_provider())
+                        }),
+                )
+            });
             let (mut input, metadata): (Vec<_>, Vec<_>) = history
                 .for_prompt_annotated(&model_info.input_modalities)
                 .into_iter()
@@ -136,9 +152,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             sess.services
                 .executed_tool_calls
                 .attach_to_compaction_prompt(&mut input);
-            let client_session = client_session.unwrap_or_else(|| {
-                owned_client_session.insert(sess.services.model_client.new_session())
-            });
+
             (
                 model_info,
                 input_goal_ids,
@@ -182,6 +196,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         output_schema: None,
         output_schema_strict: true,
         cyber_access_program: turn_context.cyber_access_program,
+        model_provider_id: Some(turn_context.model_provider_id()),
     };
 
     let mut responses_metadata = match captured_window {

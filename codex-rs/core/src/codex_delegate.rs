@@ -244,6 +244,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     subagent_source: SubAgentSource,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
+    isolation: codex_extension_api::SessionIsolation,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -260,7 +261,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_environments,
         child_cancel.clone(),
         subagent_source,
-        codex_extension_api::SessionIsolation::Inherit,
+        isolation,
         initial_history,
         GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

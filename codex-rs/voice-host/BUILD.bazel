@@ -5,5 +5,11 @@ codex_rust_crate(
     binaries_with_build_commit = ["codex-voice-host"],
     crate_name = "codex_voice_host",
     crate_srcs = [],
+    test_windows_dll_dirs = select({
+        "//third_party/voice:windows_x86_64_msvc": ["//third_party/voice:native_link"],
+        "//third_party/voice:windows_aarch64_msvc": ["//third_party/voice:native_link"],
+        "//conditions:default": [],
+    }),
     unit_test_args = ["--test-threads=1"],
+    wrap_integration_tests = True,
 )

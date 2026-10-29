@@ -9,6 +9,23 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde::Serialize;
 
+/// Default approximate token threshold for spilling hook `additionalContext` output.
+pub const DEFAULT_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT: usize = 2_500;
+/// Maximum approximate token threshold for model-visible hook `additionalContext` output.
+pub const MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT: usize = 10_000;
+
+/// Returns the effective model-context cap for one hook's additional context.
+///
+/// A configured zero or a value above the maximum uses the maximum so hook output
+/// cannot inject an unbounded context item.
+pub fn effective_hook_additional_context_token_limit(configured_limit: usize) -> usize {
+    if configured_limit == 0 {
+        MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT
+    } else {
+        configured_limit.min(MAX_HOOK_ADDITIONAL_CONTEXT_TOKEN_LIMIT)
+    }
+}
+
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct HooksFile {

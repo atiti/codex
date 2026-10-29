@@ -25,6 +25,7 @@ use codex_extension_api::ThreadInstructionsProvider;
 use codex_extension_api::UserInstructionsProvider;
 use codex_http_client::HttpClientFactory;
 use codex_login::AuthManager;
+use codex_model_provider_info::OLLAMA_OSS_PROVIDER_ID;
 use codex_models_manager::ModelsManagerConfig;
 use codex_models_manager::bundled_models_response;
 use codex_models_manager::manager::ModelsManager;
@@ -720,6 +721,58 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
     assert!(Arc::ptr_eq(&before.settings, &turn.initial_settings));
     assert_eq!(turn.model_info().slug, MODEL_A);
 
+    // Usage follows the routed request, even while legacy turn accessors expose A.
+    let usage = codex_protocol::protocol::TokenUsage {
+        input_tokens: 160_000,
+        total_tokens: 160_000,
+        ..Default::default()
+    };
+    session
+        .record_token_usage_info(
+            &turn,
+            &after.settings,
+            Some(&usage),
+            crate::session::TokenUsageContext::Sampling,
+        )
+        .await
+        .expect("record routed usage");
+    assert_eq!(
+        session
+            .state
+            .lock()
+            .await
+            .token_info()
+            .expect("usage info")
+            .model_context_window,
+        Some(152_000)
+    );
+    let current_status =
+        super::super::context_window::context_window_token_status(&session, &turn).await;
+    assert_eq!(
+        (
+            current_status.auto_compact_scope_limit,
+            current_status.full_context_window_limit,
+            current_status.token_limit_reached
+        ),
+        (Some(150_000), Some(152_000), true)
+    );
+    // A live update must not change the budget of an already captured request.
+    let captured_status = super::super::context_window::context_window_token_status_for_model(
+        &session,
+        turn.config.as_ref(),
+        &turn,
+        before.settings.model_info.as_ref(),
+    )
+    .await;
+    assert_eq!(
+        (
+            captured_status.auto_compact_scope_limit,
+            captured_status.full_context_window_limit,
+            captured_status.token_limit_reached
+        ),
+        (Some(244_800), Some(258_400), false)
+    );
+
     let done = {
         let active = session.active_turn.lock().await;
         Arc::clone(&active.as_ref().unwrap().task.as_ref().unwrap().done)
@@ -849,6 +902,85 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
     ));
     assert_eq!(desired_step_settings(&session).await, desired);
     session.abort_all_tasks(TurnAbortReason::Replaced).await;
+}
+
+#[tokio::test]
+async fn chatgpt_profile_routing_rejects_relative_home() {
+    let ActivationFixture { session, turn, .. } = activation_fixture(activation_models()).await;
+
+    assert_eq!(
+        session
+            .apply_routed_turn_settings(
+                &turn.sub_id,
+                TurnSettingsUpdate::default(),
+                /*model_provider*/ None,
+                Some("relative-profile-home".to_string()),
+            )
+            .await,
+        TurnSettingsUpdateOutcome::Rejected {
+            reason: "ChatGPT profile home must be an absolute path".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_profile_routing_rejects_provider_without_openai_auth() {
+    let ActivationFixture { session, turn, .. } = activation_fixture(activation_models()).await;
+    let profile_home = tempfile::tempdir().expect("create profile home");
+
+    assert_eq!(
+        session
+            .apply_routed_turn_settings(
+                &turn.sub_id,
+                TurnSettingsUpdate::default(),
+                Some(OLLAMA_OSS_PROVIDER_ID.to_string()),
+                Some(profile_home.path().display().to_string()),
+            )
+            .await,
+        TurnSettingsUpdateOutcome::Rejected {
+            reason: "ChatGPT profile routing requires the OpenAI provider".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn chatgpt_profile_routing_rejects_signed_out_profile() {
+    let ActivationFixture { session, turn, .. } = activation_fixture(activation_models()).await;
+    let profile_home = tempfile::tempdir().expect("create profile home");
+
+    assert_eq!(
+        session
+            .apply_routed_turn_settings(
+                &turn.sub_id,
+                TurnSettingsUpdate::default(),
+                /*model_provider*/ None,
+                Some(profile_home.path().display().to_string()),
+            )
+            .await,
+        TurnSettingsUpdateOutcome::Rejected {
+            reason: "ChatGPT profile is not signed in or is disallowed by policy".to_string(),
+        }
+    );
+}
+
+#[tokio::test]
+async fn unavailable_turn_does_not_load_or_retarget_chatgpt_profile() {
+    let ActivationFixture { session, turn, .. } = activation_fixture(activation_models()).await;
+    let missing_profile = turn.config.codex_home.join("missing-profile");
+    let original_provider = turn.model_provider();
+
+    assert_eq!(
+        session
+            .apply_routed_turn_settings(
+                "not-the-active-turn",
+                TurnSettingsUpdate::default(),
+                /*model_provider*/ None,
+                Some(missing_profile.display().to_string()),
+            )
+            .await,
+        TurnSettingsUpdateOutcome::TargetUnavailable
+    );
+    assert!(Arc::ptr_eq(&original_provider, &turn.model_provider()));
 }
 
 #[derive(Clone, Copy)]
@@ -1178,6 +1310,151 @@ fn parent_review_messages(model: &mut ModelInfo) -> &mut AutoReviewMessages {
         })
 }
 
+#[test]
+fn provider_context_window_is_independent_of_shared_model_slug() {
+    use codex_model_provider_info::ModelProviderCapabilities;
+    use codex_model_provider_info::ModelProviderInfo;
+
+    let (mut account, _) = safety_models();
+    account.context_window = Some(272_000);
+    account.max_context_window = Some(872_000);
+    account.auto_compact_token_limit = Some(250_000);
+    let mut routed = account.clone();
+    let provider = ModelProviderInfo {
+        capabilities: Some(ModelProviderCapabilities {
+            context_windows: [(account.slug.clone(), 872_000)].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    apply_provider_context_window(&mut routed, &provider);
+    assert_eq!(routed.slug, account.slug);
+    assert_eq!(routed.context_window, Some(872_000));
+    assert_eq!(routed.max_context_window, Some(872_000));
+    assert_eq!(routed.auto_compact_token_limit, None);
+    apply_provider_context_window(&mut account, &ModelProviderInfo::default());
+    assert_eq!(account.context_window, Some(272_000));
+    assert_eq!(account.auto_compact_token_limit, Some(250_000));
+}
+
+#[test_case(0; "zero")]
+#[test_case(-1; "negative")]
+fn invalid_provider_context_window_preserves_model_metadata(window: i64) {
+    let (mut model, _) = safety_models();
+    let original = model.clone();
+    let provider = codex_model_provider_info::ModelProviderInfo {
+        capabilities: Some(codex_model_provider_info::ModelProviderCapabilities {
+            context_windows: [(model.slug.clone(), window)].into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    apply_provider_context_window(&mut model, &provider);
+    assert_eq!(model, original);
+}
+
+#[test_case(None; "native_tools")]
+#[test_case(Some(ToolCompatibility::FunctionsAndApplyPatch); "function_tools")]
+fn provider_tool_compatibility_preserves_admitted_safety_authority(
+    compatibility: Option<ToolCompatibility>,
+) {
+    let (mut admitted, mut destination) = safety_models();
+    admitted.node_repl_disabled = true;
+    admitted.auto_review_model_override = Some("reviewer-model".to_string());
+    parent_review_messages(&mut admitted).policy = Some("admitted policy".to_string());
+    destination.slug = "external-model".to_string();
+    destination.display_name = "External model".to_string();
+    destination.used_fallback_model_metadata = true;
+    admitted.context_window = Some(272_000);
+    admitted.max_context_window = Some(272_000);
+    admitted.auto_compact_token_limit = Some(250_000);
+    destination.context_window = Some(128_000);
+    destination.max_context_window = Some(128_000);
+    destination.auto_compact_token_limit = Some(100_000);
+    destination.effective_context_window_percent = 80;
+    destination.comp_hash = Some("destination-compaction".to_string());
+    destination.input_modalities.truncate(1);
+    let messages = destination.model_messages.get_or_insert_default();
+    messages.instructions_template = Some("Destination model guidance".to_string());
+    messages.token_budget = Some(ModelTokenBudgetConfig {
+        enabled: true,
+        use_history_notes_extension: true,
+        reminder_threshold_tokens: 2_000,
+        reminder_message_template: "{n_remaining} tokens remain.".to_string(),
+        guidance_message: "Destination budget guidance".to_string(),
+        auto_compact_fallback_prompt: "Save destination state".to_string(),
+        auto_compact_fallback_buffer_tokens: 4_000,
+    });
+
+    let compatible = model_info_for_provider_compatibility(&admitted, &destination, compatibility);
+
+    assert_eq!(compatible.slug, destination.slug);
+    assert_eq!(compatible.display_name, destination.display_name);
+    assert_eq!(compatible.guardian, admitted.guardian);
+    assert_eq!(
+        compatible
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.auto_review.as_ref()),
+        admitted
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.auto_review.as_ref())
+    );
+    assert_eq!(compatible.context_window, destination.context_window);
+    assert_eq!(
+        compatible.max_context_window,
+        destination.max_context_window
+    );
+    assert_eq!(
+        compatible.auto_compact_token_limit,
+        destination.auto_compact_token_limit
+    );
+    assert_eq!(
+        compatible.effective_context_window_percent,
+        destination.effective_context_window_percent
+    );
+    assert_eq!(compatible.comp_hash, destination.comp_hash);
+    assert_eq!(compatible.input_modalities, destination.input_modalities);
+    assert_eq!(
+        compatible
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.instructions_template.as_ref()),
+        destination
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.instructions_template.as_ref())
+    );
+    assert_eq!(
+        compatible
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.token_budget.as_ref()),
+        destination
+            .model_messages
+            .as_ref()
+            .and_then(|m| m.token_budget.as_ref())
+    );
+    assert_eq!(compatible.node_repl_disabled, admitted.node_repl_disabled);
+    assert_eq!(
+        compatible.auto_review_model_override,
+        admitted.auto_review_model_override
+    );
+    if compatibility.is_some() {
+        assert_eq!(compatible.tool_mode, Some(ToolMode::Direct));
+        assert_eq!(
+            compatible.apply_patch_tool_type,
+            Some(ApplyPatchToolType::Freeform)
+        );
+        assert!(!compatible.supports_search_tool);
+        assert!(!compatible.use_responses_lite);
+    } else {
+        assert_eq!(compatible.tool_mode, destination.tool_mode);
+    }
+    assert!(compatible.used_fallback_model_metadata);
+}
+
 #[derive(Clone, Copy)]
 enum ModelSafetyChange {
     Cyber,
@@ -1216,7 +1493,7 @@ async fn model_safety_changes_must_match_the_admitted_authority(
 }
 
 #[tokio::test]
-async fn model_safety_rejects_fallback_metadata() {
+async fn model_safety_rejects_active_fallback_metadata() {
     let (_, turn) = make_session_and_context().await;
     let (admitted, destination) = safety_models();
     let mut fallback = admitted.clone();
@@ -1234,18 +1511,17 @@ async fn model_safety_rejects_fallback_metadata() {
             &destination,
             "the active model has only fallback metadata",
         ),
-        (
-            &admitted,
-            &admitted,
-            &fallback,
-            "the destination model has only fallback metadata",
-        ),
     ] {
         assert_eq!(
             check_legacy_model_safety(old, current, next, &turn.config, &turn.config),
             Err(reason.to_string())
         );
     }
+
+    assert_eq!(
+        check_legacy_model_safety(&admitted, &admitted, &fallback, &turn.config, &turn.config,),
+        Ok(())
+    );
 }
 
 #[test_case(None, None, false; "both catalog policies")]

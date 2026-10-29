@@ -348,6 +348,56 @@ mod tests {
     }
 
     #[test]
+    fn parse_all_rate_limits_reads_a_routed_family_with_both_windows() {
+        // This is the exact header family the AgentRoute Claude bridge sends, so the mapping
+        // from a routed provider's quota to a Codex limit bucket stays covered here.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-claude-limit-name", HeaderValue::from_static("Claude"));
+        headers.insert(
+            "x-claude-primary-used-percent",
+            HeaderValue::from_static("78"),
+        );
+        headers.insert(
+            "x-claude-primary-window-minutes",
+            HeaderValue::from_static("300"),
+        );
+        headers.insert(
+            "x-claude-primary-reset-at",
+            HeaderValue::from_static("1790460000"),
+        );
+        headers.insert(
+            "x-claude-secondary-used-percent",
+            HeaderValue::from_static("8"),
+        );
+        headers.insert(
+            "x-claude-secondary-window-minutes",
+            HeaderValue::from_static("10080"),
+        );
+        headers.insert(
+            "x-claude-secondary-reset-at",
+            HeaderValue::from_static("1790942400"),
+        );
+
+        let updates = parse_all_rate_limits(&headers);
+        // The default Codex family is always reported, so an unrouted session still parses; it
+        // carries no windows here and the status rows skip empty buckets.
+        assert_eq!(updates.len(), 2);
+        assert_eq!(updates[0].limit_id.as_deref(), Some("codex"));
+        assert!(updates[0].primary.is_none() && updates[0].secondary.is_none());
+        let snapshot = &updates[1];
+        assert_eq!(snapshot.limit_id.as_deref(), Some("claude"));
+        assert_eq!(snapshot.limit_name.as_deref(), Some("Claude"));
+        let primary = snapshot.primary.as_ref().expect("primary window");
+        assert_eq!(primary.used_percent, 78.0);
+        assert_eq!(primary.window_minutes, Some(300));
+        assert_eq!(primary.resets_at, Some(1790460000));
+        let secondary = snapshot.secondary.as_ref().expect("secondary window");
+        assert_eq!(secondary.used_percent, 8.0);
+        assert_eq!(secondary.window_minutes, Some(10080));
+        assert_eq!(secondary.resets_at, Some(1790942400));
+    }
+
+    #[test]
     fn parse_all_rate_limits_reads_all_limit_families() {
         let mut headers = HeaderMap::new();
         headers.insert(

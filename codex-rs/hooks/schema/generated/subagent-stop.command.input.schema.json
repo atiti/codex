@@ -19,6 +19,9 @@
     "agent_type": {
       "type": "string"
     },
+    "agentroute_application": {
+      "description": "Turn-scoped AgentRoute application receipt, if this CLI build emitted one."
+    },
     "cwd": {
       "type": "string"
     },

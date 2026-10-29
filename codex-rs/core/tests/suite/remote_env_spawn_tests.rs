@@ -107,7 +107,7 @@ pub(crate) async fn pending_subagent_scenario(
             let namespace = if v1 {
                 "multi_agent_v1"
             } else {
-                "collaboration"
+                "agentroute_collaboration"
             };
             let tool = |id, namespace, name, args: Value| {
                 ev_function_call_with_namespace(id, namespace, name, &args.to_string())

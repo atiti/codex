@@ -482,15 +482,28 @@ impl GoalRuntimeHandle {
             .get::<TurnStartOptions>()
             .map(|options| options.as_ref().clone())
             .unwrap_or_default();
+        let goal_routing = codex_protocol::turn_input::GoalRoutingContext {
+            goal_id: goal.goal_id.clone(),
+            objective: goal.objective.clone(),
+        };
+        let review = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_completion_review(self.thread_id(), &goal.goal_id)
+            .await
+            .map_err(|err| err.to_string())?;
         let item = continuation_steering_item(
             &protocol_goal_from_state(goal),
             thread.config().await.update_plan_enabled,
+            review.as_ref(),
         );
 
         match thread
             .start_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
                     turn_trigger: Some("goal".to_string()),
+                    goal_routing: Some(goal_routing),
                     ..start_options
                 }),
             )

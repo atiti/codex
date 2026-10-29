@@ -259,6 +259,12 @@ impl CodexThread {
         self.io.submit(op).await
     }
 
+    /// Record authoritative subscription permission obtained by the hosting app-server.
+    /// This is consumed by pre-turn hooks without switching accounts inside a live thread.
+    pub async fn record_ordinary_usage_allowed(&self, allowed: Option<bool>) {
+        self.session.record_ordinary_usage_allowed(allowed).await;
+    }
+
     /// Returns the session telemetry handle for thread-scoped production instrumentation.
     pub fn session_telemetry(&self) -> SessionTelemetry {
         self.session.services.session_telemetry.clone()
@@ -314,6 +320,31 @@ impl CodexThread {
             return None;
         }
         Some(task.turn_context.capture_current_model_info().slug.clone())
+    }
+
+    /// Run an independent, read-only assessment of a goal completion claim.
+    /// The reviewer uses this turn's selected provider and model and cannot approve actions.
+    pub async fn review_goal_completion(
+        &self,
+        turn_id: &str,
+        prompt: String,
+    ) -> Result<String, String> {
+        let (ctx, cancellation_token) = {
+            let active = self.session.active_turn.lock().await;
+            let task = active
+                .as_ref()
+                .and_then(|active| active.task.as_ref())
+                .ok_or_else(|| "goal turn is no longer active".to_string())?;
+            if task.turn_context.sub_id != turn_id || task.cancellation_token.is_cancelled() {
+                return Err("goal turn changed while preparing review".to_string());
+            }
+            (
+                Arc::clone(&task.turn_context),
+                task.cancellation_token.clone(),
+            )
+        };
+        crate::goal_completion_review::run(self.session.clone(), ctx, cancellation_token, prompt)
+            .await
     }
 
     pub async fn shutdown_and_wait(&self) -> CodexResult<()> {

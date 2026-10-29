@@ -253,15 +253,13 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
         "inference-child-1",
         vec![json!({
             "type": "agent_message",
+            "id": "amsg_call-spawn-v2",
             "author": "/root",
             "recipient": "/root/reviewer",
-            "content": [
-                {
-                    "type": "input_text",
-                    "text": "Message Type: NEW_TASK\nTask name: /root/reviewer\nSender: /root\nPayload:\n"
-                },
-                {"type": "encrypted_content", "encrypted_content": "review this"}
-            ]
+            "content": [{
+                "type": "input_text",
+                "text": "[plaintext delegated message]"
+            }]
         })],
     )?;
 
@@ -274,6 +272,17 @@ fn sub_agent_started_activity_creates_spawn_edge() -> anyhow::Result<()> {
     assert_eq!(
         replayed.conversation_items[target_item_id].thread_id,
         child_thread_id
+    );
+    assert_eq!(
+        replayed.conversation_items[target_item_id]
+            .agent_message
+            .as_ref()
+            .and_then(|message| message.id.as_deref()),
+        Some("amsg_call-spawn-v2")
+    );
+    assert_eq!(
+        text_body(&replayed.conversation_items[target_item_id]),
+        "[plaintext delegated message]"
     );
     assert_eq!(
         edge.carried_raw_payload_ids,
@@ -443,18 +452,21 @@ fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()>
     )?;
     start_thread(&writer, child_thread_id, "/root/child")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
-    let delivered = inter_agent_message(
-        "/root",
-        "/root/child",
-        "hello again",
-        /*trigger_turn*/ false,
-    );
     append_inference_request(
         &writer,
         child_thread_id,
         "turn-child-1",
         "inference-child-1",
-        vec![message("assistant", &delivered)],
+        vec![json!({
+            "type": "agent_message",
+            "id": "amsg_call-send-v2",
+            "author": "/root",
+            "recipient": "/root/child",
+            "content": [{
+                "type": "input_text",
+                "text": "[plaintext delegated message]"
+            }]
+        })],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -465,6 +477,17 @@ fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()>
     assert_eq!(
         replayed.conversation_items[target_item_id].thread_id,
         child_thread_id
+    );
+    assert_eq!(
+        replayed.conversation_items[target_item_id]
+            .agent_message
+            .as_ref()
+            .and_then(|message| message.id.as_deref()),
+        Some("amsg_call-send-v2")
+    );
+    assert_eq!(
+        text_body(&replayed.conversation_items[target_item_id]),
+        "[plaintext delegated message]"
     );
     assert_eq!(
         edge.carried_raw_payload_ids,
@@ -529,18 +552,21 @@ fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
     )?;
     start_thread(&writer, child_thread_id, "/root/child")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
-    let delivered = inter_agent_message(
-        "/root",
-        "/root/child",
-        "continue",
-        /*trigger_turn*/ true,
-    );
     append_inference_request(
         &writer,
         child_thread_id,
         "turn-child-1",
         "inference-child-1",
-        vec![message("assistant", &delivered)],
+        vec![json!({
+            "type": "agent_message",
+            "id": "amsg_call-followup-v2",
+            "author": "/root",
+            "recipient": "/root/child",
+            "content": [{
+                "type": "input_text",
+                "text": "[plaintext delegated message]"
+            }]
+        })],
     )?;
 
     let replayed = replay_bundle(temp.path())?;
@@ -551,6 +577,17 @@ fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
     assert_eq!(
         replayed.conversation_items[target_item_id].thread_id,
         child_thread_id
+    );
+    assert_eq!(
+        replayed.conversation_items[target_item_id]
+            .agent_message
+            .as_ref()
+            .and_then(|message| message.id.as_deref()),
+        Some("amsg_call-followup-v2")
+    );
+    assert_eq!(
+        text_body(&replayed.conversation_items[target_item_id]),
+        "[plaintext delegated message]"
     );
     assert_eq!(
         edge.carried_raw_payload_ids,

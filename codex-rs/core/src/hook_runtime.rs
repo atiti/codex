@@ -937,6 +937,19 @@ pub(crate) async fn inspect_pending_input(
             })
         })
         .collect::<Vec<_>>();
+    // Explicit prompt routing and inherited manual affinity must survive live reviews.
+    if outcome
+        .strip_prompt_prefix_bytes
+        .is_some_and(|bytes| bytes > 0)
+        || outcome
+            .additional_contexts
+            .iter()
+            .any(|context| context.text.contains("MANUAL_OVERRIDE"))
+    {
+        turn_context
+            .extension_data
+            .insert(crate::progress_review_routing::ManualReviewRouteLock);
+    }
     if outcome.reviewer_profile_name.is_some() || !reviewer_fallbacks.is_empty() {
         turn_context
             .extension_data

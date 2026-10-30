@@ -399,6 +399,11 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                                 .to_string(),
                         )
                         .await;
+                    let current_model = thread.current_turn_model(&turn_id).await;
+                    let prompt = format!(
+                        "{prompt}\nCurrent working model: {}",
+                        current_model.as_deref().unwrap_or("unavailable")
+                    );
                     let result = thread.review_progress(&turn_id, prompt).await;
                     let Ok((raw, usage, model, provider)) = result else {
                         thread
@@ -473,6 +478,20 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                     thread
                         .report_goal_completion_review(&turn_id, display)
                         .await;
+                    if let Some(tier) = verdict.model_tier.as_deref().filter(|tier| *tier != "keep")
+                    {
+                        let outcome = thread
+                            .apply_progress_review_route(
+                                &turn_id,
+                                revision,
+                                tier,
+                                current_model.as_deref(),
+                            )
+                            .await;
+                        thread
+                            .report_goal_completion_review(&turn_id, outcome)
+                            .await;
+                    }
                     if verdict.decision == "continue" {
                         continue;
                     }

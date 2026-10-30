@@ -240,16 +240,51 @@ impl Session {
         .await
     }
 
-    #[expect(
-        clippy::await_holding_invalid_type,
-        reason = "the final managed-policy check and active settings publication must remain atomic"
-    )]
+    pub(crate) async fn apply_review_turn_settings(
+        &self,
+        turn_id: &str,
+        revision: u64,
+        update: TurnSettingsUpdate,
+        provider: String,
+    ) -> TurnSettingsUpdateOutcome {
+        self.apply_guarded_routed_turn_settings(
+            turn_id,
+            update,
+            Some(provider),
+            None,
+            Some(revision),
+        )
+        .await
+    }
+
     pub(crate) async fn apply_routed_turn_settings(
         &self,
         turn_id: &str,
         update: TurnSettingsUpdate,
         model_provider: Option<String>,
         chatgpt_profile_home: Option<String>,
+    ) -> TurnSettingsUpdateOutcome {
+        self.apply_guarded_routed_turn_settings(
+            turn_id,
+            update,
+            model_provider,
+            chatgpt_profile_home,
+            None,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::await_holding_invalid_type,
+        reason = "the final managed-policy check and active settings publication must remain atomic"
+    )]
+    async fn apply_guarded_routed_turn_settings(
+        &self,
+        turn_id: &str,
+        update: TurnSettingsUpdate,
+        model_provider: Option<String>,
+        chatgpt_profile_home: Option<String>,
+        review_revision: Option<u64>,
     ) -> TurnSettingsUpdateOutcome {
         let updates_model_settings = update.model.is_some()
             || model_provider.is_some()
@@ -420,6 +455,18 @@ impl Session {
         {
             return TurnSettingsUpdateOutcome::TargetUnavailable;
         }
+        if review_revision.is_some()
+            && (task
+                .turn_context
+                .extension_data
+                .get::<crate::progress_review_routing::ManualReviewRouteLock>()
+                .is_some()
+                || task.turn_context.capture_current_model_info().slug != current.model_info.slug)
+        {
+            return TurnSettingsUpdateOutcome::Rejected {
+                reason: "review superseded by a route change".into(),
+            };
+        }
         let mut updated_settings = match prepared {
             Ok(settings) => settings,
             Err(reason) => return TurnSettingsUpdateOutcome::Rejected { reason },
@@ -450,6 +497,17 @@ impl Session {
         // safety checks together with applying the update under state and active_turn; no model
         // lookup or other preparation runs under these locks.
         let state = self.state.lock().await;
+        if review_revision.is_some_and(|revision| {
+            state
+                .history
+                .conversation_history_snapshot()
+                .user_message_revision()
+                != revision
+        }) {
+            return TurnSettingsUpdateOutcome::Rejected {
+                reason: "review superseded by new user input".into(),
+            };
+        }
         // Environment configuration can arrive before its executor connects. If this update
         // omits environments, use what the running turn's manager knows now.
         let current_environments = self.services.turn_environments.selections();

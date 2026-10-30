@@ -64,3 +64,7 @@ remain separate checks. AgentRoute PR #65 is already merged; the 0.5.66 release 
 local installation still depend on merging the Codex 0.161.0 port. Before local
 installation, finish shared-server sessions and stop it gracefully so the new runtime
 can become the owner.
+
+## Reviewer-guided live escalation
+
+The Goal extension accepts an optional bounded `model_tier` verdict. AgentRoute can supply `progress_review_routes` as a JSON-encoded tier allowlist. The narrow core bridge publishes authorized escalations through existing routed turn settings; it checks turn identity and user revision and never interrupts captured operations. Downgrades remain advisory. This is off unless an allowlist is supplied.

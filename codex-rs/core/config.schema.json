@@ -8273,6 +8273,10 @@
     "progress_review_provider": {
       "type": "string"
     },
+    "progress_review_routes": {
+      "description": "AgentRoute-authorized live review routes, encoded as bounded JSON.",
+      "type": "string"
+    },
     "project_doc_fallback_filenames": {
       "default": [],
       "description": "Ordered list of fallback filenames to look for when AGENTS.md is missing.",

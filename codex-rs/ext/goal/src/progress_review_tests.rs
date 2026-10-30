@@ -228,3 +228,30 @@ fn missing_receipt_is_explicit_and_acknowledged_receipts_are_preserved() {
     let keep = "Independent progress review [id]: continue. Proceed";
     assert_eq!(review_with_receipt_status(keep.into()), keep);
 }
+
+#[test]
+fn next_review_receives_recorded_receipt_and_observed_tool_evidence() {
+    use super::review_with_receipt_status;
+    let user = message("user", "Audit the complete cohort");
+    let action = ResponseItem::FunctionCall {
+        name: "search".into(),
+        arguments: "cohort audit".into(),
+        call_id: "call-1".into(),
+        id: None,
+        namespace: None,
+        encrypted_content: None,
+        encrypted_function_args: None,
+        internal_chat_message_metadata_passthrough: None,
+        status: None,
+    };
+    let prior = review_with_receipt_status("Independent progress review [id]: adjust. Audit the cohort\nAcknowledgement: accepted. Next action: audit".into());
+    let packet = evidence_packet(
+        vec![&user, &action],
+        Some(&prior),
+        Some("Audit the complete cohort"),
+        None,
+    );
+    assert!(packet.contains("Acknowledgement: accepted"));
+    assert!(packet.contains("tool search: cohort audit"));
+    assert!(packet.contains("do not infer compliance from an acknowledgement alone"));
+}

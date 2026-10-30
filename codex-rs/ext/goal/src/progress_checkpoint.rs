@@ -131,6 +131,23 @@ impl<'call> ToolExecutor<ToolCall<'call>> for AcknowledgementTool {
                 .thread_extension_data()
                 .get::<crate::progress_review::PreviousVerdict>()
                 .ok_or_else(|| FunctionCallError::RespondToModel("no review available".into()))?;
+            let revision = thread
+                .conversation_history_snapshot()
+                .await
+                .user_message_revision();
+            {
+                let state = previous.0.lock().map_err(|_| {
+                    FunctionCallError::RespondToModel("review state unavailable".into())
+                })?;
+                if state
+                    .as_ref()
+                    .is_none_or(|(review_revision, _)| *review_revision != revision)
+                {
+                    return Err(FunctionCallError::RespondToModel(
+                        "review was superseded by new user input".into(),
+                    ));
+                }
+            }
             record_acknowledgement(&previous, &value)?;
             crate::progress_review::persist_from_store(thread.thread_extension_data());
             Ok(Box::new(JsonToolOutput::new(

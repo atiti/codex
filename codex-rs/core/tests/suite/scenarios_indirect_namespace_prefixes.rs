@@ -47,6 +47,7 @@ async fn catalog_namespace_prefixes_follow_the_selected_model(
             .enable(Feature::MultiAgentV2)
             .expect("enable MAv2");
         config.multi_agent_v2.non_code_mode_only = false;
+        config.multi_agent_v2.tool_namespace = Some("collaboration".into());
         config.multi_agent_v2.root_agent_usage_hint_text = Some("Coordinate sub-agents.".into());
         config
             .mcp_servers

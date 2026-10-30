@@ -133,6 +133,7 @@ async fn model_switch_program_pair(
     .await;
     submit_pair(&initial.codex, previous_model, previous_program).await?;
     let expected_program = previous_program
+        .filter(|_| !local)
         .map(|program| json!({"cyber": program}))
         .unwrap_or(Value::Null);
     assert_eq!(
@@ -246,6 +247,14 @@ async fn model_switch_program_pair(
                         .enable(Feature::ApiKeyCyberAccessPrograms)
                         .expect("enable API-key Cyber access programs");
                 } else if matches!(history, History::ApiKeyResume) {
+                    config.model_provider.name = "OpenAI".to_owned();
+                    config.model_provider.capabilities =
+                        Some(codex_model_provider_info::ModelProviderCapabilities {
+                            remote_compaction: Some(
+                                codex_model_provider_info::RemoteCompactionSupport::Unsupported,
+                            ),
+                            ..Default::default()
+                        });
                     config
                         .features
                         .disable(Feature::ApiKeyCyberAccessPrograms)
@@ -270,7 +279,8 @@ async fn model_switch_program_pair(
         assert!(
             error
                 .to_string()
-                .contains("Cyber access programs are disabled for this API-key session.")
+                .contains("Cyber access programs are disabled for this API-key session."),
+            "unexpected API-key selection error: {error}"
         );
         thread.shutdown_and_wait().await?;
         assert_eq!(
@@ -320,14 +330,15 @@ async fn model_switch_program_pair(
             );
         }
     }
-    let (old_program, new_program) = if matches!(history, History::ApiKeyCustomProviderResume) {
-        for request in &requests {
-            assert_eq!(request.body_json().get("access_programs"), None);
-        }
-        (Value::Null, Value::Null)
-    } else {
-        (expected_program, json!({"cyber": "daybreak_red"}))
-    };
+    let (old_program, new_program) =
+        if local || matches!(history, History::ApiKeyCustomProviderResume) {
+            for request in &requests {
+                assert_eq!(request.body_json().get("access_programs"), None);
+            }
+            (Value::Null, Value::Null)
+        } else {
+            (expected_program, json!({"cyber": "daybreak_red"}))
+        };
     let actual = requests
         .iter()
         .map(|request| {

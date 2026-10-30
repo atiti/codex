@@ -28,7 +28,7 @@ async fn output_token_replay_respects_provider_and_preserves_history(
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
-    let mut reasoning = ev_reasoning_item("reasoning", &["I will check the result."], &[]);
+    let mut reasoning = ev_reasoning_item("rs_reasoning", &["I will check the result."], &[]);
     reasoning["item"]["content"] = json!(null);
     let mut commentary = ev_assistant_message("commentary", "I will record the completed step.");
     commentary["item"]["phase"] = json!("commentary");
@@ -139,6 +139,12 @@ async fn output_token_replay_respects_provider_and_preserves_history(
             .cloned()
             .collect::<Vec<_>>();
         let mut expected = json!(expected);
+        if !keep_ciphertext {
+            expected
+                .as_array_mut()
+                .expect("expected items")
+                .retain(|item| item["type"] != "reasoning");
+        }
         if !keep_ciphertext {
             for item in expected.as_array_mut().expect("expected items") {
                 if item["type"] != "reasoning" {

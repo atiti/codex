@@ -134,7 +134,11 @@ async fn vertex_requests_use_command_auth_with_namespaces_and_tool_search(
         test.codex.multi_agent_version(),
         Some(MultiAgentVersion::V2)
     );
-    assert!(tools.iter().any(|tool| tool["name"] == "collaboration"));
+    assert!(
+        tools
+            .iter()
+            .any(|tool| tool["name"] == "agentroute_collaboration")
+    );
     let namespace = tools.iter().find(|tool| tool["name"] == "records");
     assert_eq!(
         namespace,

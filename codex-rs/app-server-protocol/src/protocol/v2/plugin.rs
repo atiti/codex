@@ -592,7 +592,8 @@ pub struct HookMetadata {
     pub timeout_sec: u64,
     pub status_message: Option<String>,
     /// Configured `additionalContext` spill threshold.
-    /// `null` uses 2,500 tokens; `0` disables spilling.
+    /// `null` uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are capped
+    /// at 10,000 tokens so model-visible hook context always remains bounded.
     pub additional_context_limit: Option<usize>,
     pub source_path: AbsolutePathBuf,
     pub source: HookSource,

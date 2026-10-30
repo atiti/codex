@@ -30,8 +30,12 @@ fn halfwidth_sound_marks_are_truncated_and_rendered_at_a_grapheme_boundary() {
 
     Paragraph::new(lines.to_vec()).render(area, &mut buf);
 
+    // Debug escaping of these combining marks differs across Rust platforms.
+    let lines_debug = format!("{lines:#?}")
+        .replace('ﾞ', "\\u{ff9e}")
+        .replace('ﾟ', "\\u{ff9f}");
     insta::assert_snapshot!(
         "request_user_input_halfwidth_sound_marks_truncation",
-        format!("{buf:?}\n{lines:#?}")
+        format!("{buf:?}\n{lines_debug}")
     );
 }

@@ -326,19 +326,50 @@ async fn capability_discovery_retries_executor_disconnect_within_same_request() 
     let upstream_websocket_url = server.websocket_url().to_string();
     let discovery_attempts = Arc::new(AtomicUsize::new(0));
     let proxy_discovery_attempts = Arc::clone(&discovery_attempts);
-    let _proxy_task = AbortOnDropHandle::new(tokio::spawn(async move {
-        while let Ok((downstream, _)) = proxy_listener.accept().await {
-            let mut downstream = accept_async(downstream).await?;
-            let (mut upstream, _) = connect_async(&upstream_websocket_url).await?;
+    let resume_rejections = Arc::new(AtomicUsize::new(0));
+    let proxy_resume_rejections = Arc::clone(&resume_rejections);
+    let mut proxy_task = AbortOnDropHandle::new(tokio::spawn(async move {
+        loop {
+            let (downstream, _) = match proxy_listener.accept().await {
+                Ok(connection) => connection,
+                Err(error) => return Err::<(), anyhow::Error>(error.into()),
+            };
+            let Ok(mut downstream) = accept_async(downstream).await else {
+                continue;
+            };
+            let Ok((mut upstream, _)) = connect_async(&upstream_websocket_url).await else {
+                continue;
+            };
 
             loop {
                 tokio::select! {
                     message = downstream.next() => {
-                        let Some(message) = message.transpose()? else {
+                        // A failed resume drops its socket without a close handshake.
+                        // Keep accepting connections after that EOF or reset.
+                        let Some(Ok(message)) = message else {
                             break;
                         };
                         if let Message::Text(message_text) = &message {
                             let request = serde_json::from_str::<serde_json::Value>(message_text.as_ref())?;
+                            if request["method"] == "initialize"
+                                && request["params"]["resumeSessionId"].is_string()
+                                && proxy_resume_rejections.load(Ordering::SeqCst) == 0
+                            {
+                                // Force the race where the old executor connection has
+                                // not detached yet. The client must retry this handshake.
+                                proxy_resume_rejections.fetch_add(1, Ordering::SeqCst);
+                                let response = serde_json::json!({
+                                    "id": request["id"],
+                                    "error": {
+                                        "code": -32010,
+                                        "message": "session is already attached to another connection",
+                                    },
+                                });
+                                if downstream.send(Message::Text(response.to_string().into())).await.is_err() {
+                                    break;
+                                }
+                                continue;
+                            }
                             if request.get("method").and_then(serde_json::Value::as_str)
                                 == Some(CAPABILITY_ROOTS_DISCOVER_METHOD)
                             {
@@ -349,18 +380,21 @@ async fn capability_discovery_retries_executor_disconnect_within_same_request() 
                                 sleep(Duration::from_secs(9)).await;
                             }
                         }
-                        upstream.send(message).await?;
+                        if upstream.send(message).await.is_err() {
+                            break;
+                        }
                     }
                     message = upstream.next() => {
-                        let Some(message) = message.transpose()? else {
+                        let Some(Ok(message)) = message else {
                             break;
                         };
-                        downstream.send(message).await?;
+                        if downstream.send(message).await.is_err() {
+                            break;
+                        }
                     }
                 }
             }
         }
-        Ok::<(), anyhow::Error>(())
     }));
     let manager = Arc::new(
         EnvironmentManager::create_for_tests(
@@ -396,16 +430,23 @@ async fn capability_discovery_retries_executor_disconnect_within_same_request() 
         .await;
     let snapshot = timeout(
         Duration::from_secs(12),
-        cache.snapshot(&resolved_roots, &HashMap::new()),
+        async {
+            let sandbox_contexts = HashMap::new();
+            tokio::select! {
+                snapshot = cache.snapshot(&resolved_roots, &sandbox_contexts) => Ok(snapshot),
+                result = &mut proxy_task => anyhow::bail!("capability discovery proxy stopped unexpectedly: {result:?}"),
+            }
+        },
     )
     .await
-    .context("capability discovery did not retry within the same request")?;
+    .context("capability discovery did not retry within the same request")??;
     let discovery = snapshot.roots()[0]
         .result
         .as_ref()
         .map_err(|error| anyhow::anyhow!("{error}"))?;
 
     assert_eq!(discovery.id, "recovering-skill");
+    assert_eq!(resume_rejections.load(Ordering::SeqCst), 1);
     assert_eq!(
         2,
         discovery_attempts.load(Ordering::SeqCst),

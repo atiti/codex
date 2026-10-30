@@ -2,7 +2,7 @@
 //! Independent review preserves thread-owned authorization without inheriting parent checkpoints.
 
 use codex_features::Feature;
-use codex_protocol::models::ResponseItem;
+use codex_history::ResponseItemEnvelope;
 
 use crate::codex_thread::GuardianAuthorizationVersion;
 use crate::config::ManagedFeatures;
@@ -55,7 +55,7 @@ impl ReviewContextPolicy {
     pub(super) fn parent_compaction(
         self,
         history: &ContextManager,
-    ) -> anyhow::Result<Option<ResponseItem>> {
+    ) -> anyhow::Result<Option<ResponseItemEnvelope>> {
         if matches!(self, Self::Legacy | Self::Independent) {
             return Ok(None);
         }
@@ -75,6 +75,10 @@ impl ReviewContextPolicy {
         );
         // The synchronous reviewer can consume checkpoints across advertised comp_hash
         // values. Let the backend validate the payload; review errors still fail closed.
-        Ok(Some(checkpoint.item.clone()))
+        Ok(history
+            .annotated_items()
+            .iter()
+            .find(|envelope| std::ptr::eq(&envelope.item, checkpoint.item))
+            .cloned())
     }
 }

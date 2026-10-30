@@ -1,4 +1,8 @@
+use crate::runtime::GoalRuntimeHandle;
+use codex_core::ThreadManager;
+use codex_state::GoalCompletionReview;
 use std::sync::Arc;
+use std::sync::Weak;
 
 use codex_extension_api::FunctionCallError;
 use codex_extension_api::JsonToolOutput;
@@ -38,6 +42,8 @@ pub(crate) struct GoalToolExecutor {
     event_emitter: GoalEventEmitter,
     metrics: GoalMetrics,
     max_goal_token_budget: Option<i64>,
+    thread_manager: Option<Weak<ThreadManager>>,
+    runtime: Option<Arc<GoalRuntimeHandle>>,
 }
 
 #[derive(Clone, Copy)]
@@ -66,6 +72,8 @@ struct GoalToolResponse {
     goal: Option<ThreadGoal>,
     remaining_tokens: Option<i64>,
     completion_budget_report: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_review: Option<GoalCompletionReview>,
 }
 
 #[derive(Clone, Copy)]
@@ -93,6 +101,8 @@ impl GoalToolExecutor {
             event_emitter,
             metrics,
             max_goal_token_budget: None,
+            thread_manager: None,
+            runtime: None,
         }
     }
 
@@ -115,27 +125,32 @@ impl GoalToolExecutor {
             event_emitter,
             metrics,
             max_goal_token_budget,
+            thread_manager: None,
+            runtime: None,
         }
     }
 
     pub(crate) fn update(
-        thread_id: ThreadId,
         state_db: Arc<codex_state::StateRuntime>,
         accounting_state: Arc<GoalAccountingState>,
         analytics: GoalAnalytics,
         event_emitter: GoalEventEmitter,
         metrics: GoalMetrics,
+        thread_manager: Weak<ThreadManager>,
+        runtime: Arc<GoalRuntimeHandle>,
     ) -> Self {
         Self {
             kind: GoalToolKind::Update,
             execution_allowed: true,
-            thread_id,
+            thread_id: runtime.thread_id(),
             state_db,
             accounting_state,
             analytics,
             event_emitter,
             metrics,
             max_goal_token_budget: None,
+            thread_manager: Some(thread_manager),
+            runtime: Some(runtime),
         }
     }
 }
@@ -189,16 +204,27 @@ impl GoalToolExecutor {
         invocation: ToolCall<'_>,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
         let _ = invocation.function_arguments()?;
-        let goal = self
-            .state_db
-            .thread_goals()
-            .get_thread_goal(self.thread_id)
-            .await
-            .map(|goal| goal.map(protocol_goal_from_state))
-            .map_err(|err| {
-                FunctionCallError::RespondToModel(format!("failed to read goal: {err}"))
-            })?;
-        goal_response(goal, CompletionBudgetReport::Omit)
+        let store = self.state_db.thread_goals();
+        let goal = store.get_thread_goal(self.thread_id).await.map_err(|err| {
+            FunctionCallError::RespondToModel(format!("failed to read goal: {err}"))
+        })?;
+        let review = match goal.as_ref() {
+            Some(goal) => store
+                .get_completion_review(self.thread_id, &goal.goal_id)
+                .await
+                .map_err(|err| {
+                    FunctionCallError::RespondToModel(format!("failed to read goal review: {err}"))
+                })?,
+            None => None,
+        };
+        let mut response = GoalToolResponse::new(
+            goal.map(protocol_goal_from_state),
+            CompletionBudgetReport::Omit,
+        );
+        response.last_review = review;
+        let value = serde_json::to_value(response)
+            .map_err(|err| FunctionCallError::Fatal(err.to_string()))?;
+        Ok(Box::new(JsonToolOutput::new(value)))
     }
 
     async fn handle_create(
@@ -259,6 +285,20 @@ impl GoalToolExecutor {
             ));
         }
 
+        // Serialize review, accounting, and completion with external Goal updates.
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or_else(|| FunctionCallError::Fatal("goal runtime unavailable".to_string()))?;
+        let _goal_state_permit = runtime
+            .goal_state_permit()
+            .await
+            .map_err(FunctionCallError::Fatal)?;
+        let review_goal_id = if args.status == ThreadGoalStatus::Complete {
+            Some(self.review_completion(&invocation).await?)
+        } else {
+            None
+        };
         self.account_active_goal_progress(
             match args.status {
                 ThreadGoalStatus::Complete => codex_state::GoalAccountingMode::ActiveOrComplete,
@@ -285,7 +325,7 @@ impl GoalToolExecutor {
                     objective: None,
                     status: Some(state_status_from_protocol(args.status)),
                     token_budget: None,
-                    expected_goal_id: None,
+                    expected_goal_id: review_goal_id,
                 },
             )
             .await
@@ -315,6 +355,124 @@ impl GoalToolExecutor {
                 CompletionBudgetReport::Omit
             },
         )
+    }
+
+    async fn review_completion(
+        &self,
+        invocation: &ToolCall<'_>,
+    ) -> Result<String, FunctionCallError> {
+        let goal = self
+            .state_db
+            .thread_goals()
+            .get_thread_goal(self.thread_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read goal: {err}"))
+            })?
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel("cannot complete a missing goal".to_string())
+            })?;
+        if goal.status != codex_state::ThreadGoalStatus::Active {
+            return Err(FunctionCallError::RespondToModel(format!(
+                "cannot complete goal with status {}",
+                goal.status.as_str()
+            )));
+        }
+        let thread_manager = self
+            .thread_manager
+            .as_ref()
+            .and_then(Weak::upgrade)
+            .ok_or_else(|| {
+                FunctionCallError::RespondToModel(
+                    "goal reviewer cannot access the live thread".to_string(),
+                )
+            })?;
+        let thread = thread_manager
+            .get_thread(self.thread_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!(
+                    "goal reviewer cannot access thread: {err}"
+                ))
+            })?;
+        let previous = self
+            .state_db
+            .thread_goals()
+            .get_completion_review(self.thread_id, &goal.goal_id)
+            .await
+            .map_err(|err| {
+                FunctionCallError::RespondToModel(format!("failed to read goal review: {err}"))
+            })?;
+        let attempt = previous
+            .as_ref()
+            .map_or(1, |prior| prior.attempts.saturating_add(1));
+        thread.report_goal_completion_review(
+            &invocation.turn_id,
+            format!("Review agent · checking completion (attempt {attempt}).\nIndependently verifying the goal before it can be marked complete."),
+        ).await;
+        let raw = thread
+            .review_goal_completion(
+                &invocation.turn_id,
+                &goal.goal_id,
+                &goal.objective,
+                invocation.conversation_history.items(),
+            )
+            .await;
+        let verdict = crate::completion_review::parse_review(raw);
+        let reason = verdict.reason();
+        let decision = verdict.decision();
+        let repeated = previous
+            .as_ref()
+            .is_some_and(|prior| prior.decision == decision && prior.reason == reason);
+        let stored = self
+            .state_db
+            .thread_goals()
+            .record_completion_review(self.thread_id, &goal.goal_id, decision, reason)
+            .await;
+        let stored = match stored {
+            Ok(Some(stored)) => stored,
+            result => {
+                let detail = match result {
+                    Err(err) => format!("failed to save goal review: {err}"),
+                    Ok(_) => "goal changed during review; retry against current goal".to_string(),
+                };
+                thread.report_goal_completion_review(
+                    &invocation.turn_id,
+                    format!("Review agent · result unavailable (attempt {attempt}).\n{detail}\nCompletion remains unverified."),
+                ).await;
+                return Err(FunctionCallError::RespondToModel(detail));
+            }
+        };
+        let outcome = match decision {
+            "complete" => "Completion check passed.",
+            "blocked" => "Goal remains active; an external dependency needs attention.",
+            _ if repeated && stored.repeated_reason_count >= 3 => {
+                "Three reviews found the same gap; the agent must inspect the blocker or request input."
+            }
+            _ => "Goal remains active; work continues.",
+        };
+        thread
+            .report_goal_completion_review(
+                &invocation.turn_id,
+                format!(
+                    "Review agent · {decision} (attempt {}).\n{reason}\n{outcome}",
+                    stored.attempts
+                ),
+            )
+            .await;
+        if decision != "complete" {
+            let detail = format!(
+                "Goal completion review: {decision}. {reason} (attempt {}).",
+                stored.attempts
+            );
+            if repeated && stored.repeated_reason_count >= 3 {
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "{detail} No progress across three reviews. Inspect the blocker or request user input; do not claim completion."
+                )));
+            }
+            return Err(FunctionCallError::RespondToModel(detail));
+        }
+        Ok(goal.goal_id)
     }
 
     fn emit_goal_updated_from_tool_call(
@@ -470,6 +628,7 @@ impl GoalToolResponse {
             goal,
             remaining_tokens,
             completion_budget_report,
+            last_review: None,
         }
     }
 }

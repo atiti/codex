@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -12,6 +13,254 @@ import run_bazel_with_buildbuddy
 
 
 class RunBazelWithBuildBuddyTest(unittest.TestCase):
+    @unittest.skipUnless(
+        os.name == "posix" and shutil.which("bash"), "requires POSIX stubs"
+    )
+    def test_hosted_native_test_concurrency_is_scoped_to_local_ci(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            arguments = root / "arguments.json"
+            bazel = root / "bazel"
+            bazel.write_text(
+                f"#!{sys.executable}\nimport json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['TEST_BAZEL_ARGUMENTS']).write_text(json.dumps(sys.argv[1:]))\n"
+                "sys.exit(int(os.environ.get('TEST_BAZEL_EXIT_CODE', '0')))\n",
+                encoding="utf-8",
+            )
+            bazel.chmod(0o700)
+            wrapper = Path(__file__).with_name("run-bazel-ci.sh")
+            for platform in ("Linux", "macOS"):
+                for hosted, remote in ((True, False), (True, True), (False, False)):
+                    with self.subTest(platform=platform, hosted=hosted, remote=remote):
+                        env = os.environ.copy()
+                        env.pop("BUILDBUDDY_API_KEY", None)
+                        env.update(
+                            RUNNER_OS=platform,
+                            GITHUB_ACTIONS="true" if hosted else "false",
+                            RUNNER_ENVIRONMENT="github-hosted"
+                            if hosted
+                            else "self-hosted",
+                            CODEX_BAZEL_BIN=str(bazel),
+                            TEST_BAZEL_ARGUMENTS=str(arguments),
+                        )
+                        if remote:
+                            env["BUILDBUDDY_API_KEY"] = "synthetic-test-key"
+                        result = subprocess.run(
+                            ["bash", str(wrapper), "--", "test", "--", "//:test"],
+                            cwd=wrapper.parent.parent.parent,
+                            env=env,
+                            capture_output=True,
+                            text=True,
+                            check=False,
+                        )
+                        self.assertEqual(
+                            result.returncode, 0, result.stdout + result.stderr
+                        )
+                        args = json.loads(arguments.read_text(encoding="utf-8"))
+                        self.assertEqual(
+                            "--local_test_jobs=2" in args, hosted and not remote
+                        )
+                        self.assertEqual("--disk_cache=" in args, hosted and not remote)
+                        for setting in ("extra_rustc_flag", "extra_exec_rustc_flag"):
+                            for flag in ("-Cdebuginfo=0", "-Cstrip=debuginfo"):
+                                self.assertEqual(
+                                    f"--@rules_rust//rust/settings:{setting}={flag}"
+                                    in args,
+                                    hosted and not remote,
+                                )
+                        for build_args in (
+                            ["build"],
+                            ["build", "--config=clippy"],
+                            ["build", "--config=clippy", "--output_groups=+default"],
+                            ["build", "--config=clippy", "--output_groups", "+default"],
+                            [
+                                "build",
+                                "--@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=2",
+                            ],
+                            [
+                                "build",
+                                "--@rules_rust//rust/settings:extra_exec_rustc_flag=-Cstrip=none",
+                            ],
+                            ["build", "--config=release"],
+                            ["build", "--config", "release"],
+                            ["build", "--compilation_mode=opt"],
+                            ["build", "--compilation_mode=dbg"],
+                            ["build", "-c", "dbg"],
+                            ["query"],
+                        ):
+                            result = subprocess.run(
+                                [
+                                    "bash",
+                                    str(wrapper),
+                                    "--",
+                                    *build_args,
+                                    "--",
+                                    "//:test",
+                                ],
+                                cwd=wrapper.parent.parent.parent,
+                                env=env,
+                                capture_output=True,
+                                text=True,
+                                check=False,
+                            )
+                            self.assertEqual(
+                                result.returncode, 0, result.stdout + result.stderr
+                            )
+                            args = json.loads(arguments.read_text(encoding="utf-8"))
+                            self.assertEqual(
+                                "--output_groups=clippy_checks" in args,
+                                hosted
+                                and not remote
+                                and build_args == ["build", "--config=clippy"],
+                                build_args,
+                            )
+                            self.assertEqual(
+                                "--@rules_rust//rust/settings:extra_rustc_flag=-Cdebuginfo=0"
+                                in args,
+                                hosted
+                                and not remote
+                                and build_args[:1] == ["build"]
+                                and not any(
+                                    "debuginfo" in arg
+                                    or "strip" in arg
+                                    or arg
+                                    in (
+                                        "--config=release",
+                                        "--config",
+                                        "--compilation_mode=dbg",
+                                        "--compilation_mode=opt",
+                                        "-c",
+                                    )
+                                    for arg in build_args
+                                ),
+                                build_args,
+                            )
+
+            env.update(GITHUB_ACTIONS="true", RUNNER_ENVIRONMENT="self-hosted")
+            env.pop("BUILDBUDDY_API_KEY", None)
+            result = subprocess.run(
+                [
+                    "bash",
+                    str(wrapper),
+                    "--",
+                    "build",
+                    "--config=clippy",
+                    "--",
+                    "//:test",
+                ],
+                cwd=wrapper.parent.parent.parent,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            args = json.loads(arguments.read_text(encoding="utf-8"))
+            self.assertNotIn("--output_groups=clippy_checks", args)
+            self.assertFalse(any("debuginfo" in arg for arg in args))
+
+            # Storage diagnostics must not replace the actual Bazel failure.
+            output_base = root / "output"
+            (output_base / "external").mkdir(parents=True)
+            env.update(
+                RUNNER_ENVIRONMENT="github-hosted",
+                TEST_BAZEL_EXIT_CODE="42",
+                BAZEL_OUTPUT_BASE=str(output_base),
+            )
+            result = subprocess.run(
+                ["bash", str(wrapper), "--", "build", "--", "//:test"],
+                cwd=wrapper.parent.parent.parent,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 42, result.stdout + result.stderr)
+            self.assertIn(str(output_base / "external"), result.stdout)
+
+    @unittest.skipUnless(
+        os.name == "posix" and shutil.which("bash"), "requires POSIX stubs"
+    )
+    def test_windows_wrapper_uses_native_host_c_only_without_remote_execution(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            arguments = root / "arguments.json"
+            bazel = root / "bazel"
+            bazel.write_text(
+                f"#!{sys.executable}\nimport json, os, sys\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['TEST_BAZEL_ARGUMENTS']).write_text(json.dumps(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            command = root / "cmd.exe"
+            command.write_text(
+                '#!/bin/sh\nprintf "%s %s\\n" "$4" "$5"\n', encoding="utf-8"
+            )
+            for executable in (bazel, command):
+                executable.chmod(0o700)
+            env = os.environ.copy()
+            env.update(
+                GITHUB_ACTIONS="true",
+                RUNNER_OS="Windows",
+                SYSTEMROOT=r"C:\Windows",
+                PROCESSOR_ARCHITECTURE="AMD64",
+                CODEX_BAZEL_WINDOWS_PATH=r"C:\Windows\system32",
+                CODEX_BAZEL_BIN=str(bazel),
+                TEST_BAZEL_ARGUMENTS=str(arguments),
+                PATH=f"{root}{os.pathsep}{env['PATH']}",
+            )
+            wrapper = Path(__file__).with_name("run-bazel-ci.sh")
+            for remote in (False, True):
+                with self.subTest(remote=remote):
+                    env.pop("BUILDBUDDY_API_KEY", None)
+                    if remote:
+                        env["BUILDBUDDY_API_KEY"] = "synthetic-test-key"
+                    result = subprocess.run(
+                        [
+                            "bash",
+                            str(wrapper),
+                            "--windows-cross-compile",
+                            "--",
+                            "build",
+                            "--",
+                            "//:test",
+                        ],
+                        cwd=wrapper.parent.parent.parent,
+                        env=env,
+                        check=False,
+                        capture_output=True,
+                        text=True,
+                    )
+                    self.assertEqual(
+                        result.returncode, 0, f"{result.stdout}\n{result.stderr}"
+                    )
+                    args = json.loads(arguments.read_text(encoding="utf-8"))
+                    self.assertEqual("--disk_cache=" in args, not remote)
+                    self.assertEqual("--config=ci-windows-tests" in args, not remote)
+                    self.assertEqual("--local_test_jobs=2" in args, not remote)
+                    self.assertEqual(
+                        "--test_env=RUST_TEST_THREADS=1" in args, not remote
+                    )
+                    native_flags = {
+                        "--repo_env=BAZEL_DO_NOT_DETECT_CPP_TOOLCHAIN=0",
+                        "--extra_toolchains=//:windows_x86_64_msvc_cc_toolchain",
+                        "--features=static_link_msvcrt",
+                        "--host_features=static_link_msvcrt",
+                    }
+                    self.assertEqual(
+                        native_flags.intersection(args),
+                        set() if remote else native_flags,
+                    )
+                    self.assertIn(
+                        "--host_platform=//:rbe"
+                        if remote
+                        else "--host_platform=//:local_windows_msvc",
+                        args,
+                    )
+
     def github_env(
         self,
         temp_dir: str,

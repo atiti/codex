@@ -1,7 +1,8 @@
 ---
 source: tui/src/app/tests/disconnect_tests.rs
-expression: "render_bottom_popup(&app.chat_widget, 80)"
+assertion_line: 638
+expression: "normalize_snapshot_paths(render_bottom_popup(&app.chat_widget, 80))"
 ---
 › startup draft
 
-  gpt-retry high · /tmp/project
+  gpt-retry · test-provider · high · /tmp/project

@@ -44,6 +44,7 @@ pub(super) async fn handle_message_string_tool(
     mode: MessageDeliveryMode,
     target: String,
     message: String,
+    routing_prompt: Option<String>,
     analytics: &mut ToolCallAnalytics,
 ) -> Result<FunctionToolOutput, FunctionCallError> {
     let message = message_content(message)?;
@@ -66,7 +67,13 @@ pub(super) async fn handle_message_string_tool(
             target: AgentTarget::Id(receiver_thread_id),
             resume_config,
             input: AgentInput::Message {
-                message: agent_message_from_tool(message, &source),
+                message: AgentMessage::Routed {
+                    message: Box::new(agent_message_from_tool(message, &source)),
+                    routing_prompt,
+                    inherited_model_provider: None,
+                    requested_backend: None,
+                    model_explicit: false,
+                },
                 mode,
             },
             start_options: TurnStartOptions {

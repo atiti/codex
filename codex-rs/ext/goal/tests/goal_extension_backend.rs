@@ -100,6 +100,42 @@ async fn installed_goal_tools_create_goal_and_fill_empty_preview() -> anyhow::Re
 }
 
 #[tokio::test]
+async fn get_goal_exposes_last_completion_review() -> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    let tools = installed_tools(runtime.clone(), thread_id).await;
+    let goal = runtime
+        .thread_goals()
+        .replace_thread_goal(
+            thread_id,
+            "ship the release",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
+    runtime
+        .thread_goals()
+        .record_completion_review(thread_id, &goal.goal_id, "continue", "missing tag")
+        .await?;
+
+    let get_tool = tool_by_name(&tools, "get_goal");
+    let invocation = tool_call("get_goal", "call-get-goal-review", json!({}));
+    let output = get_tool.handle(invocation.clone()).await?;
+    let result = output.code_mode_result(&invocation.payload);
+    assert_eq!(
+        result["lastReview"],
+        json!({
+            "attempts": 1,
+            "repeatedReasonCount": 1,
+            "decision": "continue",
+            "reason": "missing tag",
+        })
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn installed_goal_tools_apply_maximum_token_budget() -> anyhow::Result<()> {
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
@@ -206,7 +242,7 @@ async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()>
     let runtime = test_runtime().await?;
     let thread_id = test_thread_id()?;
     seed_thread_metadata(runtime.as_ref(), thread_id).await?;
-    let harness = GoalExtensionHarness::new(runtime, thread_id).await?;
+    let harness = GoalExtensionHarness::new(runtime.clone(), thread_id).await?;
     let tools = harness.tools();
 
     let create_tool = tool_by_name(&tools, "create_goal");
@@ -235,13 +271,18 @@ async fn installed_goal_tools_only_replace_complete_goal() -> anyhow::Result<()>
         )
     );
 
-    let update_tool = tool_by_name(&tools, "update_goal");
-    update_tool
-        .handle(tool_call(
-            "update_goal",
-            "call-complete-goal",
-            json!({ "status": "complete" }),
-        ))
+    // External user Goal updates are independent of model-requested completion review.
+    runtime
+        .thread_goals()
+        .update_thread_goal(
+            thread_id,
+            codex_state::GoalUpdate {
+                objective: None,
+                status: Some(codex_state::ThreadGoalStatus::Complete),
+                token_budget: None,
+                expected_goal_id: None,
+            },
+        )
         .await?;
 
     let invocation = tool_call(
@@ -578,18 +619,23 @@ async fn subagent_usage_resets_when_root_goal_is_replaced() -> anyhow::Result<()
             &input_token_usage(/*input_tokens*/ 25),
         )
         .await;
-    let completion = tool_call(
-        "update_goal",
-        "call-complete-first-goal",
-        json!({ "status": "complete" }),
-    );
-    let completed = tool_by_name(&tools, "update_goal")
-        .handle(completion.clone())
+    // User-supplied Goal status uses the external API and does not request a review.
+    let completed = harness
+        .goal_service
+        .set_thread_goal(
+            runtime.as_ref(),
+            GoalSetRequest {
+                thread_id,
+                objective: GoalObjectiveUpdate::Keep,
+                status: Some(ThreadGoalStatus::Complete),
+                token_budget: GoalTokenBudgetUpdate::Keep,
+                max_goal_token_budget: None,
+            },
+            std::future::ready(Ok(())),
+        )
         .await?;
-    assert_eq!(
-        json!(25),
-        completed.code_mode_result(&completion.payload)["goal"]["tokensUsed"]
-    );
+    assert_eq!(25, completed.goal.tokens_used);
+    completed.apply_runtime_effects(&harness.goal_service).await;
 
     child
         .record_token_usage_with_last(

@@ -1,0 +1,9 @@
+---
+source: tui/src/history_cell/dynamic_tests.rs
+expression: "cell.display_lines(80).iter().map(ToString::to_string).collect::<Vec<_>>().join(\"\\n\")"
+---
+• Called example.inspect
+  … 2978 earlier lines hidden
+  └ large retained result
+    large retained result
+    large retained result

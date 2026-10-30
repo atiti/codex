@@ -15,6 +15,10 @@ const REGULAR_FILE_MODE: &str = "100644";
 // Normal edits finish well within 100 ms; pathological inputs fall back to a coarse,
 // content-exact diff without stalling tool completion.
 const DIFF_TIMEOUT: Duration = Duration::from_millis(100);
+// Keep exact diff tracking optional when generated files would dominate the process heap.
+const MAX_TRACKED_FILE_BYTES: usize = 1024 * 1024;
+const MAX_TRACKED_CONTENT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_UNIFIED_DIFF_BYTES: usize = 4 * 1024 * 1024;
 
 struct TrackedContent {
     content: String,
@@ -99,7 +103,43 @@ impl TurnDiffTracker {
             return;
         }
 
+        let mut retained_bytes = self
+            .baseline_by_path
+            .values()
+            .chain(self.current_by_path.values())
+            .map(|value| value.content.len())
+            .sum::<usize>();
         for change in delta.changes() {
+            let contents: Vec<&str> = match &change.change {
+                AppliedPatchFileChange::Add {
+                    content,
+                    overwritten_content,
+                } => std::iter::once(content.as_str())
+                    .chain(overwritten_content.as_deref())
+                    .collect(),
+                AppliedPatchFileChange::Delete { content } => vec![content.as_str()],
+                AppliedPatchFileChange::Update {
+                    old_content,
+                    overwritten_move_content,
+                    new_content,
+                    ..
+                } => [old_content.as_str(), new_content.as_str()]
+                    .into_iter()
+                    .chain(overwritten_move_content.as_deref())
+                    .collect(),
+            };
+            retained_bytes = contents.iter().fold(retained_bytes, |bytes, content| {
+                bytes.saturating_add(content.len())
+            });
+            if contents
+                .iter()
+                .any(|content| content.len() > MAX_TRACKED_FILE_BYTES)
+                || retained_bytes > MAX_TRACKED_CONTENT_BYTES
+            {
+                tracing::warn!(retained_bytes, "exact turn diff exceeded memory budget");
+                self.invalidate();
+                return;
+            }
             self.apply_change(environment_id, change);
         }
         self.refresh_unified_diff();
@@ -107,7 +147,11 @@ impl TurnDiffTracker {
 
     pub fn invalidate(&mut self) {
         self.valid = false;
-        self.rendered_diffs.clear();
+        // Invalid tracking must release the file baselines too, including their capacities.
+        self.baseline_by_path = HashMap::new();
+        self.current_by_path = HashMap::new();
+        self.origin_by_current_path = HashMap::new();
+        self.rendered_diffs = HashMap::new();
         self.unified_diff = None;
     }
 
@@ -169,6 +213,16 @@ impl TurnDiffTracker {
             });
 
             if let Some(diff) = rendered.as_deref() {
+                if aggregated
+                    .len()
+                    .saturating_add(diff.len())
+                    .saturating_add(1)
+                    > MAX_UNIFIED_DIFF_BYTES
+                {
+                    tracing::warn!("exact turn diff output exceeded memory budget");
+                    self.invalidate();
+                    return;
+                }
                 aggregated.push_str(diff);
                 if !aggregated.ends_with('\n') {
                     aggregated.push('\n');

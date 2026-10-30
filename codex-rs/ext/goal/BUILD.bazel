@@ -9,5 +9,13 @@ codex_rust_crate(
     integration_compile_data_extra = [
         "src/accounting.rs",
         "src/steering.rs",
+        "src/completion_review.rs",
+        "src/progress_evidence.rs",
+        "src/progress_checkpoint.rs",
+        "src/progress_checkpoint_tests.rs",
+        "src/progress_review.rs",
+        "src/progress_review_tests.rs",
+        "src/progress_persistence.rs",
+        "src/progress_persistence_tests.rs",
     ] + glob(["templates/**"]),
 )

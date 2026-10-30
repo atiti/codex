@@ -165,6 +165,8 @@ async fn read_only_tool_requests_preserve_host_policy_and_caller_metadata() -> a
                 .await
                 .expect("recorded requests")
                 .into_iter()
+                // The transport may also open an empty GET event stream.
+                .filter(|request| request.method == wiremock::http::Method::POST)
                 .map(|request| request.body_json::<Value>().expect("JSON-RPC request"))
                 .filter(|body| matches!(body["method"].as_str(), Some("tools/list" | "tools/call")))
                 .map(|body| {

@@ -1,6 +1,7 @@
 //! Applies captured Multi-Agent V2 catalog overrides and namespaces to tool specifications.
 //! Parameter schemas retain harness-owned encryption annotations; execution is unchanged.
 
+use crate::config::DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE;
 use crate::session::session::Session;
 use crate::tools::context::ToolInvocation;
 use crate::tools::registry::CoreToolRuntime;
@@ -85,7 +86,20 @@ impl ToolExecutor<ToolInvocation> for MultiAgentV2ToolOverrides {
             }
         }
         match (&self.namespace, spec) {
-            (Some(namespace), ToolSpec::Function(tool)) => {
+            (Some(namespace), ToolSpec::Function(mut tool)) => {
+                if namespace == DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE
+                    && matches!(
+                        tool.name.as_str(),
+                        "spawn_agent" | "send_message" | "followup_task"
+                    )
+                    && let Some(message) = tool
+                        .parameters
+                        .properties
+                        .as_mut()
+                        .and_then(|properties| properties.get_mut("message"))
+                {
+                    message.encrypted = None;
+                }
                 ToolSpec::Namespace(ResponsesApiNamespace {
                     name: namespace.clone(),
                     description: MULTI_AGENT_V2_NAMESPACE_DESCRIPTION.to_string(),

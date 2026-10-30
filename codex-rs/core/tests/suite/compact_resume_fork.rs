@@ -237,7 +237,14 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let input_after_resume = json!(requests[requests.len() - 2]["input"]);
     let mut input_after_fork = json!(requests[requests.len() - 1]["input"]);
     // The request prefix has a thread-scoped ID; retained history IDs stay unchanged.
-    input_after_fork[0]["id"] = input_after_compact[0]["id"].clone();
+    if let Some(id) = input_after_compact[0].get("id") {
+        input_after_fork[0]["id"] = id.clone();
+    } else {
+        input_after_fork[0]
+            .as_object_mut()
+            .expect("request prefix should be an object")
+            .remove("id");
+    }
 
     let compact_arr = input_after_compact
         .as_array()

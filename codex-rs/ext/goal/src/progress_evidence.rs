@@ -9,11 +9,17 @@ const EVIDENCE_LIMIT: usize = 16_000;
 pub(crate) struct Verdict {
     pub(crate) decision: String,
     pub(crate) reason: String,
+    #[serde(default)]
+    pub(crate) model_tier: Option<String>,
 }
 
 pub(crate) fn parse_verdict(raw: &str) -> Option<Verdict> {
     let verdict: Verdict = serde_json::from_str(raw.trim()).ok()?;
     if matches!(verdict.decision.as_str(), "continue" | "adjust" | "replan")
+        && verdict
+            .model_tier
+            .as_deref()
+            .is_none_or(|tier| matches!(tier, "keep" | "fast" | "normal" | "smart" | "max"))
         && !verdict.reason.trim().is_empty()
         && verdict.reason.len() <= 1000
     {
@@ -114,7 +120,7 @@ pub(crate) fn evidence_packet(
         original_end -= 1;
     }
     format!(
-        "First retained user message (may precede the current task): {}\nCurrent turn request (unavailable when provenance is missing): {}\nActive or stored goal (if any): {}\nLatest user request/correction: {}\nPrevious review: {}\nRecent trajectory (bounded; older content may be omitted):\n{}\nAssess whether the next work advances the user's complete request. Identify neglected requirements and unnecessary detours. Return JSON with decision continue, adjust, or replan and a concise evidence-based reason covering observed progress, what remains, and the next useful step when supported by the evidence. Explicitly state uncertainty where evidence is missing.",
+        "First retained user message (may precede the current task): {}\nCurrent turn request (unavailable when provenance is missing): {}\nActive or stored goal (if any): {}\nLatest user request/correction: {}\nPrevious review: {}\nRecent trajectory (bounded; older content may be omitted):\n{}\nAssess whether the next work advances the user's complete request. Identify neglected requirements and unnecessary detours. Return JSON with decision continue, adjust, or replan and a concise evidence-based reason covering observed progress, what remains, and the next useful step when supported by the evidence. Explicitly state uncertainty where evidence is missing. Also return model_tier: keep, fast, normal, smart, or max. Recommend a change only when evidence indicates model capability is limiting progress, or the remaining work is routine and verified. A tool outage, missing permission, slow operation, or unclear requirements alone does not justify escalation. Prefer keep when uncertain.",
         &original[..original_end],
         clipped(turn_request.unwrap_or("unavailable"), /*limit*/ 4000),
         clipped(goal.unwrap_or("none"), /*limit*/ 4000),

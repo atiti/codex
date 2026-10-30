@@ -117,3 +117,23 @@ fn early_reviews_do_not_reset_reporting_cadence() {
         std::time::Duration::from_secs(300)
     );
 }
+
+#[test]
+fn routing_recommendations_are_optional_and_bounded() {
+    assert!(
+        parse_verdict(
+            r#"{"decision":"adjust","reason":"Repeated reasoning errors","model_tier":"smart"}"#
+        )
+        .is_some()
+    );
+    assert!(
+        parse_verdict(
+            r#"{"decision":"continue","reason":"Progress is sound","model_tier":"keep"}"#
+        )
+        .is_some()
+    );
+    assert!(
+        parse_verdict(r#"{"decision":"adjust","reason":"x","model_tier":"arbitrary-provider"}"#)
+            .is_none()
+    );
+}

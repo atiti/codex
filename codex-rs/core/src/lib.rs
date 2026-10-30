@@ -35,6 +35,7 @@ mod codex_thread;
 mod thread_input;
 pub use thread_input::InputWaitOutcome;
 mod goal_completion_review;
+mod progress_review_routing;
 mod turn_extension_data;
 pub use turn_extension_data::WithTurnExtensionData;
 mod compact_model_fallback;

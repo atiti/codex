@@ -372,14 +372,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             .filter(|(previous_revision, _)| *previous_revision == revision)
                             .map(|(_, text)| text.clone())
                     });
-                    let prior = prior.map(|value| {
-                        if !value.contains("]: continue.") && !value.contains("\nAcknowledgement:")
-                        {
-                            format!("{value}\nAcknowledgement: missing")
-                        } else {
-                            value
-                        }
-                    });
+                    let prior = prior.map(review_with_receipt_status);
                     let prompt = evidence_packet(
                         history.review_items().collect(),
                         prior.as_deref(),
@@ -633,6 +626,14 @@ pub fn install_progress_review<C: Send + Sync + 'static>(
     registry.token_usage_contributor(extension.clone());
     registry.tool_lifecycle_contributor(extension.clone());
     registry.tool_contributor(extension);
+}
+
+fn review_with_receipt_status(value: String) -> String {
+    if !value.contains("]: continue.") && !value.contains("\nAcknowledgement:") {
+        format!("{value}\nAcknowledgement: missing")
+    } else {
+        value
+    }
 }
 
 pub(crate) fn persist_from_store(store: &codex_extension_api::ExtensionData) {

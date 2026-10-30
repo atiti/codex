@@ -214,3 +214,17 @@ fn routing_recommendations_are_optional_and_bounded() {
             .is_err()
     );
 }
+
+#[test]
+fn missing_receipt_is_explicit_and_acknowledged_receipts_are_preserved() {
+    use super::review_with_receipt_status;
+    let missing = "Independent progress review [id]: adjust. Work on the audit";
+    assert_eq!(
+        review_with_receipt_status(missing.into()),
+        format!("{missing}\nAcknowledgement: missing")
+    );
+    let received = format!("{missing}\nAcknowledgement: accepted. Next action: audit");
+    assert_eq!(review_with_receipt_status(received.clone()), received);
+    let keep = "Independent progress review [id]: continue. Proceed";
+    assert_eq!(review_with_receipt_status(keep.into()), keep);
+}

@@ -466,8 +466,14 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         }
                     }
                     let message = format!(
-                        "Independent progress review: {}. {}",
-                        verdict.decision, verdict.reason
+                        "Independent progress review [{}-{}]: {}. {}",
+                        turn_id,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_nanos(),
+                        verdict.decision,
+                        verdict.reason
                     );
                     if let Ok(mut previous) = previous_verdict.0.lock() {
                         *previous = Some((revision, message.clone()));
@@ -507,7 +513,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         InternalModelContextFragment::new(
                             InternalContextSource::from_static("progress_review"),
                             format!(
-                                "{message}\nTreat this review as fallible evidence. Continue the user's full objective; adopt the recommendation or briefly explain why not. Do not interrupt a live operation solely for this review."
+                                "{message}\nTreat this review as fallible evidence. At the next safe boundary, acknowledge the review ID to the user as accepted, partly accepted, or declined; give a brief reason and the concrete next action. Continue the user's full objective. Do not interrupt a live operation solely for this review."
                             ),
                         ),
                     );

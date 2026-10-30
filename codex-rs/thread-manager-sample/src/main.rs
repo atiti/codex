@@ -248,6 +248,7 @@ async fn new_config(
         review_model: None,
         progress_review_model: None,
         progress_review_provider: None,
+        progress_review_routes: None,
         model_context_window: None,
         model_auto_compact_token_limit: None,
         model_auto_compact_token_limit_scope: AutoCompactTokenLimitScope::Total,

@@ -49,10 +49,10 @@ fn receipt_rejects_stale_and_duplicate_reviews() {
         r#"{"review_id":"old","decision":"accepted","reason":"Aligned","next_action":"Audit"}"#,
     )
     .unwrap();
-    assert!(record_acknowledgement(&previous, &stale).is_err());
+    assert!(record_acknowledgement(&previous, &stale, 1).is_err());
     let current = parse_acknowledgement(r#"{"review_id":"review-1","decision":"accepted","reason":"Aligned","next_action":"Audit"}"#).unwrap();
-    assert!(record_acknowledgement(&previous, &current).is_ok());
-    assert!(record_acknowledgement(&previous, &current).is_err());
+    assert!(record_acknowledgement(&previous, &current, 1).is_ok());
+    assert!(record_acknowledgement(&previous, &current, 1).is_err());
     assert!(
         previous
             .0
@@ -63,4 +63,22 @@ fn receipt_rejects_stale_and_duplicate_reviews() {
             .1
             .contains("Next action: Audit")
     );
+}
+
+#[test]
+fn receipt_rejects_superseding_user_revision() {
+    use super::parse_acknowledgement;
+    use super::record_acknowledgement;
+    use crate::progress_review::PreviousVerdict;
+    use std::sync::Mutex;
+    let previous = PreviousVerdict(Mutex::new(Some((
+        4,
+        "Independent progress review [id]: adjust. Audit".into(),
+    ))));
+    let receipt = parse_acknowledgement(
+        r#"{"review_id":"id","decision":"accepted","reason":"Aligned","next_action":"Audit"}"#,
+    )
+    .unwrap();
+    assert!(record_acknowledgement(&previous, &receipt, 5).is_err());
+    assert!(record_acknowledgement(&previous, &receipt, 4).is_ok());
 }

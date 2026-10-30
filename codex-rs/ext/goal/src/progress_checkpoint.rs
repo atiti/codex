@@ -54,14 +54,20 @@ fn parse_acknowledgement(raw: &str) -> Result<Acknowledgement, FunctionCallError
 fn record_acknowledgement(
     previous: &crate::progress_review::PreviousVerdict,
     value: &Acknowledgement,
+    revision: u64,
 ) -> Result<(), FunctionCallError> {
     let mut state = previous
         .0
         .lock()
         .map_err(|_| FunctionCallError::RespondToModel("review state unavailable".into()))?;
-    let (_, message) = state
+    let (review_revision, message) = state
         .as_mut()
         .ok_or_else(|| FunctionCallError::RespondToModel("no review available".into()))?;
+    if *review_revision != revision {
+        return Err(FunctionCallError::RespondToModel(
+            "review was superseded by new user input".into(),
+        ));
+    }
     if !message.starts_with(&format!(
         "Independent progress review [{}]:",
         value.review_id
@@ -135,20 +141,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for AcknowledgementTool {
                 .conversation_history_snapshot()
                 .await
                 .user_message_revision();
-            {
-                let state = previous.0.lock().map_err(|_| {
-                    FunctionCallError::RespondToModel("review state unavailable".into())
-                })?;
-                if state
-                    .as_ref()
-                    .is_none_or(|(review_revision, _)| *review_revision != revision)
-                {
-                    return Err(FunctionCallError::RespondToModel(
-                        "review was superseded by new user input".into(),
-                    ));
-                }
-            }
-            record_acknowledgement(&previous, &value)?;
+            record_acknowledgement(&previous, &value, revision)?;
             crate::progress_review::persist_from_store(thread.thread_extension_data());
             Ok(Box::new(JsonToolOutput::new(
                 json!({"recorded": true, "review_id": value.review_id, "note": "Intent recorded; follow-through requires separate evidence."}),

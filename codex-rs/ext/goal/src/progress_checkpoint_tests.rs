@@ -49,10 +49,10 @@ fn receipt_rejects_stale_and_duplicate_reviews() {
         r#"{"review_id":"old","decision":"accepted","reason":"Aligned","next_action":"Audit"}"#,
     )
     .unwrap();
-    assert!(record_acknowledgement(&previous, &stale, 1).is_err());
+    assert!(record_acknowledgement(&previous, &stale, /*revision*/ 1).is_err());
     let current = parse_acknowledgement(r#"{"review_id":"review-1","decision":"accepted","reason":"Aligned","next_action":"Audit"}"#).unwrap();
-    assert!(record_acknowledgement(&previous, &current, 1).is_ok());
-    assert!(record_acknowledgement(&previous, &current, 1).is_err());
+    assert!(record_acknowledgement(&previous, &current, /*revision*/ 1).is_ok());
+    assert!(record_acknowledgement(&previous, &current, /*revision*/ 1).is_err());
     assert!(
         previous
             .0
@@ -79,6 +79,6 @@ fn receipt_rejects_superseding_user_revision() {
         r#"{"review_id":"id","decision":"accepted","reason":"Aligned","next_action":"Audit"}"#,
     )
     .unwrap();
-    assert!(record_acknowledgement(&previous, &receipt, 5).is_err());
-    assert!(record_acknowledgement(&previous, &receipt, 4).is_ok());
+    assert!(record_acknowledgement(&previous, &receipt, /*revision*/ 5).is_err());
+    assert!(record_acknowledgement(&previous, &receipt, /*revision*/ 4).is_ok());
 }

@@ -249,7 +249,7 @@ fn next_review_receives_recorded_receipt_and_observed_tool_evidence() {
         vec![&user, &action],
         Some(&prior),
         Some("Audit the complete cohort"),
-        None,
+        /*goal*/ None,
     );
     assert!(packet.contains("Acknowledgement: accepted"));
     assert!(packet.contains("tool search: cohort audit"));

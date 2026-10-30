@@ -103,7 +103,7 @@ impl<'call> ToolExecutor<ToolCall<'call>> for AcknowledgementTool {
                         json!("partly_accepted"),
                         json!("declined"),
                     ],
-                    None,
+                    /*description*/ None,
                 ),
             ),
             (

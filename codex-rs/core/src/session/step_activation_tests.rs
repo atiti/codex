@@ -1765,3 +1765,47 @@ async fn guardian_v2_empty_model_defaults_are_equivalent() {
         );
     }
 }
+
+#[tokio::test]
+async fn live_review_cannot_override_manual_route_selected_during_lookup() {
+    let ActivationFixture {
+        session,
+        turn,
+        lookup,
+        ..
+    } = activation_fixture(activation_models()).await;
+    let original = turn.next_step_settings.load_full();
+    let revision = session
+        .state
+        .lock()
+        .await
+        .history
+        .conversation_history_snapshot()
+        .user_message_revision();
+    let update_session = Arc::clone(&session);
+    let turn_id = turn.sub_id.clone();
+    let provider = turn.model_provider_id();
+    let update = tokio::spawn(async move {
+        update_session
+            .apply_review_turn_settings(
+                &turn_id,
+                revision,
+                TurnSettingsUpdate {
+                    model: Some(MODEL_B.to_string()),
+                    ..Default::default()
+                },
+                provider,
+            )
+            .await
+    });
+    lookup.wait_until_blocked().await;
+    turn.extension_data
+        .insert(crate::progress_review_routing::ManualReviewRouteLock);
+    lookup.release();
+    assert!(matches!(
+        update.await.expect("review task"),
+        TurnSettingsUpdateOutcome::Rejected { .. }
+    ));
+    assert!(Arc::ptr_eq(&turn.next_step_settings.load_full(), &original));
+    session.abort_all_tasks(TurnAbortReason::Interrupted).await;
+}

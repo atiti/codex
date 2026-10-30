@@ -63,7 +63,7 @@ pub(crate) struct Signals {
 }
 
 #[derive(Default)]
-struct PreviousVerdict(Mutex<Option<(u64, String)>>);
+pub(crate) struct PreviousVerdict(pub(crate) Mutex<Option<(u64, String)>>);
 
 #[derive(Default)]
 struct ActiveClock(Mutex<Clock>);
@@ -372,6 +372,14 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             .filter(|(previous_revision, _)| *previous_revision == revision)
                             .map(|(_, text)| text.clone())
                     });
+                    let prior = prior.map(|value| {
+                        if !value.contains("]: continue.") && !value.contains("\nAcknowledgement:")
+                        {
+                            format!("{value}\nAcknowledgement: missing")
+                        } else {
+                            value
+                        }
+                    });
                     let prompt = evidence_packet(
                         history.review_items().collect(),
                         prior.as_deref(),
@@ -513,7 +521,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         InternalModelContextFragment::new(
                             InternalContextSource::from_static("progress_review"),
                             format!(
-                                "{message}\nTreat this review as fallible evidence. At the next safe boundary, acknowledge the review ID to the user as accepted, partly accepted, or declined; give a brief reason and the concrete next action. Continue the user's full objective. Do not interrupt a live operation solely for this review."
+                                "{message}\nTreat this review as fallible evidence. At the next safe boundary, call acknowledge_progress_review with the exact review ID, your decision, reason, and concrete next action; also briefly tell the user. Continue the user's full objective. Do not interrupt a live operation solely for this review."
                             ),
                         ),
                     );
@@ -572,10 +580,16 @@ impl<C: Send + Sync + 'static> ToolContributor for ProgressReview<C> {
         let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
             return Vec::new();
         };
-        vec![Arc::new(crate::progress_checkpoint::CheckpointTool::new(
-            self.manager.clone(),
-            thread_id,
-        ))]
+        vec![
+            Arc::new(crate::progress_checkpoint::CheckpointTool::new(
+                self.manager.clone(),
+                thread_id,
+            )),
+            Arc::new(crate::progress_checkpoint::AcknowledgementTool {
+                manager: self.manager.clone(),
+                thread_id,
+            }),
+        ]
     }
 }
 
@@ -621,7 +635,7 @@ pub fn install_progress_review<C: Send + Sync + 'static>(
     registry.tool_contributor(extension);
 }
 
-fn persist_from_store(store: &codex_extension_api::ExtensionData) {
+pub(crate) fn persist_from_store(store: &codex_extension_api::ExtensionData) {
     if let (Some(enabled), Some(clock), Some(previous)) = (
         store.get::<Enabled>(),
         store.get::<ActiveClock>(),

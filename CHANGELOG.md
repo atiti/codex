@@ -2,6 +2,8 @@ The changelog can be found on the [releases page](https://github.com/openai/code
 
 ## Unreleased
 
+- Record structured progress-review acknowledgements, reject stale and duplicate IDs, and flag missing receipts for subsequent reviews.
+
 - Identify progress reviews and ask the working agent to acknowledge adjustments and state its next action; later reviews assess follow-through against observed evidence.
 
 - Accept progress-review verdicts enclosed in a single JSON code block, document the reason byte limit in the reviewer prompt, and report safe validation categories when a verdict is rejected.

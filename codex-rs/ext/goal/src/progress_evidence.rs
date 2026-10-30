@@ -149,7 +149,7 @@ pub(crate) fn evidence_packet(
         clipped(turn_request.unwrap_or("unavailable"), /*limit*/ 4000),
         clipped(goal.unwrap_or("none"), /*limit*/ 4000),
         &user[..user_end],
-        clipped(prior.unwrap_or("unavailable"), /*limit*/ 1200),
+        clipped(prior.unwrap_or("unavailable"), /*limit*/ 2400),
         selected.join("\n")
     )
 }

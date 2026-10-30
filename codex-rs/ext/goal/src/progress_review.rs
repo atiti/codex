@@ -414,15 +414,23 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             .await;
                         continue;
                     };
-                    let Some(verdict) = parse_verdict(&raw) else {
-                        thread
-                            .report_goal_completion_review(
-                                &turn_id,
-                                "Progress review returned an invalid verdict; work continues."
-                                    .to_string(),
-                            )
-                            .await;
-                        continue;
+                    let verdict = match parse_verdict(&raw) {
+                        Ok(verdict) => verdict,
+                        Err(error) => {
+                            // Keep private reviewer output out of diagnostics and rollouts.
+                            tracing::warn!(
+                                error,
+                                response_bytes = raw.len(),
+                                "invalid progress verdict"
+                            );
+                            thread
+                                .report_goal_completion_review(
+                                    &turn_id,
+                                    format!("Progress review returned an invalid verdict ({error}); work continues."),
+                                )
+                                .await;
+                            continue;
+                        }
                     };
                     if thread.current_turn_model(&turn_id).await.is_none() {
                         break;

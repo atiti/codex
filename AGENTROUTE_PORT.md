@@ -67,4 +67,9 @@ can become the owner.
 
 ## Reviewer-guided live escalation
 
+Progress reviews accept a JSON object or one enclosing Markdown JSON code block.
+The reason must be nonempty and at most 1000 UTF-8 bytes. Invalid decisions, tiers,
+unknown fields, and surrounding prose are rejected. Rejections show a validation
+category without exposing the private reviewer response, and the active task continues.
+
 The Goal extension accepts an optional bounded `model_tier` verdict. AgentRoute can supply `progress_review_routes` as a JSON-encoded tier allowlist. The narrow core bridge publishes authorized escalations through existing routed turn settings; it checks turn identity and user revision and never interrupts captured operations. Downgrades remain advisory. This is off unless an allowlist is supplied.

@@ -46,5 +46,5 @@ Settings:
     Check which agents are working under /root before delegating more work.
 07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:function_call/collaboration.list_agents:{"path_prefix":"/root"}
+08:function_call/agentroute_collaboration.list_agents:{"path_prefix":"/root"}
 09:function_call_output:{"agents":[{"agent_name":"/root","agent_status":"running"}]}

@@ -10,7 +10,11 @@ def partition(targets: list[str]) -> tuple[list[str], list[str]]:
         raise ValueError("expected a nonempty list of Bazel labels")
     if len(targets) != len(set(targets)):
         raise ValueError("duplicate Bazel labels")
-    wine = [target for target in targets if "wine" in target or "/remote_env_windows:" in target]
+    wine = [
+        target
+        for target in targets
+        if "wine" in target or "/remote_env_windows:" in target
+    ]
     native = [target for target in targets if target not in wine]
     if not wine or not native:
         raise ValueError("both partitions must contain tests")
@@ -27,7 +31,10 @@ def main() -> None:
         parser.error(str(error))
     selected = native if args.partition == "native" else wine
     print("\n".join(selected))
-    print(f"Selected {len(selected)} of {len(native) + len(wine)} tests ({args.partition})", file=sys.stderr)
+    print(
+        f"Selected {len(selected)} of {len(native) + len(wine)} tests ({args.partition})",
+        file=sys.stderr,
+    )
 
 
 if __name__ == "__main__":

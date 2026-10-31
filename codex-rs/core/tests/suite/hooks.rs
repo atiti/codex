@@ -6439,7 +6439,7 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
                 }
             }))
             .expect("serialize route output");
-            hook.push_str(&format!("else:\n    print(json.dumps({response}))\n"));
+            hook.push_str(&format!("else:\n    print({:?})\n", response));
             fs::write(hook_path, hook).expect("write route output");
 
             let stop_script_path = home.join("agentroute_stop_hook.py");

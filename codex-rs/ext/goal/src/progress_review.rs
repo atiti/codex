@@ -63,7 +63,7 @@ pub(crate) struct Signals {
 }
 
 #[derive(Default)]
-struct PreviousVerdict(Mutex<Option<(u64, String)>>);
+pub(crate) struct PreviousVerdict(pub(crate) Mutex<Option<(u64, String)>>);
 
 #[derive(Default)]
 struct ActiveClock(Mutex<Clock>);
@@ -372,6 +372,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             .filter(|(previous_revision, _)| *previous_revision == revision)
                             .map(|(_, text)| text.clone())
                     });
+                    let prior = prior.map(review_with_receipt_status);
                     let prompt = evidence_packet(
                         history.review_items().collect(),
                         prior.as_deref(),
@@ -414,15 +415,23 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             .await;
                         continue;
                     };
-                    let Some(verdict) = parse_verdict(&raw) else {
-                        thread
-                            .report_goal_completion_review(
-                                &turn_id,
-                                "Progress review returned an invalid verdict; work continues."
-                                    .to_string(),
-                            )
-                            .await;
-                        continue;
+                    let verdict = match parse_verdict(&raw) {
+                        Ok(verdict) => verdict,
+                        Err(error) => {
+                            // Keep private reviewer output out of diagnostics and rollouts.
+                            tracing::warn!(
+                                error,
+                                response_bytes = raw.len(),
+                                "invalid progress verdict"
+                            );
+                            thread
+                                .report_goal_completion_review(
+                                    &turn_id,
+                                    format!("Progress review returned an invalid verdict ({error}); work continues."),
+                                )
+                                .await;
+                            continue;
+                        }
                     };
                     if thread.current_turn_model(&turn_id).await.is_none() {
                         break;
@@ -458,8 +467,14 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         }
                     }
                     let message = format!(
-                        "Independent progress review: {}. {}",
-                        verdict.decision, verdict.reason
+                        "Independent progress review [{}-{}]: {}. {}",
+                        turn_id,
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_nanos(),
+                        verdict.decision,
+                        verdict.reason
                     );
                     if let Ok(mut previous) = previous_verdict.0.lock() {
                         *previous = Some((revision, message.clone()));
@@ -499,7 +514,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         InternalModelContextFragment::new(
                             InternalContextSource::from_static("progress_review"),
                             format!(
-                                "{message}\nTreat this review as fallible evidence. Continue the user's full objective; adopt the recommendation or briefly explain why not. Do not interrupt a live operation solely for this review."
+                                "{message}\nTreat this review as fallible evidence. At the next safe boundary, call acknowledge_progress_review with the exact review ID, your decision, reason, and concrete next action; also briefly tell the user. Continue the user's full objective. Do not interrupt a live operation solely for this review."
                             ),
                         ),
                     );
@@ -558,10 +573,16 @@ impl<C: Send + Sync + 'static> ToolContributor for ProgressReview<C> {
         let Ok(thread_id) = ThreadId::from_string(thread_store.level_id()) else {
             return Vec::new();
         };
-        vec![Arc::new(crate::progress_checkpoint::CheckpointTool::new(
-            self.manager.clone(),
-            thread_id,
-        ))]
+        vec![
+            Arc::new(crate::progress_checkpoint::CheckpointTool::new(
+                self.manager.clone(),
+                thread_id,
+            )),
+            Arc::new(crate::progress_checkpoint::AcknowledgementTool {
+                manager: self.manager.clone(),
+                thread_id,
+            }),
+        ]
     }
 }
 
@@ -607,7 +628,15 @@ pub fn install_progress_review<C: Send + Sync + 'static>(
     registry.tool_contributor(extension);
 }
 
-fn persist_from_store(store: &codex_extension_api::ExtensionData) {
+fn review_with_receipt_status(value: String) -> String {
+    if !value.contains("]: continue.") && !value.contains("\nAcknowledgement:") {
+        format!("{value}\nAcknowledgement: missing")
+    } else {
+        value
+    }
+}
+
+pub(crate) fn persist_from_store(store: &codex_extension_api::ExtensionData) {
     if let (Some(enabled), Some(clock), Some(previous)) = (
         store.get::<Enabled>(),
         store.get::<ActiveClock>(),

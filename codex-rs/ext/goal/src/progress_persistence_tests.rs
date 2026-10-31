@@ -56,3 +56,25 @@ fn loads_state_written_before_reporting_clock_existed() {
     assert_eq!(restored.report_seconds, 0);
     assert_eq!(restored.previous, Some((5, "adjust".into())));
 }
+
+#[test]
+fn restores_long_review_with_receipt() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = path(dir.path(), "thread");
+    let message = format!(
+        "Independent progress review [id]: adjust. {}\nAcknowledgement: accepted. {} Next action: {}",
+        "x".repeat(1000),
+        "r".repeat(500),
+        "a".repeat(500)
+    );
+    save(
+        &file,
+        &SavedReview {
+            active_seconds: 10,
+            report_seconds: 20,
+            previous: Some((7, message.clone())),
+        },
+    )
+    .unwrap();
+    assert_eq!(load(&file).previous, Some((7, message)));
+}

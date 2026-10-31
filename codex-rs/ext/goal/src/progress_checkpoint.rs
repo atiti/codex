@@ -16,6 +16,140 @@ use codex_tools::ResponsesApiTool;
 use serde::Deserialize;
 use serde_json::json;
 
+pub(crate) struct AcknowledgementTool {
+    pub manager: Weak<ThreadManager>,
+    pub thread_id: ThreadId,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Acknowledgement {
+    review_id: String,
+    decision: String,
+    reason: String,
+    next_action: String,
+}
+
+fn parse_acknowledgement(raw: &str) -> Result<Acknowledgement, FunctionCallError> {
+    let value: Acknowledgement = serde_json::from_str(raw)
+        .map_err(|_| FunctionCallError::RespondToModel("invalid acknowledgement".into()))?;
+    if value.review_id.trim().is_empty()
+        || value.review_id.len() > 128
+        || !matches!(
+            value.decision.as_str(),
+            "accepted" | "partly_accepted" | "declined"
+        )
+        || value.reason.trim().is_empty()
+        || value.reason.len() > 500
+        || value.next_action.trim().is_empty()
+        || value.next_action.len() > 500
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "invalid acknowledgement fields".into(),
+        ));
+    }
+    Ok(value)
+}
+
+fn record_acknowledgement(
+    previous: &crate::progress_review::PreviousVerdict,
+    value: &Acknowledgement,
+    revision: u64,
+) -> Result<(), FunctionCallError> {
+    let mut state = previous
+        .0
+        .lock()
+        .map_err(|_| FunctionCallError::RespondToModel("review state unavailable".into()))?;
+    let (review_revision, message) = state
+        .as_mut()
+        .ok_or_else(|| FunctionCallError::RespondToModel("no review available".into()))?;
+    if *review_revision != revision {
+        return Err(FunctionCallError::RespondToModel(
+            "review was superseded by new user input".into(),
+        ));
+    }
+    if !message.starts_with(&format!(
+        "Independent progress review [{}]:",
+        value.review_id
+    )) || message.contains("\nAcknowledgement:")
+        || message.contains("]: continue.")
+    {
+        return Err(FunctionCallError::RespondToModel(
+            "review ID is stale, already acknowledged, or does not require acknowledgement".into(),
+        ));
+    }
+    message.push_str(&format!(
+        "\nAcknowledgement: {}. {} Next action: {}",
+        value.decision, value.reason, value.next_action
+    ));
+    Ok(())
+}
+
+impl<'call> ToolExecutor<ToolCall<'call>> for AcknowledgementTool {
+    fn tool_name(&self) -> ToolName {
+        ToolName::plain("acknowledge_progress_review")
+    }
+    fn spec(&self) -> ToolSpec {
+        let properties = BTreeMap::from([
+            (
+                "review_id".into(),
+                JsonSchema::string(Some("Exact review ID".into())),
+            ),
+            (
+                "decision".into(),
+                JsonSchema::string_enum(
+                    vec![
+                        json!("accepted"),
+                        json!("partly_accepted"),
+                        json!("declined"),
+                    ],
+                    /*description*/ None,
+                ),
+            ),
+            (
+                "reason".into(),
+                JsonSchema::string(Some("Reason, at most 500 bytes".into())),
+            ),
+            (
+                "next_action".into(),
+                JsonSchema::string(Some("Concrete next action, at most 500 bytes".into())),
+            ),
+        ]);
+        ToolSpec::Function(ResponsesApiTool { name: "acknowledge_progress_review".into(), description: "Record your decision and next action for a progress review. This is a statement of intent, not evidence of completion.".into(), strict: false, defer_loading: None, parameters: JsonSchema::object(properties, Some(vec!["review_id".into(), "decision".into(), "reason".into(), "next_action".into()]), Some(false.into())), output_schema: None })
+    }
+    fn handle<'a>(
+        &'a self,
+        invocation: ToolCall<'call>,
+    ) -> codex_extension_api::ToolExecutorFuture<'a>
+    where
+        'call: 'a,
+    {
+        Box::pin(async move {
+            let value = parse_acknowledgement(invocation.function_arguments()?)?;
+            let manager = self.manager.upgrade().ok_or_else(|| {
+                FunctionCallError::RespondToModel("thread manager unavailable".into())
+            })?;
+            let thread = manager
+                .get_thread(self.thread_id)
+                .await
+                .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+            let previous = thread
+                .thread_extension_data()
+                .get::<crate::progress_review::PreviousVerdict>()
+                .ok_or_else(|| FunctionCallError::RespondToModel("no review available".into()))?;
+            let revision = thread
+                .conversation_history_snapshot()
+                .await
+                .user_message_revision();
+            record_acknowledgement(&previous, &value, revision)?;
+            crate::progress_review::persist_from_store(thread.thread_extension_data());
+            Ok(Box::new(JsonToolOutput::new(
+                json!({"recorded": true, "review_id": value.review_id, "note": "Intent recorded; follow-through requires separate evidence."}),
+            )) as Box<dyn ToolOutput>)
+        })
+    }
+}
+
 pub(crate) struct CheckpointTool {
     manager: Weak<ThreadManager>,
     thread_id: ThreadId,

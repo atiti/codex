@@ -251,7 +251,7 @@ impl Session {
             turn_id,
             update,
             Some(provider),
-            None,
+            /*chatgpt_profile_home*/ None,
             Some(revision),
         )
         .await
@@ -269,7 +269,7 @@ impl Session {
             update,
             model_provider,
             chatgpt_profile_home,
-            None,
+            /*review_revision*/ None,
         )
         .await
     }

@@ -115,6 +115,18 @@ async fn goal_reviewer_uses_active_provider_with_isolated_read_only_context() ->
 async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
     let server = start_mock_server().await;
     let review_server = start_mock_server().await;
+    let continuation = mount_response_once_match(
+        &server,
+        |request: &wiremock::Request| {
+            String::from_utf8_lossy(&request.body).contains("Return to the requested feature")
+        },
+        sse_response(sse(vec![
+            ev_response_created("after-review"),
+            ev_assistant_message("acknowledgement", "I will return to the requested feature."),
+            ev_completed("after-review"),
+        ])),
+    )
+    .await;
     let root = mount_response_once_match(
         &server,
         |request: &wiremock::Request| {
@@ -230,5 +242,18 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
             .deliver_progress_review(&turn_id, revision, advice)
             .await
     );
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    // Queue acceptance alone does not prove delivery to the working model.
+    // Assert the actual subsequent root request contains the injected context.
+    let request = continuation
+        .requests()
+        .into_iter()
+        .find(|request| request.body_contains_text("Return to the requested feature"))
+        .expect("working model request after progress review");
+    assert!(request.body_contains_text("<codex_internal_context"));
+    assert!(request.body_contains_text("Return to the requested feature"));
     Ok(())
 }

@@ -24,6 +24,7 @@ use crate::tools::handlers::RequestPermissionsHandler;
 use crate::tools::handlers::RequestPluginInstallHandler;
 use crate::tools::handlers::RequestUserInputAsyncHandler;
 use crate::tools::handlers::RequestUserInputHandler;
+use crate::tools::handlers::ReviewGithubHandler;
 use crate::tools::handlers::SendMessageToUserAsyncHandler;
 use crate::tools::handlers::SleepHandler;
 use crate::tools::handlers::TestSyncHandler;
@@ -1389,6 +1390,17 @@ fn add_core_utility_tools(context: &CoreToolPlanContext<'_>, registry: &mut Tool
         registry.add(GetContextRemainingHandler::new(
             messages.and_then(|messages| messages.get_context_remaining.as_ref()),
         ));
+    }
+
+    if features.enabled(Feature::ReviewGithubEvidence)
+        && matches!(
+            turn_context.session_source,
+            codex_protocol::protocol::SessionSource::SubAgent(
+                codex_protocol::protocol::SubAgentSource::Review
+            )
+        )
+    {
+        registry.add(ReviewGithubHandler);
     }
 
     let current_time_reminder_enabled = features.enabled(Feature::CurrentTimeReminder);

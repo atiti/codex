@@ -232,3 +232,134 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn reviewer_github_tool_is_exposed_and_runs_fixed_query() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github", || {
+        reviewer_github_tool_test(true)
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn reviewer_github_tool_denies_without_allow_rule() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github_denied", || {
+        reviewer_github_tool_test(false)
+    })
+}
+
+#[cfg(unix)]
+async fn reviewer_github_tool_test(allow: bool) -> Result<()> {
+    use codex_features::Feature;
+    use core_test_support::responses::{ev_function_call, mount_sse_sequence};
+    core_test_support::skip_if_no_network!(Ok(()));
+    use std::os::unix::fs::PermissionsExt;
+    let server = start_mock_server().await;
+    let review_server = start_mock_server().await;
+    let _root = mount_response_once_match(
+        &server,
+        |r: &wiremock::Request| {
+            String::from_utf8_lossy(&r.body).contains("root stays active for github")
+        },
+        sse_response(sse(vec![ev_response_created("root"), ev_completed("root")]))
+            .set_delay(Duration::from_secs(10)),
+    )
+    .await;
+    let reviewer = mount_sse_sequence(
+        &review_server,
+        vec![
+            sse(vec![
+                ev_response_created("review1"),
+                ev_function_call(
+                    "gh1",
+                    "review_github_pull_request",
+                    r#"{"repository":"atiti/agent-router","pull_request":136}"#,
+                ),
+                ev_completed("review1"),
+            ]),
+            sse(vec![
+                ev_response_created("review2"),
+                ev_assistant_message("decision", r#"{"decision":"continue","reason":"test"}"#),
+                ev_completed("review2"),
+            ]),
+        ],
+    )
+    .await;
+    let tool_dir = tempfile::tempdir()?;
+    let gh = tool_dir.path().join("gh");
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"OPEN\",\"headRefOid\":\"testhead\"}'\n",
+    )?;
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))?;
+    let path = tool_dir.path().to_string_lossy().into_owned();
+    let review_url = format!("{}/v1", review_server.uri());
+    let test = test_codex()
+        .with_pre_build_hook(move |home| {
+            std::fs::write(home.join("config.toml"), "# load user rules\n").unwrap();
+            std::fs::create_dir_all(home.join("rules")).unwrap();
+            std::fs::write(
+                home.join("rules/default.rules"),
+                if allow {
+                    r#"prefix_rule(pattern=["gh", "pr", "view"], decision="allow")"#
+                } else {
+                    r#"prefix_rule(pattern=["gh", "pr", "view"], decision="forbidden")"#
+                },
+            )
+            .unwrap();
+        })
+        .with_config(move |config| {
+            config
+                .features
+                .enable(Feature::ReviewGithubEvidence)
+                .unwrap();
+            config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .insert("PATH".into(), path);
+            config.progress_review_provider = Some("review-provider".into());
+            let mut provider = config.model_provider.clone();
+            provider.base_url = Some(review_url);
+            config
+                .model_providers
+                .insert("review-provider".into(), provider);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let started = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "root stays active for github".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let codex_core::TurnInputSubmission::Started { turn_id, .. } = started else {
+        panic!("turn did not start")
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnStarted(_))
+    })
+    .await;
+    test.codex
+        .review_progress(&turn_id, "inspect PR 136".into())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let requests = reviewer.requests();
+    assert!(
+        requests[0].body_json()["tools"]
+            .to_string()
+            .contains("review_github_pull_request")
+    );
+    assert!(
+        requests[1].body_contains_text(if allow {
+            "testhead"
+        } else {
+            "requires an explicit gh pr view"
+        }),
+        "tool output must reach reviewer: {}",
+        requests[1].body_json()["input"]
+    );
+    Ok(())
+}

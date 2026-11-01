@@ -867,3 +867,36 @@ fn assemble_compaction_history_keeps_compaction_last() {
     ];
     assert_eq!(refreshed, expected);
 }
+
+#[test]
+fn grok_compaction_retry_is_bounded_and_specific() {
+    let incomplete = |reason: &str| {
+        CodexErrorDetails::ResponseIncomplete(Box::new(
+            codex_protocol::error::ResponseIncompleteError {
+                reason: reason.to_string(),
+                response_id: None,
+                token_usage: None,
+            },
+        ))
+    };
+    assert!(should_retry_grok_compaction(
+        "agentroute-grok",
+        false,
+        &incomplete("max_output_tokens")
+    ));
+    assert!(!should_retry_grok_compaction(
+        "agentroute-grok",
+        true,
+        &incomplete("max_output_tokens")
+    ));
+    assert!(!should_retry_grok_compaction(
+        "openai",
+        false,
+        &incomplete("max_output_tokens")
+    ));
+    assert!(!should_retry_grok_compaction(
+        "agentroute-grok",
+        false,
+        &incomplete("content_filter")
+    ));
+}

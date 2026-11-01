@@ -321,6 +321,9 @@ async fn reviewer_github_tool_test(
     let path = tool_dir.path().to_string_lossy().into_owned();
     let review_url = format!("{}/v1", review_server.uri());
     let test = test_codex()
+        .with_model_info_override("gpt-5.5", |model| {
+            model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeModeOnly);
+        })
         .with_pre_build_hook(move |home| {
             std::fs::write(home.join("config.toml"), "# load user rules\n").unwrap();
             std::fs::create_dir_all(home.join("rules")).unwrap();

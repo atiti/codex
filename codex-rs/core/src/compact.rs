@@ -339,6 +339,7 @@ async fn run_compact_task_inner_impl(
 
     let max_retries = turn_context.model_provider().info().stream_max_retries();
     let mut retries = 0;
+    let mut grok_incomplete_retried = false;
     let compaction_response = loop {
         // Clone is required because of the loop
         let mut turn_input = history
@@ -395,6 +396,26 @@ async fn run_compact_task_inner_impl(
                 ) =>
             {
                 return Err(err);
+            }
+            // Retry a Grok output-limit failure once with a stricter summary instruction.
+            // The original history stays intact, and drain_to_completed has already
+            // recorded the incomplete attempt's usage. Never accept partial output.
+            Err(e)
+                if should_retry_grok_compaction(
+                    &turn_context.model_provider_id(),
+                    grok_incomplete_retried,
+                    e.details(),
+                ) =>
+            {
+                grok_incomplete_retried = true;
+                history.record_items(
+                    &[ResponseInputItem::from(vec![UserInput::Text {
+                        text: "The previous checkpoint exceeded its output limit. Summarize the full conversation concisely in at most 2,000 words. Preserve the user objective, decisions, constraints, progress, and next steps. Do not repeat tool output.".to_string(),
+                        text_elements: Vec::new(),
+                    }]).into()],
+                    model_info.truncation_policy.into(),
+                );
+                continue;
             }
             Err(e)
                 if matches!(
@@ -986,3 +1007,13 @@ async fn drain_to_completed(
 #[cfg(test)]
 #[path = "compact_tests.rs"]
 mod tests;
+
+fn should_retry_grok_compaction(
+    provider: &str,
+    already_retried: bool,
+    error: &CodexErrorDetails,
+) -> bool {
+    provider == "agentroute-grok"
+        && !already_retried
+        && matches!(error, CodexErrorDetails::ResponseIncomplete(incomplete) if incomplete.reason == "max_output_tokens")
+}

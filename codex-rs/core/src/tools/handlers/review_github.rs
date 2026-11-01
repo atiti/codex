@@ -8,6 +8,7 @@ use crate::tools::registry::CoreToolRuntime;
 use crate::tools::registry::ToolExecutor;
 use codex_tools::JsonSchema;
 use codex_tools::ResponsesApiTool;
+use codex_tools::ToolExposure;
 use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use serde::Deserialize;
@@ -41,6 +42,10 @@ impl ToolExecutor<ToolInvocation> for ReviewGithubHandler {
     fn tool_name(&self) -> ToolName {
         ToolName::plain("review_github_pull_request")
     }
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::DirectModelOnly
+    }
+
     fn spec(&self) -> ToolSpec {
         ToolSpec::Function(ResponsesApiTool { name: "review_github_pull_request".into(), description: "Read current GitHub pull request state, merge commit, head and CI checks using gh. Supply owner/repository and pull request number.".into(), strict: false, defer_loading: None,
             parameters: JsonSchema::object(BTreeMap::from([("repository".into(), JsonSchema::string(Some("GitHub owner/repository".into()))), ("pull_request".into(), JsonSchema::number(Some("Pull request number".into())))]), Some(vec!["repository".into(), "pull_request".into()]), Some(false.into())), output_schema: None })

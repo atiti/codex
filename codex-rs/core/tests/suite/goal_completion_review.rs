@@ -237,7 +237,7 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
 #[test]
 fn reviewer_github_tool_is_exposed_and_runs_fixed_query() -> Result<()> {
     core_test_support::test_codex::run_test_with_large_stack("reviewer_github", || {
-        reviewer_github_tool_test(true)
+        reviewer_github_tool_test(true, false, false)
     })
 }
 
@@ -245,14 +245,35 @@ fn reviewer_github_tool_is_exposed_and_runs_fixed_query() -> Result<()> {
 #[test]
 fn reviewer_github_tool_denies_without_allow_rule() -> Result<()> {
     core_test_support::test_codex::run_test_with_large_stack("reviewer_github_denied", || {
-        reviewer_github_tool_test(false)
+        reviewer_github_tool_test(false, false, false)
     })
 }
 
 #[cfg(unix)]
-async fn reviewer_github_tool_test(allow: bool) -> Result<()> {
+#[test]
+fn reviewer_github_tool_disappears_with_denied_reads() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github_restricted", || {
+        reviewer_github_tool_test(true, true, false)
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn reviewer_github_tool_limits_large_output() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github_large", || {
+        reviewer_github_tool_test(true, false, true)
+    })
+}
+
+#[cfg(unix)]
+async fn reviewer_github_tool_test(
+    allow: bool,
+    deny_reads: bool,
+    large_output: bool,
+) -> Result<()> {
     use codex_features::Feature;
-    use core_test_support::responses::{ev_function_call, mount_sse_sequence};
+    use core_test_support::responses::ev_function_call;
+    use core_test_support::responses::mount_sse_sequence;
     core_test_support::skip_if_no_network!(Ok(()));
     use std::os::unix::fs::PermissionsExt;
     let server = start_mock_server().await;
@@ -290,7 +311,11 @@ async fn reviewer_github_tool_test(allow: bool) -> Result<()> {
     let gh = tool_dir.path().join("gh");
     std::fs::write(
         &gh,
-        "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"OPEN\",\"headRefOid\":\"testhead\"}'\n",
+        if large_output {
+            "#!/bin/sh\n/usr/bin/yes x | /usr/bin/head -c 260000\n"
+        } else {
+            "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"OPEN\",\"headRefOid\":\"testhead\"}'\n"
+        },
     )?;
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))?;
     let path = tool_dir.path().to_string_lossy().into_owned();
@@ -310,6 +335,27 @@ async fn reviewer_github_tool_test(allow: bool) -> Result<()> {
             .unwrap();
         })
         .with_config(move |config| {
+            if deny_reads {
+                use codex_protocol::models::PermissionProfile;
+                use codex_protocol::permissions::FileSystemAccessMode;
+                use codex_protocol::permissions::FileSystemSandboxEntry;
+                use codex_protocol::permissions::NetworkSandboxPolicy;
+                use codex_utils_absolute_path::AbsolutePathBuf;
+                let mut fs = PermissionProfile::read_only().file_system_sandbox_policy();
+                fs.entries.push(FileSystemSandboxEntry::new(
+                    AbsolutePathBuf::try_from("/private/tmp/reviewer-denied")
+                        .unwrap()
+                        .into(),
+                    FileSystemAccessMode::Deny,
+                ));
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                        &fs,
+                        NetworkSandboxPolicy::Restricted,
+                    ))
+                    .unwrap();
+            }
             config
                 .features
                 .enable(Feature::ReviewGithubEvidence)
@@ -347,13 +393,23 @@ async fn reviewer_github_tool_test(allow: bool) -> Result<()> {
         .await
         .map_err(anyhow::Error::msg)?;
     let requests = reviewer.requests();
+    if deny_reads {
+        assert!(
+            !requests[0].body_json()["tools"]
+                .to_string()
+                .contains("review_github_pull_request")
+        );
+        return Ok(());
+    }
     assert!(
         requests[0].body_json()["tools"]
             .to_string()
             .contains("review_github_pull_request")
     );
     assert!(
-        requests[1].body_contains_text(if allow {
+        requests[1].body_contains_text(if large_output {
+            "GitHub response too large"
+        } else if allow {
             "testhead"
         } else {
             "requires an explicit gh pr view"

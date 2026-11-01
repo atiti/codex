@@ -108,7 +108,7 @@ impl CodexThread {
     }
 }
 
-const REVIEW_INSTRUCTIONS: &str = "Independently audit whether the user's goal is complete. Use available read-only evidence. Never assume a claim or prior message proves an outcome. Return only a JSON object with decision (complete, continue, or blocked) and reason (a concrete, short explanation). A missing check, inaccessible evidence, or uncertainty means continue. Blocked requires an exact external dependency.";
+const REVIEW_INSTRUCTIONS: &str = "Use review_github_pull_request to inspect GitHub PR status and CI when relevant. Independently audit whether the user's goal is complete. Use available read-only evidence. Never assume a claim or prior message proves an outcome. Return only a JSON object with decision (complete, continue, or blocked) and reason (a concrete, short explanation). A missing check, inaccessible evidence, or uncertainty means continue. Blocked requires an exact external dependency.";
 
 pub(crate) async fn run(
     session: Arc<Session>,
@@ -193,6 +193,31 @@ pub(crate) async fn run_with_instructions(
             config.model = Some(model);
         }
     }
+    // A host bridge must never weaken managed restrictions or denied reads.
+    if !review_github_allowed(
+        ctx.network.is_some(),
+        matches!(ctx.permission_profile(), PermissionProfile::External { .. }),
+        config
+            .config_layer_stack
+            .requirements_toml()
+            .network
+            .is_some()
+            || config
+                .config_layer_stack
+                .requirements()
+                .exec_policy
+                .is_some(),
+        config
+            .config_layer_stack
+            .requirements()
+            .permission_profile
+            .can_set(&PermissionProfile::Disabled)
+            .is_ok(),
+        ctx.file_system_sandbox_policy()
+            .has_denied_read_restrictions(),
+    ) {
+        let _ = config.features.disable(Feature::ReviewGithubEvidence);
+    }
     config.permissions.approval_policy = Constrained::allow_only(AskForApproval::Never);
     config
         .permissions
@@ -269,4 +294,28 @@ pub(crate) async fn run_with_instructions(
     // Timeout or consumer failure must stop this one-shot reviewer as well.
     review_token.cancel();
     result.map_err(|_| "goal reviewer timed out".to_string())?
+}
+
+fn review_github_allowed(
+    proxy: bool,
+    external: bool,
+    managed_network: bool,
+    full_access_allowed: bool,
+    denied_reads: bool,
+) -> bool {
+    !proxy && !external && !managed_network && full_access_allowed && !denied_reads
+}
+
+#[cfg(test)]
+mod github_permission_tests {
+    use super::review_github_allowed;
+    #[test]
+    fn rejects_each_managed_restriction() {
+        assert!(review_github_allowed(false, false, false, true, false));
+        assert!(!review_github_allowed(true, false, false, true, false));
+        assert!(!review_github_allowed(false, true, false, true, false));
+        assert!(!review_github_allowed(false, false, true, true, false));
+        assert!(!review_github_allowed(false, false, false, false, false));
+        assert!(!review_github_allowed(false, false, false, true, true));
+    }
 }

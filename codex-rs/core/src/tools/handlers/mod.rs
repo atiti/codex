@@ -1,3 +1,6 @@
+mod review_github;
+pub use review_github::ReviewGithubHandler;
+pub(crate) use review_github::ReviewerGithubPolicy;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 mod current_time;

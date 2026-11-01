@@ -441,6 +441,8 @@ pub enum Feature {
     Goals,
     /// Independently review the direction of long-running root threads.
     ProgressReview,
+    /// Allow isolated reviewers to query GitHub through the bounded host bridge.
+    ReviewGithubEvidence,
     /// Local current-task titles and exact resource ownership across independent tasks.
     TaskAwareness,
     /// Add current context-window metadata to model-visible context.
@@ -2126,6 +2128,12 @@ pub const FEATURES: &[FeatureSpec] = &[
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ReviewGithubEvidence,
+        key: "review_github_evidence",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::ProgressReview,

@@ -126,13 +126,27 @@ jobs:
             --print-failed-action-summary
             --print-failed-test-logs
           )
-          bazel_test_args=(
-            test
+          bazel_shared_args=(
             --test_env=RUST_TEST_THREADS=2
             --test_tag_filters=-argument-comment-lint
-            --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
+          bazel_test_args=(test "${bazel_shared_args[@]}" --test_verbose_timeout_warnings)
+          if [[ -z "${BUILDBUDDY_API_KEY:-}" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
+            # Real-time WebSocket and helper fixtures must not compete with a
+            # cold Rust/V8 build on small hosted runners. Compile the same target
+            # set first, then let the unchanged test command execute every test.
+            bazel_build_args=(
+              build "${bazel_shared_args[@]}"
+              --build_tag_filters=-argument-comment-lint
+            )
+            ./.github/scripts/run-bazel-ci.sh \
+              "${bazel_wrapper_args[@]}" \
+              -- \
+              "${bazel_build_args[@]}" \
+              -- \
+              "${bazel_targets[@]}"
+          fi
           ./.github/scripts/run-bazel-ci.sh \
             "${bazel_wrapper_args[@]}" \
             -- \

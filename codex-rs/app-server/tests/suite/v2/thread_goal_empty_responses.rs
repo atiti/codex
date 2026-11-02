@@ -4,19 +4,25 @@ use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
 use app_test_support::create_mock_responses_server_sequence;
+use app_test_support::create_mock_responses_server_sequence_unchecked;
 use codex_app_server_protocol::ConfigBatchWriteParams;
 use codex_app_server_protocol::ConfigEdit;
 use codex_app_server_protocol::ConfigWriteResponse;
 use codex_app_server_protocol::HooksListParams;
 use codex_app_server_protocol::HooksListResponse;
+use codex_app_server_protocol::ItemCompletedNotification;
 use codex_app_server_protocol::MergeStrategy;
+use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
+use codex_app_server_protocol::ThreadItem;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
+use codex_app_server_protocol::TurnStartParams;
 use codex_app_server_protocol::TurnStatus;
+use codex_app_server_protocol::UserInput;
 use codex_features::Feature;
 use core_test_support::responses;
 use pretty_assertions::assert_eq;
@@ -174,5 +180,96 @@ command_windows = """Write-Output '{"continue":false}'"""
     })
     .await??;
     server.verify().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn completion_review_continue_keeps_goal_active_and_reports_activity() -> Result<()> {
+    let server = create_mock_responses_server_sequence_unchecked(vec![
+        responses::sse(vec![
+            responses::ev_response_created("root-update"),
+            responses::ev_function_call("update-goal", "update_goal", r#"{"status":"complete"}"#),
+            responses::ev_completed("root-update"),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("review"),
+            responses::ev_assistant_message(
+                "review-decision",
+                r#"{"decision":"continue","reason":"The release check is missing."}"#,
+            ),
+            responses::ev_completed("review"),
+        ]),
+        responses::sse(vec![
+            responses::ev_response_created("root-finish"),
+            responses::ev_assistant_message(
+                "root-message",
+                "The goal remains active while I add the missing release check.",
+            ),
+            responses::ev_completed("root-finish"),
+        ]),
+    ])
+    .await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("mock-model")
+        .enable_feature(Feature::Goals)
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .build_initialized_with_timeout(Duration::from_secs(30))
+        .await?;
+    let start = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams {
+            model: Some("mock-model".into()),
+            ..Default::default()
+        })
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.read_response(start).await?;
+    let set_goal = app
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({"threadId": thread.id, "objective": "Verify the release check"})),
+        )
+        .await?;
+    let _: ThreadGoalSetResponse = app.read_response(set_goal).await?;
+
+    let completed = app
+        .start_turn_and_wait_for_completion(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Mark the goal complete".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    assert_eq!(TurnStatus::Completed, completed.turn.status);
+    assert_eq!(None, completed.turn.error);
+
+    let mut saw_continue = false;
+    for _ in 0..16 {
+        let item: ItemCompletedNotification = timeout(
+            Duration::from_secs(30),
+            app.read_notification("item/completed"),
+        )
+        .await??;
+        if let ThreadItem::AgentMessage { text, .. } = item.item
+            && text.contains("Review agent · continue (attempt 1)")
+        {
+            saw_continue = true;
+            break;
+        }
+    }
+    assert!(saw_continue, "completion review activity was not visible");
+
+    let get_goal = app
+        .send_raw_request("thread/goal/get", Some(json!({"threadId": thread.id})))
+        .await?;
+    let result: ThreadGoalGetResponse = app.read_response(get_goal).await?;
+    assert_eq!(
+        ThreadGoalStatus::Active,
+        result.goal.expect("goal exists").status
+    );
     Ok(())
 }

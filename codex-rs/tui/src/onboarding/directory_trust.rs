@@ -48,11 +48,10 @@ pub(crate) async fn check_directory_trust(
     } = options;
     let connected = !matches!(target, AppServerTarget::Embedded);
     let mut consent = OnboardingResult::default();
+    let host = crate::agentroute_local_server::project_trust_host(target);
     // Another client can load the saved task while consent is pending. Check both folders.
     let saved_cwd = resumed_thread
-        .filter(|thread| {
-            matches!(target, AppServerTarget::LocalDaemon { .. }) && thread.cwd.as_path() != cwd
-        })
+        .filter(|thread| host == ProjectTrustHost::Local && thread.cwd.as_path() != cwd)
         .map(|thread| thread.cwd.as_path());
     let mut pending_cwds: VecDeque<_> = std::iter::once(cwd)
         .chain(saved_cwd)
@@ -65,11 +64,6 @@ pub(crate) async fn check_directory_trust(
         }
         checked_cwds.push(cwd.clone());
         let cwd = cwd.as_path();
-        let host = if !target.uses_remote_workspace() {
-            ProjectTrustHost::Local
-        } else {
-            ProjectTrustHost::Remote
-        };
         let lookup = read_remote_project_trust(app_server.request_handle(), cwd, host);
         let project = if let Some(draft) = startup_draft.as_deref_mut() {
             draft.run_until(tui, lookup).await??
@@ -81,7 +75,7 @@ pub(crate) async fn check_directory_trust(
             continue;
         };
         // Remote connections retain the existing behavior for saved untrusted folders.
-        if target.uses_remote_workspace() && project.trust_level == Some(TrustLevel::Untrusted) {
+        if host == ProjectTrustHost::Remote && project.trust_level == Some(TrustLevel::Untrusted) {
             continue;
         }
         if cancel == Some(TrustCancelAction::CurrentTask)
@@ -132,7 +126,7 @@ pub(crate) async fn check_directory_trust(
             return Ok(result);
         }
         consent.directory_trust_persisted |= result.directory_trust_persisted;
-        if matches!(target, AppServerTarget::LocalDaemon { .. })
+        if host == ProjectTrustHost::Local
             && let Some(thread) = resumed_thread
         {
             // Another client may have reopened this task in a different folder during consent.

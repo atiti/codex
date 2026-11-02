@@ -101,7 +101,7 @@ async fn build_and_install_compaction(
             .map_or(turn_context.model_info().slug.as_str(), |candidate| {
                 candidate.model_info.slug.as_str()
             }),
-        turn_context.provider.info().name.as_str(),
+        turn_context.model_provider().info().name.as_str(),
     );
     if needs_start && candidate.is_none() {
         sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -146,7 +146,7 @@ async fn build_and_install_compaction(
                         fallback_turn_context.sub_id.as_str(),
                         compaction_id.as_str(),
                         fallback_turn_context.model_info().slug.as_str(),
-                        fallback_turn_context.provider.info().name.as_str(),
+                        fallback_turn_context.model_provider().info().name.as_str(),
                     );
                 let fallback_result = run_remote_compact_v2_attempt(
                     sess,
@@ -243,6 +243,7 @@ async fn build_and_install_compaction(
             compaction_response_id: Some(compaction_response_id),
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
             reviewer_compaction_hash,
+            model_provider_id: compaction_turn_context.model_provider_id(),
         };
         sess.replace_compacted_history(
             new_history,

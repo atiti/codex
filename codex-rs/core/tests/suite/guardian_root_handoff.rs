@@ -39,7 +39,12 @@ async fn handoff(
                 && !has_call_output(request, call_id)
         },
         sse(vec![
-            ev_function_call_with_namespace(call_id, "collaboration", tool, &arguments.to_string()),
+            ev_function_call_with_namespace(
+                call_id,
+                "agentroute_collaboration",
+                tool,
+                &arguments.to_string(),
+            ),
             ev_completed(call_id),
         ]),
     )
@@ -109,7 +114,7 @@ pub(crate) async fn handoff_scenario() -> Result<Vec<ResponsesRequest>> {
         sse(vec![
             ev_function_call_with_namespace(
                 "spawn-leaf",
-                "collaboration",
+                "agentroute_collaboration",
                 "spawn_agent",
                 &json!({"fork_turns":"none", "message":"Inspect.", "task_name":"leaf"}).to_string(),
             ),

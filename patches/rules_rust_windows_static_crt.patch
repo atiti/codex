@@ -1,0 +1,43 @@
+diff --git a/cargo/private/cargo_build_script.bzl b/cargo/private/cargo_build_script.bzl
+--- a/cargo/private/cargo_build_script.bzl
++++ b/cargo/private/cargo_build_script.bzl
+@@ -534,7 +534,7 @@
+     env["CARGO_ENCODED_RUSTFLAGS"] = "\\x1f".join([
+         # Allow build scripts to locate the generated sysroot
+         "--sysroot=${{pwd}}/{}".format(toolchain.sysroot),
+-    ] + ctx.attr.rustc_flags)
++    ] + toolchain.extra_rustc_flags + ctx.attr.rustc_flags)
+ 
+     for f in ctx.attr.crate_features:
+         env["CARGO_FEATURE_" + f.upper().replace("-", "_")] = "1"
+diff --git a/cargo/private/cargo_build_script_runner/bin.rs b/cargo/private/cargo_build_script_runner/bin.rs
+--- a/cargo/private/cargo_build_script_runner/bin.rs
++++ b/cargo/private/cargo_build_script_runner/bin.rs
+@@ -472,12 +472,21 @@
+ 
+ fn get_target_env_vars<P: AsRef<Path>>(rustc: &P) -> Result<BTreeMap<String, String>, String> {
+     // As done by Cargo when constructing a cargo::core::compiler::build_context::target_info::TargetInfo.
+-    let output = Command::new(rustc.as_ref())
+-        .arg("--print=cfg")
+-        .arg(format!(
+-            "--target={}",
+-            env::var("TARGET").expect("missing TARGET")
+-        ))
++    let mut command = Command::new(rustc.as_ref());
++    command.arg("--print=cfg").arg(format!(
++        "--target={}",
++        env::var("TARGET").expect("missing TARGET")
++    ));
++    // Build scripts must observe the same MSVC CRT policy as their target crates.
++    let flags = env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default();
++    if flags
++        .replace("\\x1f", "\x1f")
++        .split('\x1f')
++        .any(|flag| flag == "-Ctarget-feature=+crt-static")
++    {
++        command.arg("-Ctarget-feature=+crt-static");
++    }
++    let output = command
+         .output()
+         .map_err(|err| format!("Error running rustc to get target information: {err}"))?;
+     if !output.status.success() {

@@ -160,9 +160,8 @@ pub enum HookHandlerConfig {
         #[serde(default, rename = "statusMessage")]
         status_message: Option<String>,
         /// Approximate token threshold for spilling this hook's `additionalContext` to disk.
-        /// Unset uses 2,500 tokens; `0` disables spilling for this hook. The threshold is
-        /// evaluated against the original context; a spilled preview also includes recovery
-        /// metadata.
+        /// Unset uses 2,500 tokens; `0` uses the 10,000-token hard cap. Larger values are
+        /// capped at 10,000 tokens so model-visible hook context stays bounded.
         #[serde(
             default,
             rename = "additionalContextLimit",

@@ -41,6 +41,8 @@ pub fn copy_executable(source: &Path, destination: &Path) -> io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         let output = Command::new("/bin/cp")
+            // Copy-on-write keeps concurrent large native fixtures within runner disk limits.
+            .arg("--reflink=auto")
             .arg("--")
             .arg(source)
             .arg(destination)

@@ -693,6 +693,21 @@ impl ToolRegistry {
         mut invocation: ToolInvocation,
         call_state: Option<Arc<ToolCallState>>,
     ) -> Result<AnyToolResult, FunctionCallError> {
+        if invocation
+            .turn
+            .config
+            .features
+            .get()
+            .enabled(codex_features::Feature::TaskAwareness)
+            && let Some(db) = invocation.session.state_db()
+            && !crate::tools::code_mode::is_exec_tool_name(&invocation.tool_name)
+            && !(invocation.tool_name.is_default_namespace()
+                && invocation.tool_name.name == "update_task")
+        {
+            db.heartbeat_task_work(invocation.session.thread_id)
+                .await
+                .map_err(|error| FunctionCallError::RespondToModel(error.to_string()))?;
+        }
         let cancellation_token = invocation.cancellation_token.clone();
         let tool_name = invocation.tool_name.clone();
         let call_id_owned = invocation.call_id.clone();

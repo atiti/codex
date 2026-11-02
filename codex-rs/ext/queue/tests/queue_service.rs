@@ -151,6 +151,7 @@ fn install_registered_queue(
 }
 
 fn write_rejecting_prompt_hook(home: &Path) {
+    let python = if cfg!(windows) { "python" } else { "python3" };
     let script_path = home.join("queue_prompt_hook.py");
     let log_path = home.join("queue_prompt_hook.log");
     let script = format!(
@@ -173,7 +174,7 @@ if payload["prompt"] == "blocked":
             "UserPromptSubmit": [{
                 "hooks": [{
                     "type": "command",
-                    "command": format!("python3 {}", script_path.display()),
+                    "command": format!("{python} \"{}\"", script_path.display()),
                 }]
             }]
         }
@@ -738,6 +739,7 @@ async fn rejected_queue_messages_are_consumed_without_retrying_or_blocking_follo
     let (installed, extensions) = registered_queue_extensions();
     let test = test_codex()
         .with_extensions(extensions)
+        .with_windows_cmd_shell()
         .with_pre_build_hook(write_rejecting_prompt_hook)
         .with_config(trust_discovered_hooks)
         .with_config(|config| config.include_environment_context = false)
@@ -793,6 +795,7 @@ async fn explicitly_started_rejected_queue_messages_are_consumed() -> anyhow::Re
     let responses =
         responses::mount_sse_once(&server, responses::sse_completed("unexpected-turn")).await;
     let test = test_codex()
+        .with_windows_cmd_shell()
         .with_pre_build_hook(write_rejecting_prompt_hook)
         .with_config(trust_discovered_hooks)
         .with_config(|config| config.include_environment_context = false)

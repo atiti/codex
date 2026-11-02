@@ -283,6 +283,7 @@ impl ModelProvider for AmazonBedrockModelProvider {
             image_generation: false,
             web_search: self.endpoint == BedrockEndpoint::Mantle,
             external_web_access: false,
+            namespace_tools: self.info.tool_compatibility.is_none(),
             remote_compaction: RemoteCompactionSupport::V2,
         }
     }
@@ -701,6 +702,7 @@ mod tests {
                 image_generation: false,
                 web_search: true,
                 external_web_access: false,
+                namespace_tools: true,
                 remote_compaction: RemoteCompactionSupport::V2,
             }
         );
@@ -720,6 +722,7 @@ mod tests {
                 image_generation: false,
                 web_search: false,
                 external_web_access: false,
+                namespace_tools: true,
                 remote_compaction: RemoteCompactionSupport::V2,
             }
         );

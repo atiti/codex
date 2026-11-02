@@ -228,6 +228,7 @@ rules_rust.patch(
         # Spill wrapper arguments to a params file to avoid Windows command-line limits.
         "//patches:rules_rust_process_wrapper_param_file.patch",
         "//patches:rules_rust_windows_execroot_separators.patch",
+        "//patches:rules_rust_windows_static_crt.patch",
         "//patches:rules_rust_compiler_thp.patch",
     ],
     strip = 1,
@@ -658,6 +659,8 @@ crate.annotation(
         "@rules_foreign_cc//toolchains:current_ninja_toolchain",
     ],
     crate = "opusic-sys",
+    patch_args = ["-p1"],
+    patches = ["//patches:opusic-sys_materialize_installed_headers.patch"],
 )
 
 # The musl CLI's allocator needs declared native tools and consistent header flags.

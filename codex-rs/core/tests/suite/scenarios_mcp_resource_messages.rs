@@ -161,7 +161,9 @@ async fn mcp_resource_messages(tool_mode: ToolMode) -> Result<()> {
             context_snapshot::format_request_history_snapshot(
                 "Catalog resource descriptions and parameter guidance accompany discovery and reading through Code Mode.",
                 &requests,
-                &ContextSnapshotOptions::default().include_request_settings(),
+                &ContextSnapshotOptions::default()
+                    .rewrite_known_segments()
+                    .include_request_settings(),
             )
         );
     }

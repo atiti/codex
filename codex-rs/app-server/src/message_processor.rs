@@ -379,11 +379,10 @@ impl MessageProcessor {
                     outgoing.clone(),
                     thread_state_manager.clone(),
                 )),
-                Some({
-                    let time_provider =
-                        app_server_time_provider(outgoing.clone(), thread_state_manager.clone());
-                    time_provider
-                }),
+                Some(app_server_time_provider(
+                    outgoing.clone(),
+                    thread_state_manager.clone(),
+                )),
             );
             match code_mode_session_provider {
                 Some(provider) => manager.with_code_mode_session_provider(provider),
@@ -544,6 +543,7 @@ impl MessageProcessor {
             sample_responses,
         );
         let turn_processor = TurnRequestProcessor::new(
+            Arc::clone(&thread_list_state_permit),
             auth_manager,
             Arc::clone(&thread_manager),
             outgoing.clone(),

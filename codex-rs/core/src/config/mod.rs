@@ -260,7 +260,7 @@ pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_CONCURRENT_THREADS_PER_SESSION: usiz
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MIN_WAIT_TIMEOUT_MS: i64 = 10_000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_MAX_WAIT_TIMEOUT_MS: i64 = 3600 * 1000;
 pub(crate) const DEFAULT_MULTI_AGENT_V2_DEFAULT_WAIT_TIMEOUT_MS: i64 = 30_000;
-const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "collaboration";
+pub(crate) const DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "agentroute_collaboration";
 
 pub(crate) const HARD_MIN_MULTI_AGENT_V2_TIMEOUT_MS: i64 = 0;
 pub(crate) const HARD_MAX_MULTI_AGENT_V2_TIMEOUT_MS: i64 =
@@ -649,6 +649,12 @@ pub struct Config {
 
     /// Model used specifically for review sessions.
     pub review_model: Option<String>,
+
+    /// Optional independent progress reviewer route.
+    pub progress_review_model: Option<String>,
+    pub progress_review_provider: Option<String>,
+    /// AgentRoute-authorized live review routes, encoded as bounded JSON.
+    pub progress_review_routes: Option<String>,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -4484,6 +4490,9 @@ impl Config {
             daybreak_enabled: cfg.daybreak.unwrap_or(false),
             service_tier,
             review_model,
+            progress_review_model: cfg.progress_review_model,
+            progress_review_provider: cfg.progress_review_provider,
+            progress_review_routes: cfg.progress_review_routes,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_auto_compact_token_limit_scope: cfg

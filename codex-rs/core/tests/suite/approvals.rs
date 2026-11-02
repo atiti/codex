@@ -2788,7 +2788,11 @@ async fn shell_startup_credentials_are_brokered(
             })
     };
 
-    let outside_dir = tempfile::tempdir_in(std::env::current_dir()?)?;
+    // A checkout under /tmp is already inside the platform's writable scratch roots.
+    // Put the denied target in the user's home so the test exercises a real boundary.
+    let outside_dir = tempfile::tempdir_in(
+        std::env::var_os("HOME").expect("Unix test environment provides HOME"),
+    )?;
     let outside_path = outside_dir.path().join("unsandboxed-snapshot-write");
     let outside_path_arg = shlex::try_join([outside_path.to_string_lossy().as_ref()])?;
     let home = Arc::new(TempDir::new()?);

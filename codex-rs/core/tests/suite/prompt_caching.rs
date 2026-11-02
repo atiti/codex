@@ -279,11 +279,17 @@ async fn prompt_tools_are_consistent_across_requests(
     ]);
     let body0 = req1.single_request().body_json();
 
-    assert_eq!(req1.single_request().instructions_text(), base_instructions);
+    assert_eq!(
+        req1.single_request().instructions_text(),
+        base_instructions.replace("\r\n", "\n")
+    );
     assert_tool_names(&body0, &expected_tools_names);
 
     let body1 = req2.single_request().body_json();
-    assert_eq!(req2.single_request().instructions_text(), base_instructions);
+    assert_eq!(
+        req2.single_request().instructions_text(),
+        base_instructions.replace("\r\n", "\n")
+    );
     assert_tool_names(&body1, &expected_tools_names);
 
     for request in [&req1, &req2] {
@@ -292,7 +298,7 @@ async fn prompt_tools_are_consistent_across_requests(
             .message_input_texts("developer")
             .join("\n");
         if custom_instructions || expected_update_plan_enabled {
-            assert!(developer_text.contains(&mode_instructions));
+            assert!(developer_text.contains(&mode_instructions.replace("\r\n", "\n")));
         } else {
             assert!(!developer_text.contains("update_plan"));
             assert!(developer_text.contains("Plan Mode (Conversational)"));

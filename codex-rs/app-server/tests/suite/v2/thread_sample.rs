@@ -101,6 +101,7 @@ async fn client_with_effort_updates(
     config.with_extra_config(extra_config).write(home.path())?;
     TestAppServer::builder()
         .with_codex_home(home.path())
+        .with_env_overrides(&[("HOME", home.path().to_str())])
         .build_initialized_with_timeout(WAIT)
         .await
 }
@@ -183,11 +184,7 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
     let compact_parent =
         history_mode == ThreadHistoryMode::Paginated && parent_status == TurnStatus::Completed;
     let mut parent_responses = vec![responses::sse(vec![
-        responses::ev_reasoning_item(
-            "parent-reasoning",
-            &["Check the release."],
-            &["Keep the existing context."],
-        ),
+        responses::ev_reasoning_item("rs_parent_reasoning", &["Check the release."], &[]),
         if parent_status == TurnStatus::Interrupted {
             responses::ev_function_call("parent-call", "parent_tool", "{}")
         } else {
@@ -371,6 +368,17 @@ async fn sample_preserves_context_and_keeps_source_unchanged(
         );
     }
     let prediction = &requests[sample_index];
+    if parent_status == TurnStatus::Completed && !compact_parent {
+        for request in &requests[sample_index..sample_index + 3] {
+            let reasoning = request.inputs_of_type("reasoning");
+            assert!(reasoning.iter().any(|item| {
+                item["id"] == "rs_parent_reasoning"
+                    && item["encrypted_content"]
+                        .as_str()
+                        .is_some_and(|content| !content.is_empty())
+            }));
+        }
+    }
     assert_eq!(
         comparable_request(prediction.body_json()),
         comparable_request(requests[sample_index + 1].body_json())

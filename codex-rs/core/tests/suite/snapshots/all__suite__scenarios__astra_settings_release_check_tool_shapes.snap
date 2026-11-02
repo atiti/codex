@@ -106,7 +106,7 @@ Settings:
     Check the Settings release. Read release/diagnostics.log, inspect release/settings.png, confirm the loca...ell me whether another agent is working on this task. [hash=aa221f7aaa101eb2]
 07:configuration_update:reasoning={"effort":"low"}
 -- request 2 (turn) --
-08:function_call/collaboration.list_agents:{}
+08:function_call/agentroute_collaboration.list_agents:{}
 09:function_call_output:{"agents":[{"agent_name":"/root","agent_status":"running"}]}
 -- request 3 (turn) --
 10:custom_tool_call/exec:const [log, ping] = await Promise.all([

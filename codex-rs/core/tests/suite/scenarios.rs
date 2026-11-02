@@ -1244,7 +1244,7 @@ async fn child_completion_wakes_parent_after_final_answer() -> Result<()> {
         sse(vec![
             ev_function_call_with_namespace(
                 "spawn-worker",
-                "collaboration",
+                "agentroute_collaboration",
                 "spawn_agent",
                 r#"{"task_name":"worker","fork_turns":"none","message":"Check whether the release is ready."}"#,
             ),

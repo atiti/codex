@@ -34,10 +34,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS
-          - os: macos-15
+          # Use explicit native architectures; macos-15 ARM provisioning is unreliable.
+          - os: macos-26
             target: aarch64-apple-darwin
-          - os: macos-15
+          - os: macos-15-intel
             target: x86_64-apple-darwin
 
           # Linux
@@ -374,7 +374,7 @@ jobs:
 
   clippy:
     # Native Mac builds fall back to local compilation without BuildBuddy.
-    timeout-minutes: ${{ matrix.os == 'macos-15' && 180 || 120 }}
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos-') && 180 || 120 }}
     strategy:
       fail-fast: false
       matrix:
@@ -382,7 +382,7 @@ jobs:
           # Match lint coverage to the Mac and Linux release platforms.
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: macos-15
+          - os: macos-26
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Bazel clippy on ${{ matrix.os }} for ${{ matrix.target }}
@@ -487,7 +487,7 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
-          - os: macos-15
+          - os: macos-26
             target: aarch64-apple-darwin
     runs-on: ${{ matrix.runs_on || matrix.os }}
     name: Verify release build on ${{ matrix.os }} for ${{ matrix.target }}

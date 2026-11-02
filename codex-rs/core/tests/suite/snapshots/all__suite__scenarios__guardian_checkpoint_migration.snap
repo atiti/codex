@@ -92,7 +92,7 @@ Settings: relative to window 3
   prompt_cache_key: "<PROMPT_CACHE_KEY 2>"
   reasoning: {"context":"all_turns","effort":"low"}
   text: {"format":{"name":"codex_output_schema","schema":{"additionalProperties":false,"properties":{"outcome":{"enum":["allow","deny"],"type":"string"},"rationale":{"type":"string"},"risk_level":{"enum":["low","medium","high","critical"],"type":"string"},"user_authorization":{"enum":["unknown","low","medium","high"],"type":"string"}},"required":["outcome"],"type":"object"},"strict":false,"type":"json_schema"},"verbosity":"low"}
--- request 6 (turn) --
+-- request 7 (turn) --
 00:compaction:encrypted=true; chars=39; hash=4010be12538dbedf
 01:additional_tools/developer (1; hash=65a86311792f6c71):
         - namespace/functions; hash=dcfbcf0da1c2d607
@@ -237,9 +237,9 @@ Settings: same as window 3
 09:message/user:
     Run another check after compaction.
 
-## Window 6 (after request 9: input diverged at item 00)
-Settings: same as window 3
--- request 10 (turn) --
+## Window 7 (after request 10: input diverged at item 00)
+Settings: same as window 4
+-- request 11 (turn) --
 00:compaction:encrypted=true; chars=33; hash=5c07b4383c427607
 01:additional_tools/developer (1; hash=65a86311792f6c71):
         - namespace/functions; hash=dcfbcf0da1c2d607

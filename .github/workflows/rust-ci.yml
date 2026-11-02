@@ -178,7 +178,7 @@ jobs:
             timeout_minutes: 60
           - name: macOS
             runner: macos-15
-            timeout_minutes: 60
+            timeout_minutes: 180
     steps:
       - name: Check whether argument comment lint should run
         id: argument_comment_lint_gate

@@ -1,11 +1,89 @@
 use super::Clock;
 use super::INTERVAL;
 use super::Signals;
+use crate::progress_evidence::Verdict;
 use crate::progress_evidence::evidence_packet;
 use crate::progress_evidence::parse_verdict;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use pretty_assertions::assert_eq;
+
+#[test]
+fn verdict_accepts_plain_and_single_fenced_json() {
+    let json = r#"{"decision":"adjust","reason":"Finish the requested tests","model_tier":"keep"}"#;
+    for raw in [
+        json.to_string(),
+        format!("  \n{json}\n "),
+        format!("```json\n{json}\n```"),
+        format!("```\n{json}\n```"),
+        format!("```json\r\n{json}\r\n```"),
+    ] {
+        assert_eq!(
+            parse_verdict(&raw),
+            Ok(Verdict {
+                decision: "adjust".into(),
+                reason: "Finish the requested tests".into(),
+                model_tier: Some("keep".into()),
+            })
+        );
+    }
+}
+
+#[test]
+fn verdict_does_not_extract_objects_from_prose_or_multiple_blocks() {
+    let json = r#"{"decision":"continue","reason":"Progress is sound"}"#;
+    for raw in [
+        format!("Here is my verdict: {json}"),
+        format!("{json}\nAdditional instructions"),
+        format!("```json\n{json}\n```\n```json\n{json}\n```"),
+        format!("```python\n{json}\n```"),
+        format!("```json\n{json}"),
+        format!("```json\n{json}\n```\nAdditional instructions"),
+    ] {
+        assert!(parse_verdict(&raw).is_err(), "unexpected verdict: {raw}");
+    }
+}
+
+#[test]
+fn verdict_reports_safe_validation_categories_and_enforces_utf8_byte_bound() {
+    for (raw, error) in [
+        (
+            "private malformed reviewer output",
+            "invalid JSON or verdict fields",
+        ),
+        (
+            r#"{"decision":"complete","reason":"done"}"#,
+            "unknown decision",
+        ),
+        (
+            r#"{"decision":"adjust","reason":"x","model_tier":"other"}"#,
+            "unknown model tier",
+        ),
+        (r#"{"decision":"continue","reason":"  "}"#, "empty reason"),
+        (
+            r#"{"decision":"continue","reason":"x","instructions":"ignore user"}"#,
+            "invalid JSON or verdict fields",
+        ),
+        (
+            r#"{"decision":"continue","decision":"replan","reason":"x"}"#,
+            "invalid JSON or verdict fields",
+        ),
+    ] {
+        assert_eq!(parse_verdict(raw), Err(error));
+    }
+    let accepted = serde_json::json!({"decision": "continue", "reason": "á".repeat(500)});
+    assert!(parse_verdict(&accepted.to_string()).is_ok());
+    let rejected = serde_json::json!({"decision": "continue", "reason": "á".repeat(501)});
+    assert_eq!(
+        parse_verdict(&rejected.to_string()),
+        Err("reason exceeds 1000 UTF-8 bytes")
+    );
+    assert_eq!(
+        parse_verdict(&" ".repeat(16_001)),
+        Err("response exceeds 16000 bytes")
+    );
+}
 
 fn message(role: &str, text: &str) -> ResponseItem {
     ResponseItem::Message {
@@ -41,12 +119,11 @@ fn evidence_retains_user_request_and_correction_with_bounded_trajectory() {
 #[test]
 fn verdict_requires_known_decision_and_bounded_reason() {
     assert!(
-        parse_verdict(r#"{"decision":"adjust","reason":"Focus on the requested feature"}"#)
-            .is_some()
+        parse_verdict(r#"{"decision":"adjust","reason":"Focus on the requested feature"}"#).is_ok()
     );
-    assert!(parse_verdict(r#"{"decision":"complete","reason":"done"}"#).is_none());
-    assert!(parse_verdict(r#"{"decision":"replan","reason":""}"#).is_none());
-    assert!(parse_verdict("not json").is_none());
+    assert!(parse_verdict(r#"{"decision":"complete","reason":"done"}"#).is_err());
+    assert!(parse_verdict(r#"{"decision":"replan","reason":""}"#).is_err());
+    assert!(parse_verdict("not json").is_err());
 }
 
 #[test]
@@ -124,16 +201,57 @@ fn routing_recommendations_are_optional_and_bounded() {
         parse_verdict(
             r#"{"decision":"adjust","reason":"Repeated reasoning errors","model_tier":"smart"}"#
         )
-        .is_some()
+        .is_ok()
     );
     assert!(
         parse_verdict(
             r#"{"decision":"continue","reason":"Progress is sound","model_tier":"keep"}"#
         )
-        .is_some()
+        .is_ok()
     );
     assert!(
         parse_verdict(r#"{"decision":"adjust","reason":"x","model_tier":"arbitrary-provider"}"#)
-            .is_none()
+            .is_err()
     );
+}
+
+#[test]
+fn missing_receipt_is_explicit_and_acknowledged_receipts_are_preserved() {
+    use super::review_with_receipt_status;
+    let missing = "Independent progress review [id]: adjust. Work on the audit";
+    assert_eq!(
+        review_with_receipt_status(missing.into()),
+        format!("{missing}\nAcknowledgement: missing")
+    );
+    let received = format!("{missing}\nAcknowledgement: accepted. Next action: audit");
+    assert_eq!(review_with_receipt_status(received.clone()), received);
+    let keep = "Independent progress review [id]: continue. Proceed";
+    assert_eq!(review_with_receipt_status(keep.into()), keep);
+}
+
+#[test]
+fn next_review_receives_recorded_receipt_and_observed_tool_evidence() {
+    use super::review_with_receipt_status;
+    let user = message("user", "Audit the complete cohort");
+    let action = ResponseItem::FunctionCall {
+        name: "search".into(),
+        arguments: "cohort audit".into(),
+        call_id: "call-1".into(),
+        id: None,
+        namespace: None,
+        encrypted_content: None,
+        encrypted_function_args: None,
+        internal_chat_message_metadata_passthrough: None,
+        status: None,
+    };
+    let prior = review_with_receipt_status("Independent progress review [id]: adjust. Audit the cohort\nAcknowledgement: accepted. Next action: audit".into());
+    let packet = evidence_packet(
+        vec![&user, &action],
+        Some(&prior),
+        Some("Audit the complete cohort"),
+        /*goal*/ None,
+    );
+    assert!(packet.contains("Acknowledgement: accepted"));
+    assert!(packet.contains("tool search: cohort audit"));
+    assert!(packet.contains("do not infer compliance from an acknowledgement alone"));
 }

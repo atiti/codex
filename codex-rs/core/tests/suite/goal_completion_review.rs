@@ -237,7 +237,7 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
 #[test]
 fn reviewer_github_tool_is_exposed_and_runs_fixed_query() -> Result<()> {
     core_test_support::test_codex::run_test_with_large_stack("reviewer_github", || {
-        reviewer_github_tool_test(true, false, false)
+        reviewer_github_tool_test(ReviewerGitHubScenario::Allowed)
     })
 }
 
@@ -245,7 +245,7 @@ fn reviewer_github_tool_is_exposed_and_runs_fixed_query() -> Result<()> {
 #[test]
 fn reviewer_github_tool_denies_without_allow_rule() -> Result<()> {
     core_test_support::test_codex::run_test_with_large_stack("reviewer_github_denied", || {
-        reviewer_github_tool_test(false, false, false)
+        reviewer_github_tool_test(ReviewerGitHubScenario::MissingAllowRule)
     })
 }
 
@@ -253,7 +253,7 @@ fn reviewer_github_tool_denies_without_allow_rule() -> Result<()> {
 #[test]
 fn reviewer_github_tool_disappears_with_denied_reads() -> Result<()> {
     core_test_support::test_codex::run_test_with_large_stack("reviewer_github_restricted", || {
-        reviewer_github_tool_test(true, true, false)
+        reviewer_github_tool_test(ReviewerGitHubScenario::DeniedReads)
     })
 }
 
@@ -261,16 +261,23 @@ fn reviewer_github_tool_disappears_with_denied_reads() -> Result<()> {
 #[test]
 fn reviewer_github_tool_limits_large_output() -> Result<()> {
     core_test_support::test_codex::run_test_with_large_stack("reviewer_github_large", || {
-        reviewer_github_tool_test(true, false, true)
+        reviewer_github_tool_test(ReviewerGitHubScenario::LargeOutput)
     })
 }
 
 #[cfg(unix)]
-async fn reviewer_github_tool_test(
-    allow: bool,
-    deny_reads: bool,
-    large_output: bool,
-) -> Result<()> {
+enum ReviewerGitHubScenario {
+    Allowed,
+    MissingAllowRule,
+    DeniedReads,
+    LargeOutput,
+}
+
+#[cfg(unix)]
+async fn reviewer_github_tool_test(scenario: ReviewerGitHubScenario) -> Result<()> {
+    let allow = !matches!(scenario, ReviewerGitHubScenario::MissingAllowRule);
+    let deny_reads = matches!(scenario, ReviewerGitHubScenario::DeniedReads);
+    let large_output = matches!(scenario, ReviewerGitHubScenario::LargeOutput);
     use codex_features::Feature;
     use core_test_support::responses::ev_function_call;
     use core_test_support::responses::mount_sse_sequence;

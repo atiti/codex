@@ -311,11 +311,29 @@ mod github_permission_tests {
     use super::review_github_allowed;
     #[test]
     fn rejects_each_managed_restriction() {
-        assert!(review_github_allowed(false, false, false, true, false));
-        assert!(!review_github_allowed(true, false, false, true, false));
-        assert!(!review_github_allowed(false, true, false, true, false));
-        assert!(!review_github_allowed(false, false, true, true, false));
-        assert!(!review_github_allowed(false, false, false, false, false));
-        assert!(!review_github_allowed(false, false, false, true, true));
+        assert!(review_github_allowed(
+            /*proxy*/ false, /*external*/ false, /*managed_network*/ false,
+            /*full_access_allowed*/ true, /*denied_reads*/ false
+        ));
+        assert!(!review_github_allowed(
+            /*proxy*/ true, /*external*/ false, /*managed_network*/ false,
+            /*full_access_allowed*/ true, /*denied_reads*/ false
+        ));
+        assert!(!review_github_allowed(
+            /*proxy*/ false, /*external*/ true, /*managed_network*/ false,
+            /*full_access_allowed*/ true, /*denied_reads*/ false
+        ));
+        assert!(!review_github_allowed(
+            /*proxy*/ false, /*external*/ false, /*managed_network*/ true,
+            /*full_access_allowed*/ true, /*denied_reads*/ false
+        ));
+        assert!(!review_github_allowed(
+            /*proxy*/ false, /*external*/ false, /*managed_network*/ false,
+            /*full_access_allowed*/ false, /*denied_reads*/ false
+        ));
+        assert!(!review_github_allowed(
+            /*proxy*/ false, /*external*/ false, /*managed_network*/ false,
+            /*full_access_allowed*/ true, /*denied_reads*/ true
+        ));
     }
 }

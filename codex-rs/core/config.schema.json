@@ -1296,6 +1296,9 @@
             "retain_client_tool_outputs": {
               "type": "boolean"
             },
+            "review_github_evidence": {
+              "type": "boolean"
+            },
             "rollout_budget": {
               "$ref": "#/definitions/FeatureToml_for_RolloutBudgetConfigToml"
             },
@@ -8052,6 +8055,9 @@
           "type": "boolean"
         },
         "retain_client_tool_outputs": {
+          "type": "boolean"
+        },
+        "review_github_evidence": {
           "type": "boolean"
         },
         "rollout_budget": {

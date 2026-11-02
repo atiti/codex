@@ -325,8 +325,9 @@ async fn reviewer_github_tool_test(
             model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeModeOnly);
         })
         .with_pre_build_hook(move |home| {
-            std::fs::write(home.join("config.toml"), "# load user rules\n").unwrap();
-            std::fs::create_dir_all(home.join("rules")).unwrap();
+            std::fs::write(home.join("config.toml"), "# load user rules\n")
+                .expect("write reviewer config");
+            std::fs::create_dir_all(home.join("rules")).expect("create reviewer rules directory");
             std::fs::write(
                 home.join("rules/default.rules"),
                 if allow {
@@ -335,7 +336,7 @@ async fn reviewer_github_tool_test(
                     r#"prefix_rule(pattern=["gh", "pr", "view"], decision="forbidden")"#
                 },
             )
-            .unwrap();
+            .expect("write reviewer rules");
         })
         .with_config(move |config| {
             if deny_reads {
@@ -347,7 +348,7 @@ async fn reviewer_github_tool_test(
                 let mut fs = PermissionProfile::read_only().file_system_sandbox_policy();
                 fs.entries.push(FileSystemSandboxEntry::new(
                     AbsolutePathBuf::try_from("/private/tmp/reviewer-denied")
-                        .unwrap()
+                        .expect("absolute denied-read path")
                         .into(),
                     FileSystemAccessMode::Deny,
                 ));
@@ -357,12 +358,12 @@ async fn reviewer_github_tool_test(
                         &fs,
                         NetworkSandboxPolicy::Restricted,
                     ))
-                    .unwrap();
+                    .expect("set reviewer permission profile");
             }
             config
                 .features
                 .enable(Feature::ReviewGithubEvidence)
-                .unwrap();
+                .expect("enable reviewer GitHub evidence");
             config
                 .permissions
                 .shell_environment_policy

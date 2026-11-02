@@ -881,22 +881,22 @@ fn grok_compaction_retry_is_bounded_and_specific() {
     };
     assert!(should_retry_grok_compaction(
         "agentroute-grok",
-        false,
+        /*already_retried*/ false,
         &incomplete("max_output_tokens")
     ));
     assert!(!should_retry_grok_compaction(
         "agentroute-grok",
-        true,
+        /*already_retried*/ true,
         &incomplete("max_output_tokens")
     ));
     assert!(!should_retry_grok_compaction(
         "openai",
-        false,
+        /*already_retried*/ false,
         &incomplete("max_output_tokens")
     ));
     assert!(!should_retry_grok_compaction(
         "agentroute-grok",
-        false,
+        /*already_retried*/ false,
         &incomplete("content_filter")
     ));
 }

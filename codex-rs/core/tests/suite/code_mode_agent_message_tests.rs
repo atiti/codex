@@ -59,7 +59,7 @@ async fn code_mode_spawn_delivers_plaintext() -> Result<()> {
             ev_custom_tool_call(
                 "spawn-worker",
                 "exec",
-                r#"text(await tools.collaboration__spawn_agent({task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}));"#,
+                r#"text(await tools.agentroute_collaboration__spawn_agent({task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}));"#,
             ),
             ev_completed("spawn"),
         ]),

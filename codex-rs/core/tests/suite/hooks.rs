@@ -4780,6 +4780,8 @@ trusted_hash = "sha256:9eef43ad6f26b1f9b94f318a50445f8bb62c363da08152a2966b73d30
 from pathlib import Path
 import sys
 sys.path.insert(0, str(Path(__file__).parent))
+# Apple system Python disables bytecode by default; exercise cache creation explicitly.
+sys.dont_write_bytecode = False
 from hook_support import DENIAL_REASON
 
 root = Path(__file__).parents[1]
@@ -6439,7 +6441,9 @@ async fn user_prompt_submit_provider_route_reaches_request_and_stop_receipt(
                 }
             }))
             .expect("serialize route output");
-            hook.push_str(&format!("else:\n    print(json.dumps({response}))\n"));
+            let response_literal = serde_json::to_string(&response)
+                .expect("serialize route output as a Python string");
+            hook.push_str(&format!("else:\n    print({response_literal})\n"));
             fs::write(hook_path, hook).expect("write route output");
 
             let stop_script_path = home.join("agentroute_stop_hook.py");

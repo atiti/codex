@@ -128,7 +128,6 @@ jobs:
           )
           bazel_shared_args=(
             --test_env=RUST_TEST_THREADS=2
-            --test_env=RUST_BACKTRACE=1
             --test_tag_filters=-argument-comment-lint
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )

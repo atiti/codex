@@ -1873,3 +1873,48 @@ async fn oversized_remote_compaction_preserves_history_with_staged_checkpoint(
     assert!(requests[3].body_contains_text("AFTER_RECOVERY"));
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_compaction_preserves_history_with_additional_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let initial = mount_sse_once(harness.server(), responses::sse_completed("initial")).await;
+    harness.test().submit_turn("PRESERVE_CONTEXT").await?;
+    let _ = initial.single_request();
+    ThreadIdle::wait(&codex).await;
+    codex
+        .inject_response_items(vec![ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: Arc::from([]),
+        }])
+        .await?;
+    let mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse_failed(
+                "too-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(responses::sse_completed("after")),
+        ],
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    harness.test().submit_turn("AFTER_FAILED_COMPACTION").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 2, "recovery must not discard tool declarations");
+    assert!(requests[1].body_contains_text("PRESERVE_CONTEXT"));
+    assert_eq!(requests[1].inputs_of_type("additional_tools").len(), 1);
+    Ok(())
+}

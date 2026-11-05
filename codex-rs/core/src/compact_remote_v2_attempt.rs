@@ -427,10 +427,8 @@ fn safe_compaction_boundaries(input: &[ResponseItem]) -> Vec<usize> {
                     unknown_call = true;
                 }
             }
-            ResponseItem::CustomToolCallOutput { call_id, .. } => {
-                if !pending.remove(call_id) {
-                    unknown_call = true;
-                }
+            ResponseItem::CustomToolCallOutput { call_id, .. } if !pending.remove(call_id) => {
+                unknown_call = true;
             }
             _ => {}
         }

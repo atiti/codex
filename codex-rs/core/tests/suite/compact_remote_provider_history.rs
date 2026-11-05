@@ -537,7 +537,7 @@ async fn staged_compaction_after_provider_switch_preserves_new_checkpoint_only()
             responses::ev_assistant_message("msg-original", "FIRST_ANSWER"),
             responses::ev_completed("first"),
         ]),
-        sse(vec![responses::ev_assistant_message("msg-second", "SECOND_ANSWER"), responses::ev_completed_with_tokens("second", 500)]),
+        sse(vec![responses::ev_assistant_message("msg-second", "SECOND_ANSWER"), responses::ev_completed_with_tokens("second", /*total_tokens*/ 500)]),
         responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
         compact("OWN_PREFIX", "prefix"),
         compact("OWN_FINAL", "final"),
@@ -588,7 +588,7 @@ async fn routed_compaction_uses_destination_model_not_initial_model() -> Result<
     skip_if_no_network!(Ok(()));
     let server = wiremock::MockServer::start().await;
     let mock = responses::mount_sse_sequence(&server, vec![
-        sse(vec![responses::ev_completed_with_tokens("first", 500)]),
+        sse(vec![responses::ev_completed_with_tokens("first", /*total_tokens*/ 500)]),
         sse(vec![
             json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"ROUTED_MODEL_CHECKPOINT"}}),
             responses::ev_completed("compact"),

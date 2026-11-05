@@ -6791,7 +6791,7 @@ async fn routed_model_is_used_for_preturn_remote_compaction() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let responses = mount_sse_sequence(&server, vec![
-        sse(vec![ev_completed_with_tokens("first", 500)]),
+        sse(vec![ev_completed_with_tokens("first", /*total_tokens*/ 500)]),
         sse(vec![
             json!({"type":"response.output_item.done", "item":{"type":"compaction", "encrypted_content":"ROUTED_CHECKPOINT"}}),
             ev_completed("compact"),

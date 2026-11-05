@@ -48,6 +48,78 @@ fn builder(incremental_tools: bool, token_budget: bool) -> TestCodexBuilder {
         })
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_compaction_rebuilds_incremental_tools_on_resume() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let compact = |summary: &str, id: &str| {
+        responses::sse(vec![
+            json!({"type": "response.output_item.done", "item": {"type": "compaction", "encrypted_content": summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_completed("first"),
+            responses::sse_completed("second"),
+            responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
+            compact("PREFIX_SUMMARY", "prefix"),
+            compact("FINAL_SUMMARY", "final"),
+            responses::sse_completed("after"),
+            responses::sse_completed("resumed"),
+        ],
+    )
+    .await;
+    let session_builder = || {
+        builder(/*incremental_tools*/ true, /*token_budget*/ false).with_model_info_override(
+            "gpt-5.4",
+            |model| {
+                model.use_responses_lite = true;
+                model.tool_mode = Some(ToolMode::Direct);
+            },
+        )
+    };
+    let initial = session_builder().build_with_auto_env(&server).await?;
+    initial.submit_turn("FIRST_CONTEXT").await?;
+    let changed_builder = || {
+        session_builder().with_config(|config| {
+            config.update_plan_enabled = true;
+            config
+                .features
+                .disable(Feature::ShellTool)
+                .expect("disable shell");
+        })
+    };
+    let changed = changed_builder()
+        .restart_with_auto_env(&server, &initial)
+        .await?;
+    changed.submit_turn("SECOND_CONTEXT").await?;
+    changed.codex.submit(Op::Compact).await?;
+    wait_for_event(&changed.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    changed.submit_turn("AFTER_RECOVERY").await?;
+    let resumed = changed_builder()
+        .restart_with_auto_env(&server, &changed)
+        .await?;
+    resumed.submit_turn("AFTER_RESUME").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 7);
+    assert!(requests[4].body_contains_text("PREFIX_SUMMARY"));
+    assert!(requests[5].body_contains_text("FINAL_SUMMARY"));
+    assert!(requests[6].body_contains_text("FINAL_SUMMARY"));
+    let after_tools = requests[5].inputs_of_type("additional_tools");
+    let resumed_tools = requests[6].inputs_of_type("additional_tools");
+    assert_eq!(after_tools.len(), 1);
+    assert_eq!(after_tools, resumed_tools);
+    let catalog = after_tools[0]["tools"].to_string();
+    assert!(catalog.contains("update_plan"));
+    assert!(!catalog.contains("exec_command"));
+    Ok(())
+}
+
 #[test_case(true; "window_reset")]
 #[test_case(false; "remote_compaction")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

@@ -1897,6 +1897,12 @@ async fn oversized_compaction_preserves_history_with_additional_tools() -> Resul
             tools: Arc::from([]),
         }])
         .await?;
+    codex
+        .inject_response_items(vec![serde_json::from_value(json!({
+            "type": "message", "role": "user",
+            "content": [{"type": "input_text", "text": "SECOND_CONTEXT"}]
+        }))?])
+        .await?;
     let mock = responses::mount_response_sequence(
         harness.server(),
         vec![
@@ -1905,6 +1911,9 @@ async fn oversized_compaction_preserves_history_with_additional_tools() -> Resul
                 "context_length_exceeded",
                 "context too large",
             )),
+            ResponseTemplate::new(400).set_body_json(
+                json!({"error":{"code":"invalid_request_error","message":"recovery failed"}}),
+            ),
             responses::sse_response(responses::sse_completed("after")),
         ],
     )
@@ -1918,10 +1927,11 @@ async fn oversized_compaction_preserves_history_with_additional_tools() -> Resul
     let requests = mock.requests();
     assert_eq!(
         requests.len(),
-        2,
-        "recovery must not discard tool declarations"
+        3,
+        "failed recovery must preserve tool declarations"
     );
-    assert!(requests[1].body_contains_text("PRESERVE_CONTEXT"));
-    assert_eq!(requests[1].inputs_of_type("additional_tools").len(), 1);
+    assert!(requests[2].body_contains_text("PRESERVE_CONTEXT"));
+    assert!(requests[2].body_contains_text("SECOND_CONTEXT"));
+    assert_eq!(requests[2].inputs_of_type("additional_tools").len(), 1);
     Ok(())
 }

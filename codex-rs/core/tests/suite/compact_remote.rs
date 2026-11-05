@@ -1876,12 +1876,12 @@ async fn oversized_remote_compaction_preserves_history_with_staged_checkpoint(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_compaction_preserves_history_with_additional_tools() -> Result<()> {
-    oversized_compaction_preserves_declared_tools(false).await
+    oversized_compaction_preserves_declared_tools(/*searched*/ false).await
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_compaction_preserves_history_with_searched_tools() -> Result<()> {
-    oversized_compaction_preserves_declared_tools(true).await
+    oversized_compaction_preserves_declared_tools(/*searched*/ true).await
 }
 
 async fn oversized_compaction_preserves_declared_tools(searched: bool) -> Result<()> {

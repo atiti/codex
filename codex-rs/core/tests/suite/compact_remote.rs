@@ -1876,6 +1876,15 @@ async fn oversized_remote_compaction_preserves_history_with_staged_checkpoint(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_compaction_preserves_history_with_additional_tools() -> Result<()> {
+    oversized_compaction_preserves_declared_tools(false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_compaction_preserves_history_with_searched_tools() -> Result<()> {
+    oversized_compaction_preserves_declared_tools(true).await
+}
+
+async fn oversized_compaction_preserves_declared_tools(searched: bool) -> Result<()> {
     skip_if_no_network!(Ok(()));
     let mut extensions = ExtensionRegistryBuilder::new();
     extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
@@ -1890,13 +1899,23 @@ async fn oversized_compaction_preserves_history_with_additional_tools() -> Resul
     harness.test().submit_turn("PRESERVE_CONTEXT").await?;
     let _ = initial.single_request();
     ThreadIdle::wait(&codex).await;
-    codex
-        .inject_response_items(vec![ResponseItem::AdditionalTools {
+    let declarations = if searched {
+        vec![
+            serde_json::from_value(
+                json!({"type":"tool_search_call", "call_id":"search", "execution":"client", "arguments":{}}),
+            )?,
+            serde_json::from_value(
+                json!({"type":"tool_search_output", "call_id":"search", "execution":"client", "status":"completed", "tools":[{"type":"function", "name":"discovered", "parameters":{"type":"object", "properties":{}}}]}),
+            )?,
+        ]
+    } else {
+        vec![ResponseItem::AdditionalTools {
             id: None,
             role: "developer".to_string(),
             tools: Arc::from([]),
-        }])
-        .await?;
+        }]
+    };
+    codex.inject_response_items(declarations).await?;
     let mock = responses::mount_response_sequence(
         harness.server(),
         vec![
@@ -1922,6 +1941,14 @@ async fn oversized_compaction_preserves_history_with_additional_tools() -> Resul
         "recovery must not discard tool declarations"
     );
     assert!(requests[1].body_contains_text("PRESERVE_CONTEXT"));
-    assert_eq!(requests[1].inputs_of_type("additional_tools").len(), 1);
+    let kind = if searched {
+        "tool_search_output"
+    } else {
+        "additional_tools"
+    };
+    assert_eq!(requests[1].inputs_of_type(kind).len(), 1);
+    if searched {
+        assert!(requests[1].body_contains_text("discovered"));
+    }
     Ok(())
 }

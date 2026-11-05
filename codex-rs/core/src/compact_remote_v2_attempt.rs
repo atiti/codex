@@ -299,18 +299,20 @@ async fn recover_oversized_history(
     if !matches!(remaining.pop(), Some(ResponseItem::CompactionTrigger {})) {
         return Err(original_error);
     }
-    // Explicitly retained client tool outputs cannot safely be reconstructed from an
-    // opaque checkpoint. Preserve the original history instead of discarding them.
+    // History-supplied tool declarations and explicitly retained client tool outputs
+    // cannot safely be reconstructed from an opaque checkpoint. Preserve the original
+    // history instead of silently discarding these records.
     if remaining.iter().any(|item| {
-        sess.enabled(codex_features::Feature::RetainClientToolOutputs)
-            && matches!(
-                item,
-                ResponseItem::FunctionCallOutput {
-                    call_id: None,
-                    name: Some(_),
-                    ..
-                }
-            )
+        matches!(item, ResponseItem::AdditionalTools { .. })
+            || (sess.enabled(codex_features::Feature::RetainClientToolOutputs)
+                && matches!(
+                    item,
+                    ResponseItem::FunctionCallOutput {
+                        call_id: None,
+                        name: Some(_),
+                        ..
+                    }
+                ))
     }) {
         return Err(original_error);
     }

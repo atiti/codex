@@ -6201,3 +6201,57 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
 
 #[path = "compact_program_tests.rs"]
 mod program_tests;
+
+#[test]
+fn grok_compaction_retries_incomplete_without_losing_history() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack(
+        "grok_compaction_retry",
+        grok_compaction_retry_impl,
+    )
+}
+
+async fn grok_compaction_retry_impl() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(&server, vec![
+        sse(vec![ev_assistant_message("initial", "initial answer"), ev_completed("initial")]),
+        sse(vec![ev_assistant_message("partial", "discarded partial"), json!({"type":"response.incomplete", "response":{"id":"partial", "incomplete_details":{"reason":"max_output_tokens"}, "usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}})]),
+        sse(vec![ev_assistant_message("summary", "finished concise summary"), ev_completed("summary")]),
+        sse(vec![ev_assistant_message("final", "task continued"), ev_completed("final")]),
+    ]).await;
+    let provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider_id = "agentroute-grok".to_string();
+            config.model_provider = provider.clone();
+            config
+                .model_providers
+                .insert("agentroute-grok".to_string(), provider);
+            set_test_compact_prompt(config);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("important original context").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("continue after compact").await?;
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    let retry = requests[2].body_json().to_string();
+    assert!(body_contains_text(&retry, "important original context"));
+    assert!(body_contains_text(
+        &retry,
+        "previous checkpoint exceeded its output limit"
+    ));
+    assert!(!body_contains_text(&retry, "discarded partial"));
+    let final_request = requests[3].body_json().to_string();
+    assert!(body_contains_text(
+        &final_request,
+        "finished concise summary"
+    ));
+    assert!(!body_contains_text(&final_request, "discarded partial"));
+    Ok(())
+}

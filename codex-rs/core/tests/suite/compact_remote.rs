@@ -1911,9 +1911,16 @@ async fn oversized_compaction_preserves_history_with_additional_tools() -> Resul
     .await;
     codex.submit(Op::Compact).await?;
     wait_for_turn_complete(&codex).await;
-    harness.test().submit_turn("AFTER_FAILED_COMPACTION").await?;
+    harness
+        .test()
+        .submit_turn("AFTER_FAILED_COMPACTION")
+        .await?;
     let requests = mock.requests();
-    assert_eq!(requests.len(), 2, "recovery must not discard tool declarations");
+    assert_eq!(
+        requests.len(),
+        2,
+        "recovery must not discard tool declarations"
+    );
     assert!(requests[1].body_contains_text("PRESERVE_CONTEXT"));
     assert_eq!(requests[1].inputs_of_type("additional_tools").len(), 1);
     Ok(())

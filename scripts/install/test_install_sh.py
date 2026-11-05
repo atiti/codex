@@ -375,7 +375,16 @@ class InstallShTest(unittest.TestCase):
             self.assertEqual(first.returncode, 0, first.stderr)
             oldest = releases / f"{versions[0]}-{target}"
             helper = oldest / "bin/codex-code-mode-host"
-            shutil.copy("/bin/sleep", helper)
+            if system.sysname == "Linux":
+                # Some distributions ship sleep as a coreutils multicall binary;
+                # copying it under another name makes it select a nonexistent applet.
+                subprocess.run(
+                    ["cc", "-x", "c", "-o", str(helper), "-"],
+                    input=b"#include <unistd.h>\nint main(void) { sleep(300); return 0; }\n",
+                    check=True,
+                )
+            else:
+                shutil.copy("/bin/sleep", helper)
             if system.sysname == "Darwin":
                 # A copied macOS system binary cannot run with its platform signature.
                 subprocess.run(

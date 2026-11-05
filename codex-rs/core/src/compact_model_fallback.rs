@@ -1,4 +1,4 @@
-use crate::session::turn_context::TurnContext;
+use crate::session::step_context::StepContext;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionReason;
 use codex_otel::SessionTelemetry;
@@ -9,8 +9,8 @@ use tracing::warn;
 /// Returns whether a failed compaction attempt should use the current model.
 pub(crate) fn should_retry_with_current_model(
     error: &CodexErr,
-    previous: &TurnContext,
-    current: &TurnContext,
+    previous: &StepContext,
+    current: &StepContext,
 ) -> bool {
     if matches!(
         error.details(),
@@ -18,14 +18,15 @@ pub(crate) fn should_retry_with_current_model(
             | CodexErrorDetails::Interrupted
             | CodexErrorDetails::SessionBudgetExceeded
             | CodexErrorDetails::ResponseIncomplete(_)
-    ) || (previous.model_info().slug == current.model_info().slug
-        && previous.cyber_access_program == current.cyber_access_program)
+    ) || (previous.settings.model_info.slug == current.settings.model_info.slug
+        && previous.turn.cyber_access_program == current.turn.cyber_access_program)
     {
         return false;
     }
 
-    current.model_provider().info().is_openai()
+    current.turn.model_provider().info().is_openai()
         && current
+            .turn
             .auth_manager
             .as_deref()
             .and_then(codex_login::AuthManager::auth_cached)

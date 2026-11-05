@@ -1800,3 +1800,76 @@ async fn remote_mid_turn_compact_v2_sends_turn_state_over_websocket() -> Result<
     server.shutdown().await;
     Ok(())
 }
+
+#[test_case(false; "successful recovery")]
+#[test_case(true; "failed recovery preserves history")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_remote_compaction_preserves_history_with_staged_checkpoint(
+    fail_final: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let initial = mount_sse_once(harness.server(), responses::sse_completed("initial")).await;
+    harness.test().submit_turn("FIRST_CONTEXT").await?;
+    let _ = initial.single_request();
+    ThreadIdle::wait(&codex).await;
+    codex.inject_response_items([
+        json!({"type":"function_call","call_id":"safe-call","name":"exec_command","arguments":"{}"}),
+        json!({"type":"function_call_output","call_id":"safe-call","output":"TOOL_RESULT"}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"SECOND_CONTEXT"}]}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"RECENT_CONTEXT"}]}),
+    ].into_iter().map(serde_json::from_value).collect::<serde_json::Result<Vec<ResponseItem>>>()?).await?;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse_failed(
+                "too-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(compact("PREFIX_SUMMARY", "prefix")),
+            if fail_final {
+                ResponseTemplate::new(400).set_body_json(
+                    json!({"error":{"code":"invalid_request_error","message":"recovery failed"}}),
+                )
+            } else {
+                responses::sse_response(compact("FINAL_SUMMARY", "final"))
+            },
+            responses::sse_response(responses::sse_completed("after")),
+        ],
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    harness.test().submit_turn("AFTER_RECOVERY").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[1].body_contains_text("FIRST_CONTEXT"));
+    assert!(!requests[1].body_contains_text("RECENT_CONTEXT"));
+    assert!(requests[2].body_contains_text("PREFIX_SUMMARY"));
+    assert!(requests[2].body_contains_text("RECENT_CONTEXT"));
+    if fail_final {
+        assert!(requests[3].body_contains_text("FIRST_CONTEXT"));
+        assert!(requests[3].body_contains_text("TOOL_RESULT"));
+        assert!(requests[3].body_contains_text("RECENT_CONTEXT"));
+        assert!(!requests[3].body_contains_text("PREFIX_SUMMARY"));
+    } else {
+        assert!(requests[3].body_contains_text("FINAL_SUMMARY"));
+    }
+    assert!(requests[3].body_contains_text("AFTER_RECOVERY"));
+    Ok(())
+}

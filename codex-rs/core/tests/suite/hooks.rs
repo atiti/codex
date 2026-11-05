@@ -6785,3 +6785,56 @@ async fn goal_continuation_can_be_blocked_before_sampling() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn routed_model_is_used_for_preturn_remote_compaction() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(&server, vec![
+        sse(vec![ev_completed_with_tokens("first", 500)]),
+        sse(vec![
+            json!({"type":"response.output_item.done", "item":{"type":"compaction", "encrypted_content":"ROUTED_CHECKPOINT"}}),
+            ev_completed("compact"),
+        ]),
+        sse(vec![ev_assistant_message("final", "done"), ev_completed("after")]),
+    ]).await;
+    let mut builder = test_codex()
+        .with_auth(codex_login::CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model("gpt-5.2")
+        .with_model_info_override("gpt-5.2", |model| {
+            model.used_fallback_model_metadata = false;
+            model.model_specialty = None;
+            model.guardian = None;
+            model.model_messages = None;
+        })
+        .with_model_info_override("gpt-5.1", |model| {
+            model.used_fallback_model_metadata = false;
+            model.model_specialty = None;
+            model.guardian = None;
+            model.model_messages = None;
+        })
+        .with_model("gpt-5.2")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "unused", "unused").expect("write hook");
+            let path = home.join("user_prompt_submit_hook.py");
+            let mut hook = fs::read_to_string(&path).expect("read hook");
+            hook.push_str("elif payload.get('prompt') == 'route':\n    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'model': 'gpt-5.1', 'stripProviderState': True}}))\nelse:\n    print('{}')\n");
+            fs::write(path, hook).expect("write route hook");
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config.features.enable(Feature::StepModelSwitching).expect("enable switching");
+            config.model_provider.supports_websockets = false;
+            config.model_auto_compact_token_limit = Some(200);
+            config.model_post_turn_compact_threshold_percent = 0;
+        });
+    let test = builder.build(&server).await?;
+    test.submit_text_turn("first").await?;
+    test.submit_text_turn("route").await?;
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].body_json()["model"], "gpt-5.1");
+    assert_eq!(requests[2].body_json()["model"], "gpt-5.1");
+    assert!(requests[2].body_contains_text("ROUTED_CHECKPOINT"));
+    Ok(())
+}

@@ -96,11 +96,10 @@ async fn build_and_install_compaction(
     let compaction_trace = sess.services.rollout_thread_trace.compaction_trace_context(
         turn_context.sub_id.as_str(),
         compaction_id.as_str(),
-        candidate
-            .as_ref()
-            .map_or(turn_context.model_info().slug.as_str(), |candidate| {
-                candidate.model_info.slug.as_str()
-            }),
+        candidate.as_ref().map_or(
+            step_context.settings.model_info.slug.as_str(),
+            |candidate| candidate.model_info.slug.as_str(),
+        ),
         turn_context.model_provider().info().name.as_str(),
     );
     if needs_start && candidate.is_none() {
@@ -136,7 +135,8 @@ async fn build_and_install_compaction(
             Ok(attempt) => (attempt, turn_context),
             Err(error) => {
                 let fallback_turn_context = &replacement_step_context.turn;
-                if !should_retry_with_current_model(&error, turn_context, fallback_turn_context) {
+                if !should_retry_with_current_model(&error, step_context, replacement_step_context)
+                {
                     return Err(error);
                 }
                 sess.set_last_known_step_context(replacement_step_context)
@@ -145,7 +145,7 @@ async fn build_and_install_compaction(
                     sess.services.rollout_thread_trace.compaction_trace_context(
                         fallback_turn_context.sub_id.as_str(),
                         compaction_id.as_str(),
-                        fallback_turn_context.model_info().slug.as_str(),
+                        replacement_step_context.settings.model_info.slug.as_str(),
                         fallback_turn_context.model_provider().info().name.as_str(),
                     );
                 let fallback_result = run_remote_compact_v2_attempt(
@@ -159,8 +159,8 @@ async fn build_and_install_compaction(
                 .await;
                 record_model_fallback(
                     &sess.services.session_telemetry,
-                    turn_context.model_info().slug.as_str(),
-                    fallback_turn_context.model_info().slug.as_str(),
+                    step_context.settings.model_info.slug.as_str(),
+                    replacement_step_context.settings.model_info.slug.as_str(),
                     compaction_metadata.reason(),
                     compaction_metadata.implementation(),
                     fallback_result.as_ref().err(),
@@ -241,7 +241,18 @@ async fn build_and_install_compaction(
             window_number,
             window_ids,
             compaction_response_id: Some(compaction_response_id),
-            compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
+            compaction_model_hash: if std::ptr::eq(
+                compaction_turn_context.as_ref(),
+                replacement_step_context.turn.as_ref(),
+            ) {
+                replacement_step_context
+                    .settings
+                    .model_info
+                    .comp_hash
+                    .clone()
+            } else {
+                step_context.settings.model_info.comp_hash.clone()
+            },
             reviewer_compaction_hash,
             model_provider_id: compaction_turn_context.model_provider_id(),
         };

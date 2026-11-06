@@ -299,28 +299,33 @@ async fn recover_oversized_history(
     if !matches!(remaining.pop(), Some(ResponseItem::CompactionTrigger {})) {
         return Err(original_error);
     }
-    // History-supplied and dynamically discovered tool declarations, as well as
-    // explicitly retained client tool outputs, cannot safely be reconstructed from
-    // an opaque checkpoint. Preserve history until their replay is implemented.
-    if remaining.iter().any(|item| {
-        matches!(item, ResponseItem::AdditionalTools { .. })
-            || matches!(item, ResponseItem::ToolSearchOutput { .. })
-            || (sess.enabled(codex_features::Feature::RetainClientToolOutputs)
-                && matches!(
-                    item,
-                    ResponseItem::FunctionCallOutput {
-                        call_id: None,
-                        name: Some(_),
-                        ..
-                    }
-                ))
-    }) {
-        return Err(original_error);
-    }
     let mut checkpoint: Option<ResponseItem> = None;
     let mut checkpoint_configuration: Option<ResponseItem> = None;
     for _ in 0..32 {
-        let boundaries = safe_compaction_boundaries(&remaining);
+        // Keep tool declarations and retained outputs in the unmodified suffix:
+        // their state cannot safely be reconstructed from an opaque checkpoint.
+        // Search calls must remain with their outputs, including failed searches.
+        let protected = remaining
+            .iter()
+            .position(|item| {
+                matches!(item, ResponseItem::AdditionalTools { .. })
+                    || matches!(item, ResponseItem::ToolSearchCall { .. })
+                    || matches!(item, ResponseItem::ToolSearchOutput { .. })
+                    || (sess.enabled(codex_features::Feature::RetainClientToolOutputs)
+                        && matches!(
+                            item,
+                            ResponseItem::FunctionCallOutput {
+                                call_id: None,
+                                name: Some(_),
+                                ..
+                            }
+                        ))
+            })
+            .unwrap_or(remaining.len());
+        let boundaries = safe_compaction_boundaries(&remaining)
+            .into_iter()
+            .filter(|boundary| *boundary <= protected)
+            .collect::<Vec<_>>();
         if boundaries.is_empty() {
             return Err(original_error);
         }
@@ -409,7 +414,10 @@ fn safe_compaction_boundaries(input: &[ResponseItem]) -> Vec<usize> {
             && (matches!(item, ResponseItem::Message { role, .. } if role == "user" || role == "assistant")
                 || matches!(
                     item,
-                    ResponseItem::FunctionCall { .. } | ResponseItem::CustomToolCall { .. }
+                    ResponseItem::FunctionCall { .. }
+                        | ResponseItem::CustomToolCall { .. }
+                        | ResponseItem::AdditionalTools { .. }
+                        | ResponseItem::ToolSearchCall { .. }
                 ))
         {
             boundaries.push(index);

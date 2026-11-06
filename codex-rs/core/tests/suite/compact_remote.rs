@@ -2009,6 +2009,14 @@ async fn oversized_compaction_preserves_declared_tools(searched: bool) -> Result
                 "context_length_exceeded",
                 "context too large",
             )),
+            responses::sse_response(sse(vec![
+                json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"PREFIX_SUMMARY"}}),
+                responses::ev_completed("prefix"),
+            ])),
+            responses::sse_response(sse(vec![
+                json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"FINAL_SUMMARY"}}),
+                responses::ev_completed("final"),
+            ])),
             responses::sse_response(responses::sse_completed("after")),
         ],
     )
@@ -2022,18 +2030,22 @@ async fn oversized_compaction_preserves_declared_tools(searched: bool) -> Result
     let requests = mock.requests();
     assert_eq!(
         requests.len(),
-        2,
-        "recovery must not discard tool declarations"
+        4,
+        "recovery should compact the prefix without discarding tool declarations"
     );
-    assert!(requests[1].body_contains_text("PRESERVE_CONTEXT"));
+    assert!(requests[2].body_contains_text("PRESERVE_CONTEXT"));
     let kind = if searched {
         "tool_search_output"
     } else {
         "additional_tools"
     };
-    assert_eq!(requests[1].inputs_of_type(kind).len(), 1);
+    assert_eq!(requests[1].inputs_of_type(kind).len(), 0);
+    assert_eq!(requests[2].inputs_of_type(kind).len(), 1);
+    assert!(requests[2].body_contains_text("PREFIX_SUMMARY"));
+    assert!(requests[3].body_contains_text("FINAL_SUMMARY"));
     if searched {
-        assert!(requests[1].body_contains_text("discovered"));
+        assert!(requests[2].body_contains_text("discovered"));
+        assert_eq!(requests[2].inputs_of_type("tool_search_call").len(), 1);
     }
     Ok(())
 }

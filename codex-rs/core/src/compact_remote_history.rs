@@ -167,9 +167,21 @@ fn rewritten_output_for_context_window(
             output: truncated_output_payload(output),
             internal_chat_message_metadata_passthrough: metadata.clone(),
         },
-        // Search results declare tools for subsequent calls. Removing those schemas
-        // can change the meaning of a compaction request and prevent safe recovery.
-        ResponseItem::ToolSearchOutput { .. } => return None,
+        ResponseItem::ToolSearchOutput {
+            id,
+            call_id,
+            status,
+            execution,
+            internal_chat_message_metadata_passthrough: metadata,
+            ..
+        } => ResponseItem::ToolSearchOutput {
+            id: id.clone(),
+            call_id: call_id.clone(),
+            status: status.clone(),
+            execution: execution.clone(),
+            tools: Vec::new(),
+            internal_chat_message_metadata_passthrough: metadata.clone(),
+        },
         _ => return None,
     };
     Some(ResponseItemEnvelope {

@@ -1965,6 +1965,57 @@ async fn oversized_compaction_preserves_history_with_additional_tools() -> Resul
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_compaction_with_initial_incremental_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_completed("first"),
+            responses::sse_completed("second"),
+            responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
+            compact("PREFIX", "prefix"),
+            compact("FINAL", "final"),
+            responses::sse_completed("after"),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.4", |model| model.use_responses_lite = true)
+        .with_config(|config| {
+            config.features.enable(Feature::IncrementalTools).unwrap();
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("FIRST_CONTEXT").await?;
+    test.submit_turn("SECOND_CONTEXT").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&test.codex).await;
+    test.submit_turn("AFTER_RECOVERY").await?;
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "staged recovery should proceed with an initial tool catalog"
+    );
+    assert!(!requests[2].inputs_of_type("additional_tools").is_empty());
+    for request in &requests[3..5] {
+        assert!(!request.inputs_of_type("additional_tools").is_empty());
+    }
+    assert!(requests[4].body_contains_text("PREFIX"));
+    assert!(requests[5].body_contains_text("FINAL"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_compaction_preserves_history_with_searched_tools() -> Result<()> {
     oversized_compaction_preserves_declared_tools(/*searched*/ true).await
 }

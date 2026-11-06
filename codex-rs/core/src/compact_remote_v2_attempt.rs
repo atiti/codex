@@ -299,6 +299,23 @@ async fn recover_oversized_history(
     if !matches!(remaining.pop(), Some(ResponseItem::CompactionTrigger {})) {
         return Err(original_error);
     }
+    // Initial tool declarations and instructions must remain available to each
+    // staged request. Keep their original order instead of reconstructing them.
+    let preamble_end = remaining
+        .iter()
+        .position(|item| {
+            !matches!(item, ResponseItem::AdditionalTools { .. } | ResponseItem::ConfigurationUpdate { .. })
+                && !matches!(item, ResponseItem::Message { role, .. } if role == "developer" || role == "system")
+        })
+        .unwrap_or(remaining.len());
+    let preamble = if remaining[..preamble_end]
+        .iter()
+        .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
+    {
+        remaining.drain(..preamble_end).collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let mut checkpoint: Option<ResponseItem> = None;
     let mut checkpoint_configuration: Option<ResponseItem> = None;
     for _ in 0..32 {
@@ -333,9 +350,10 @@ async fn recover_oversized_history(
         loop {
             let split = boundaries[candidate];
             let mut partial = prompt.clone();
-            partial.input = checkpoint
+            partial.input = preamble
                 .iter()
                 .cloned()
+                .chain(checkpoint.iter().cloned())
                 .chain(checkpoint_configuration.iter().cloned())
                 .chain(remaining[..split].iter().cloned())
                 .collect();
@@ -379,9 +397,10 @@ async fn recover_oversized_history(
             }
         }
         let mut combined = prompt.clone();
-        combined.input = checkpoint
+        combined.input = preamble
             .iter()
             .cloned()
+            .chain(checkpoint.iter().cloned())
             .chain(checkpoint_configuration.iter().cloned())
             .chain(remaining.iter().cloned())
             .collect();

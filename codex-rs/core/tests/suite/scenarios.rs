@@ -3071,11 +3071,14 @@ enum PendingCompactionOutcome {
     StaleSuccess,
     Failure,
     ReadyFailure,
+    ContextOverflow,
     Interrupted,
 }
 
 #[test_case::test_case(PendingCompactionOutcome::Success, CompactionTrigger::Auto; "auto uses pending result")]
 #[test_case::test_case(PendingCompactionOutcome::Failure, CompactionTrigger::Auto; "auto falls back after failure")]
+#[test_case::test_case(PendingCompactionOutcome::ContextOverflow, CompactionTrigger::Auto; "auto falls back after context overflow")]
+#[test_case::test_case(PendingCompactionOutcome::ContextOverflow, CompactionTrigger::Manual; "manual falls back after context overflow")]
 #[test_case::test_case(PendingCompactionOutcome::ReadyFailure, CompactionTrigger::Auto; "auto falls back after failure before checkpoint")]
 #[test_case::test_case(PendingCompactionOutcome::StaleSuccess, CompactionTrigger::Auto; "auto falls back after account changes")]
 #[test_case::test_case(PendingCompactionOutcome::Interrupted, CompactionTrigger::Auto; "auto can be interrupted")]
@@ -3106,7 +3109,9 @@ async fn async_compaction_reuses_pending_work(
     };
     let valid_output = !matches!(
         outcome,
-        PendingCompactionOutcome::Failure | PendingCompactionOutcome::ReadyFailure
+        PendingCompactionOutcome::Failure
+            | PendingCompactionOutcome::ReadyFailure
+            | PendingCompactionOutcome::ContextOverflow
     );
     let succeeds = !matches!(
         outcome,
@@ -3114,6 +3119,7 @@ async fn async_compaction_reuses_pending_work(
             | PendingCompactionOutcome::SuccessOverBudget
             | PendingCompactionOutcome::Failure
             | PendingCompactionOutcome::ReadyFailure
+            | PendingCompactionOutcome::ContextOverflow
             | PendingCompactionOutcome::StaleSuccess
     );
     let response = |id, event, tokens| vec![event, ev_completed_with_tokens(id, tokens)];
@@ -3127,15 +3133,25 @@ async fn async_compaction_reuses_pending_work(
     if has_background {
         responses.push(vec![compaction_chunk(
             Some(background_gate),
-            response(
-                "background",
-                if valid_output {
-                    compaction_output("ASYNC")
-                } else {
-                    ev_assistant_message("invalid", "missing compaction output")
-                },
-                /*tokens*/ 3_000,
-            ),
+            if outcome == PendingCompactionOutcome::ContextOverflow {
+                vec![json!({
+                    "type": "response.failed",
+                    "response": {
+                        "id": "background",
+                        "error": {"code": "context_length_exceeded", "message": "context too large"}
+                    }
+                })]
+            } else {
+                response(
+                    "background",
+                    if valid_output {
+                        compaction_output("ASYNC")
+                    } else {
+                        ev_assistant_message("invalid", "missing compaction output")
+                    },
+                    /*tokens*/ 3_000,
+                )
+            },
         )]);
     }
     if !manual {

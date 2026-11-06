@@ -2012,6 +2012,14 @@ async fn oversized_compaction_with_initial_incremental_tools() -> Result<()> {
     }
     assert!(requests[4].body_contains_text("PREFIX"));
     assert!(requests[5].body_contains_text("FINAL"));
+    let initial_tools = requests[0].inputs_of_type("additional_tools");
+    let replacement_tools = requests[5].inputs_of_type("additional_tools");
+    assert!(!initial_tools.is_empty());
+    assert!(
+        !replacement_tools.is_empty(),
+        "replacement must restore the live tool catalog"
+    );
+    assert_eq!(initial_tools[0]["tools"], replacement_tools[0]["tools"]);
     Ok(())
 }
 

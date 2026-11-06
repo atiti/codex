@@ -2016,6 +2016,126 @@ async fn oversized_compaction_with_initial_incremental_tools() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_compaction_preserves_later_tool_updates() -> Result<()> {
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::ThreadSettingsOverrides;
+    use core_test_support::submit_thread_settings;
+    skip_if_no_network!(Ok(()));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model| {
+                model.use_responses_lite = true;
+                model.supports_reasoning_effort_updates = true;
+            })
+            .with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::ReasoningEffortOverride)
+                    .unwrap();
+                config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+                config.model_provider.supports_websockets = false;
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let initial = mount_sse_once(harness.server(), responses::sse_completed("initial")).await;
+    harness.test().submit_turn("BEFORE_UPDATE").await?;
+    let _ = initial.single_request();
+    ThreadIdle::wait(&codex).await;
+    submit_thread_settings(
+        &codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let changed = mount_sse_once(harness.server(), responses::sse_completed("changed")).await;
+    harness.test().submit_text_turn("SETTING_CHANGED").await?;
+    assert!(
+        changed
+            .single_request()
+            .input()
+            .iter()
+            .any(|item| item["type"] == "configuration_update"
+                && item["reasoning"]["effort"] == "high")
+    );
+    ThreadIdle::wait(&codex).await;
+    codex.inject_response_items([
+        json!({"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"new_tool","parameters":{"type":"object","properties":{}}}]}),
+        json!({"type":"message","role":"developer","content":[{"type":"input_text","text":"Removed tools:\n- old_tool"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["tools.removed_definition"]}}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"AFTER_UPDATE"}]}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"RECENT_CONTEXT"}]}),
+    ].into_iter().map(serde_json::from_value).collect::<serde_json::Result<Vec<ResponseItem>>>()?).await?;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse_failed(
+                "too-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(compact("PREFIX", "prefix")),
+            responses::sse_response(responses::sse_failed(
+                "still-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(compact("SECOND_PREFIX", "second-prefix")),
+            responses::sse_response(compact("FINAL", "final")),
+            responses::sse_response(responses::sse_completed("after")),
+        ],
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    harness.test().submit_text_turn("AFTER_RECOVERY").await?;
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "recovery must progress beyond the tool update"
+    );
+    assert!(requests[2].body_contains_text("new_tool"));
+    assert!(requests[2].body_contains_text("old_tool"));
+    assert!(requests[4].body_contains_text("new_tool"));
+    assert!(requests[4].body_contains_text("old_tool"));
+    let input = requests[4].input();
+    let checkpoint = input
+        .iter()
+        .position(|item| item["type"] == "compaction")
+        .unwrap();
+    let addition = input
+        .iter()
+        .position(|item| {
+            item["type"] == "additional_tools" && item.to_string().contains("new_tool")
+        })
+        .unwrap();
+    let removal = input
+        .iter()
+        .position(|item| item["type"] == "message" && item.to_string().contains("old_tool"))
+        .unwrap();
+    assert!(checkpoint < addition && addition < removal);
+    assert!(requests[4].input().iter().any(
+        |item| item["type"] == "configuration_update" && item["reasoning"]["effort"] == "high"
+    ));
+    assert!(requests[4].body_contains_text("SECOND_PREFIX"));
+    assert!(requests[5].body_contains_text("FINAL"));
+    assert_eq!(requests[5].body_json()["reasoning"]["effort"], "high");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_compaction_preserves_history_with_searched_tools() -> Result<()> {
     oversized_compaction_preserves_declared_tools(/*searched*/ true).await
 }

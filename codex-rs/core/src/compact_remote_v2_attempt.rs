@@ -318,7 +318,24 @@ async fn recover_oversized_history(
     };
     let mut checkpoint: Option<ResponseItem> = None;
     let mut checkpoint_configuration: Option<ResponseItem> = None;
+    let mut replayed_updates = Vec::new();
     for _ in 0..32 {
+        // Once the prefix preceding an incremental update has been summarized,
+        // carry the update itself verbatim after the checkpoint on future requests.
+        // Consecutive developer items include removal and namespace notices.
+        if checkpoint.is_some() {
+            let update_end = remaining.iter().take_while(|item| {
+                matches!(item, ResponseItem::AdditionalTools { .. } | ResponseItem::ConfigurationUpdate { .. })
+                    || matches!(item, ResponseItem::Message { role, .. } if role == "developer" || role == "system")
+            }).count();
+            for item in remaining.drain(..update_end) {
+                if matches!(item, ResponseItem::ConfigurationUpdate { .. }) {
+                    checkpoint_configuration = Some(item);
+                } else {
+                    replayed_updates.push(item);
+                }
+            }
+        }
         // Keep tool declarations and retained outputs in the unmodified suffix:
         // their state cannot safely be reconstructed from an opaque checkpoint.
         // Search calls must remain with their outputs, including failed searches.
@@ -355,6 +372,7 @@ async fn recover_oversized_history(
                 .cloned()
                 .chain(checkpoint.iter().cloned())
                 .chain(checkpoint_configuration.iter().cloned())
+                .chain(replayed_updates.iter().cloned())
                 .chain(remaining[..split].iter().cloned())
                 .collect();
             partial.input.push(ResponseItem::CompactionTrigger {});
@@ -402,6 +420,7 @@ async fn recover_oversized_history(
             .cloned()
             .chain(checkpoint.iter().cloned())
             .chain(checkpoint_configuration.iter().cloned())
+            .chain(replayed_updates.iter().cloned())
             .chain(remaining.iter().cloned())
             .collect();
         combined.input.push(ResponseItem::CompactionTrigger {});

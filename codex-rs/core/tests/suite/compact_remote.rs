@@ -1953,6 +1953,9 @@ async fn staged_compaction_replays_reasoning_update_after_checkpoint() -> Result
         })
         .unwrap();
     assert!(checkpoint < update);
+    let after = requests[9].body_json();
+    assert_eq!(after["reasoning"]["effort"], "high");
+    assert!(requests[9].body_contains_text("FINAL"));
     Ok(())
 }
 

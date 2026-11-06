@@ -2027,6 +2027,7 @@ async fn oversized_compaction_with_initial_incremental_tools() -> Result<()> {
 async fn staged_compaction_rebuilds_catalog_after_app_removal() -> Result<()> {
     use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
     use core_test_support::apps_test_server::AppsTestServer;
+    use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
     use core_test_support::apps_test_server::search_capable_apps_builder;
     use core_test_support::wait_for_mcp_server;
     skip_if_no_network!(Ok(()));
@@ -2054,6 +2055,9 @@ async fn staged_compaction_rebuilds_catalog_after_app_removal() -> Result<()> {
         .with_model_info_override("gpt-5.4", |model| model.use_responses_lite = true)
         .with_config(|config| {
             config.features.enable(Feature::IncrementalTools).unwrap();
+            config.features.enable(Feature::CodeModeOnly).unwrap();
+            config.code_mode.direct_only_tool_namespaces =
+                vec![SEARCH_CALENDAR_NAMESPACE.to_string()];
             config.model_provider.supports_websockets = false;
         })
         .build_with_auto_env(&server)
@@ -2076,7 +2080,7 @@ async fn staged_compaction_rebuilds_catalog_after_app_removal() -> Result<()> {
     let requests = mock.requests();
     assert_eq!(requests.len(), 6);
     assert!(
-        requests[0].body_contains_text("calendar"),
+        requests[0].body_contains_text(SEARCH_CALENDAR_NAMESPACE),
         "fixture must expose the app before removal"
     );
     assert!(requests[5].body_contains_text("FINAL"));

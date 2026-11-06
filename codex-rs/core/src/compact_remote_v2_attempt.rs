@@ -408,12 +408,16 @@ fn safe_compaction_boundaries(input: &[ResponseItem]) -> Vec<usize> {
         match item {
             ResponseItem::FunctionCall { call_id, .. }
             | ResponseItem::CustomToolCall { call_id, .. } => {
-                pending.insert(call_id.clone());
+                if call_id.is_empty() || !pending.insert(call_id.clone()) {
+                    unknown_call = true;
+                }
             }
             ResponseItem::LocalShellCall { call_id, .. }
             | ResponseItem::ToolSearchCall { call_id, .. } => {
                 if let Some(id) = call_id {
-                    pending.insert(id.clone());
+                    if id.is_empty() || !pending.insert(id.clone()) {
+                        unknown_call = true;
+                    }
                 } else {
                     unknown_call = true;
                 }
@@ -559,6 +563,19 @@ mod staged_recovery_tests {
             item(json!({"type":"function_call_output","output":"unknown"})),
             item(
                 json!({"type":"message","role":"user","content":[{"type":"input_text","text":"second"}]}),
+            ),
+        ];
+        assert!(safe_compaction_boundaries(&history).is_empty());
+    }
+
+    #[test]
+    fn repeated_pending_call_id_never_creates_a_false_boundary() {
+        let history = vec![
+            item(json!({"type":"function_call","name":"a","arguments":"{}","call_id":"same"})),
+            item(json!({"type":"function_call","name":"b","arguments":"{}","call_id":"same"})),
+            item(json!({"type":"function_call_output","call_id":"same","output":"done"})),
+            item(
+                json!({"type":"message","role":"user","content":[{"type":"input_text","text":"later"}]}),
             ),
         ];
         assert!(safe_compaction_boundaries(&history).is_empty());

@@ -1,6 +1,7 @@
 [advisories]
 # Reviewed 2026-07-02. Keep this list in sync with ../deny.toml.
 ignore = [
+    "RUSTSEC-2026-0441", # pin-utils 0.1.0 is unmaintained via transitive dependencies including aws-smithy-http; remove when upstream paths drop it
     "RUSTSEC-2026-0374", # basic-toml is pulled in by age 0.12.1 through i18n-embed; no safe upgrade until upstream replaces it
     "RUSTSEC-2026-0387", # temporary exception approved 2026-10-24; crypto-bigint 0.5.5 via elliptic-curve/age; review by 2026-11-07 and remove when dependency path upgrades to >=0.7.6
     "RUSTSEC-2026-0370", # informational zvariant notice via Linux zbus 4.4; remove with zbus 6 migration

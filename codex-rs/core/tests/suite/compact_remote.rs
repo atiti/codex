@@ -1800,3 +1800,496 @@ async fn remote_mid_turn_compact_v2_sends_turn_state_over_websocket() -> Result<
     server.shutdown().await;
     Ok(())
 }
+
+#[test_case(false; "successful recovery")]
+#[test_case(true; "failed recovery preserves history")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_remote_compaction_preserves_history_with_staged_checkpoint(
+    fail_final: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let initial = mount_sse_once(harness.server(), responses::sse_completed("initial")).await;
+    harness.test().submit_turn("FIRST_CONTEXT").await?;
+    let _ = initial.single_request();
+    ThreadIdle::wait(&codex).await;
+    codex.inject_response_items([
+        json!({"type":"function_call","call_id":"safe-call","name":"exec_command","arguments":"{}"}),
+        json!({"type":"function_call_output","call_id":"safe-call","output":"TOOL_RESULT"}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"SECOND_CONTEXT"}]}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"RECENT_CONTEXT"}]}),
+    ].into_iter().map(serde_json::from_value).collect::<serde_json::Result<Vec<ResponseItem>>>()?).await?;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse_failed(
+                "too-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(compact("PREFIX_SUMMARY", "prefix")),
+            if fail_final {
+                ResponseTemplate::new(400).set_body_json(
+                    json!({"error":{"code":"invalid_request_error","message":"recovery failed"}}),
+                )
+            } else {
+                responses::sse_response(compact("FINAL_SUMMARY", "final"))
+            },
+            responses::sse_response(responses::sse_completed("after")),
+        ],
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    harness.test().submit_turn("AFTER_RECOVERY").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(requests[1].body_contains_text("FIRST_CONTEXT"));
+    assert!(!requests[1].body_contains_text("RECENT_CONTEXT"));
+    assert!(requests[2].body_contains_text("PREFIX_SUMMARY"));
+    assert!(requests[2].body_contains_text("RECENT_CONTEXT"));
+    if fail_final {
+        assert!(requests[3].body_contains_text("FIRST_CONTEXT"));
+        assert!(requests[3].body_contains_text("TOOL_RESULT"));
+        assert!(requests[3].body_contains_text("RECENT_CONTEXT"));
+        assert!(!requests[3].body_contains_text("PREFIX_SUMMARY"));
+    } else {
+        assert!(requests[3].body_contains_text("FINAL_SUMMARY"));
+    }
+    assert!(requests[3].body_contains_text("AFTER_RECOVERY"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_compaction_replays_reasoning_update_after_checkpoint() -> Result<()> {
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::ThreadSettingsOverrides;
+    use core_test_support::submit_thread_settings;
+
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done", "item":{"type":"compaction", "encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_completed("first"),
+            responses::sse_completed("second"),
+            responses::sse_completed("third"),
+            responses::sse_completed("fourth"),
+            responses::sse_completed("fifth"),
+            responses::sse_completed("sixth"),
+            responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
+            compact("PREFIX", "prefix"),
+            compact("FINAL", "final"),
+            responses::sse_completed("after"),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.4", |model| {
+            model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
+        })
+        .with_config(|config| {
+            config.features.disable(Feature::IncrementalTools).unwrap();
+            config
+                .features
+                .enable(Feature::ReasoningEffortOverride)
+                .unwrap();
+            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("FIRST").await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    for message in ["SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH"] {
+        test.submit_text_turn(message).await?;
+    }
+    test.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&test.codex).await;
+    test.submit_text_turn("AFTER").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 10);
+    assert!(requests[7].input().iter().any(
+        |item| item["type"] == "configuration_update" && item["reasoning"]["effort"] == "high"
+    ));
+    let next = requests[8].input();
+    let checkpoint = next
+        .iter()
+        .position(|item| item["type"] == "compaction")
+        .unwrap();
+    let update = next
+        .iter()
+        .position(|item| {
+            item["type"] == "configuration_update" && item["reasoning"]["effort"] == "high"
+        })
+        .unwrap();
+    assert!(checkpoint < update);
+    let after = requests[9].body_json();
+    assert_eq!(after["reasoning"]["effort"], "high");
+    assert!(requests[9].body_contains_text("FINAL"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_compaction_preserves_history_with_additional_tools() -> Result<()> {
+    oversized_compaction_preserves_declared_tools(/*searched*/ false).await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_compaction_with_initial_incremental_tools() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_completed("first"),
+            responses::sse_completed("second"),
+            responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
+            compact("PREFIX", "prefix"),
+            compact("FINAL", "final"),
+            responses::sse_completed("after"),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.4", |model| model.use_responses_lite = true)
+        .with_config(|config| {
+            config.features.enable(Feature::IncrementalTools).unwrap();
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("FIRST_CONTEXT").await?;
+    test.submit_turn("SECOND_CONTEXT").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&test.codex).await;
+    test.submit_turn("AFTER_RECOVERY").await?;
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "staged recovery should proceed with an initial tool catalog"
+    );
+    assert!(!requests[2].inputs_of_type("additional_tools").is_empty());
+    for request in &requests[3..5] {
+        assert!(!request.inputs_of_type("additional_tools").is_empty());
+    }
+    assert!(requests[4].body_contains_text("PREFIX"));
+    assert!(requests[5].body_contains_text("FINAL"));
+    let initial_tools = requests[0].inputs_of_type("additional_tools");
+    let replacement_tools = requests[5].inputs_of_type("additional_tools");
+    assert!(!initial_tools.is_empty());
+    assert!(
+        !replacement_tools.is_empty(),
+        "replacement must restore the live tool catalog"
+    );
+    assert_eq!(initial_tools[0]["tools"], replacement_tools[0]["tools"]);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_compaction_rebuilds_catalog_after_app_removal() -> Result<()> {
+    use codex_mcp::CODEX_APPS_MCP_SERVER_NAME;
+    use core_test_support::apps_test_server::AppsTestServer;
+    use core_test_support::apps_test_server::SEARCH_CALENDAR_NAMESPACE;
+    use core_test_support::apps_test_server::search_capable_apps_builder;
+    use core_test_support::wait_for_mcp_server;
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let apps = AppsTestServer::mount_searchable(&server).await?;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_completed("first"),
+            responses::sse_completed("second"),
+            responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
+            compact("PREFIX", "prefix"),
+            compact("FINAL", "final"),
+            responses::sse_completed("after"),
+        ],
+    )
+    .await;
+    let test = search_capable_apps_builder(apps.chatgpt_base_url.clone())
+        .with_model_info_override("gpt-5.4", |model| model.use_responses_lite = true)
+        .with_config(|config| {
+            config.features.enable(Feature::IncrementalTools).unwrap();
+            config.features.enable(Feature::CodeModeOnly).unwrap();
+            config.code_mode.direct_only_tool_namespaces =
+                vec![SEARCH_CALENDAR_NAMESPACE.to_string()];
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    wait_for_mcp_server(&test.codex, CODEX_APPS_MCP_SERVER_NAME).await?;
+    test.submit_turn("BEFORE_REMOVAL").await?;
+    let current = test.codex.config().await;
+    let mut updated = test.config.clone();
+    let path = updated.codex_home.join("config.toml");
+    let user_config = toml::from_str("[apps.calendar]\nenabled = false\n")?;
+    updated.config_layer_stack = updated
+        .config_layer_stack
+        .with_user_config(&path, user_config)?;
+    let _ = test.codex.refresh_runtime_config(current, updated).await;
+    test.codex.submit(Op::RefreshMcpServers).await?;
+    test.submit_turn("AFTER_REMOVAL").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&test.codex).await;
+    test.submit_turn("AFTER_COMPACTION").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 6);
+    assert!(
+        requests[0].body_contains_text(SEARCH_CALENDAR_NAMESPACE),
+        "fixture must expose the app before removal"
+    );
+    assert!(requests[5].body_contains_text("FINAL"));
+    assert!(!requests[5].body_contains_text("mcp__codex_apps__calendar"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_compaction_preserves_later_tool_updates() -> Result<()> {
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::ThreadSettingsOverrides;
+    use core_test_support::submit_thread_settings;
+    skip_if_no_network!(Ok(()));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_model_info_override("gpt-5.4", |model| {
+                model.use_responses_lite = true;
+                model.supports_reasoning_effort_updates = true;
+            })
+            .with_config(|config| {
+                config
+                    .features
+                    .enable(Feature::ReasoningEffortOverride)
+                    .unwrap();
+                config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+                config.model_provider.supports_websockets = false;
+            }),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let initial = mount_sse_once(harness.server(), responses::sse_completed("initial")).await;
+    harness.test().submit_turn("BEFORE_UPDATE").await?;
+    let _ = initial.single_request();
+    ThreadIdle::wait(&codex).await;
+    submit_thread_settings(
+        &codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let changed = mount_sse_once(harness.server(), responses::sse_completed("changed")).await;
+    harness.test().submit_text_turn("SETTING_CHANGED").await?;
+    assert!(
+        changed
+            .single_request()
+            .input()
+            .iter()
+            .any(|item| item["type"] == "configuration_update"
+                && item["reasoning"]["effort"] == "high")
+    );
+    ThreadIdle::wait(&codex).await;
+    codex.inject_response_items([
+        json!({"type":"additional_tools","role":"developer","tools":[{"type":"function","name":"new_tool","parameters":{"type":"object","properties":{}}}]}),
+        json!({"type":"message","role":"developer","content":[{"type":"input_text","text":"Removed tools:\n- old_tool"}],"internal_chat_message_metadata_passthrough":{"content_item_kinds":["tools.removed_definition"]}}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"AFTER_UPDATE"}]}),
+        json!({"type":"message","role":"user","content":[{"type":"input_text","text":"RECENT_CONTEXT"}]}),
+    ].into_iter().map(serde_json::from_value).collect::<serde_json::Result<Vec<ResponseItem>>>()?).await?;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse_failed(
+                "too-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(compact("PREFIX", "prefix")),
+            responses::sse_response(responses::sse_failed(
+                "still-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(compact("SECOND_PREFIX", "second-prefix")),
+            responses::sse_response(compact("FINAL", "final")),
+            responses::sse_response(responses::sse_completed("after")),
+        ],
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    harness.test().submit_text_turn("AFTER_RECOVERY").await?;
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        6,
+        "recovery must progress beyond the tool update"
+    );
+    assert!(requests[2].body_contains_text("new_tool"));
+    assert!(requests[2].body_contains_text("old_tool"));
+    assert!(requests[4].body_contains_text("new_tool"));
+    assert!(requests[4].body_contains_text("old_tool"));
+    let input = requests[4].input();
+    let checkpoint = input
+        .iter()
+        .position(|item| item["type"] == "compaction")
+        .unwrap();
+    let addition = input
+        .iter()
+        .position(|item| {
+            item["type"] == "additional_tools" && item.to_string().contains("new_tool")
+        })
+        .unwrap();
+    let removal = input
+        .iter()
+        .position(|item| item["type"] == "message" && item.to_string().contains("old_tool"))
+        .unwrap();
+    assert!(checkpoint < addition && addition < removal);
+    assert!(requests[4].input().iter().any(
+        |item| item["type"] == "configuration_update" && item["reasoning"]["effort"] == "high"
+    ));
+    assert!(requests[4].body_contains_text("SECOND_PREFIX"));
+    assert!(requests[5].body_contains_text("FINAL"));
+    assert_eq!(requests[5].body_json()["reasoning"]["effort"], "high");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn oversized_compaction_preserves_history_with_searched_tools() -> Result<()> {
+    oversized_compaction_preserves_declared_tools(/*searched*/ true).await
+}
+
+async fn oversized_compaction_preserves_declared_tools(searched: bool) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let mut extensions = ExtensionRegistryBuilder::new();
+    extensions.thread_lifecycle_contributor(Arc::new(ThreadIdle));
+    let harness = TestCodexHarness::with_builder(
+        test_codex()
+            .with_extensions(Arc::new(extensions.build()))
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
+    )
+    .await?;
+    let codex = harness.test().codex.clone();
+    let initial = mount_sse_once(harness.server(), responses::sse_completed("initial")).await;
+    harness.test().submit_turn("PRESERVE_CONTEXT").await?;
+    let _ = initial.single_request();
+    ThreadIdle::wait(&codex).await;
+    let declarations = if searched {
+        vec![
+            serde_json::from_value(
+                json!({"type":"tool_search_call", "call_id":"search", "execution":"client", "arguments":{}}),
+            )?,
+            serde_json::from_value(
+                json!({"type":"tool_search_output", "call_id":"search", "execution":"client", "status":"completed", "tools":[{"type":"function", "name":"discovered", "parameters":{"type":"object", "properties":{}}}]}),
+            )?,
+        ]
+    } else {
+        vec![ResponseItem::AdditionalTools {
+            id: None,
+            role: "developer".to_string(),
+            tools: Arc::from([]),
+        }]
+    };
+    codex.inject_response_items(declarations).await?;
+    let mock = responses::mount_response_sequence(
+        harness.server(),
+        vec![
+            responses::sse_response(responses::sse_failed(
+                "too-large",
+                "context_length_exceeded",
+                "context too large",
+            )),
+            responses::sse_response(sse(vec![
+                json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"PREFIX_SUMMARY"}}),
+                responses::ev_completed("prefix"),
+            ])),
+            responses::sse_response(sse(vec![
+                json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":"FINAL_SUMMARY"}}),
+                responses::ev_completed("final"),
+            ])),
+            responses::sse_response(responses::sse_completed("after")),
+        ],
+    )
+    .await;
+    codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&codex).await;
+    harness
+        .test()
+        .submit_turn("AFTER_FAILED_COMPACTION")
+        .await?;
+    let requests = mock.requests();
+    assert_eq!(
+        requests.len(),
+        4,
+        "recovery should compact the prefix without discarding tool declarations"
+    );
+    assert!(requests[2].body_contains_text("PRESERVE_CONTEXT"));
+    let kind = if searched {
+        "tool_search_output"
+    } else {
+        "additional_tools"
+    };
+    assert_eq!(requests[1].inputs_of_type(kind).len(), 0);
+    assert_eq!(requests[2].inputs_of_type(kind).len(), 1);
+    assert!(requests[2].body_contains_text("PREFIX_SUMMARY"));
+    assert!(requests[3].body_contains_text("FINAL_SUMMARY"));
+    if searched {
+        assert!(requests[2].body_contains_text("discovered"));
+        assert_eq!(requests[2].inputs_of_type("tool_search_call").len(), 1);
+    }
+    Ok(())
+}

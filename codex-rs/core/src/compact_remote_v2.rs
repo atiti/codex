@@ -316,6 +316,7 @@ async fn run_remote_compaction_request_v2(
             return collect_compaction_output(
                 sess,
                 turn_context,
+                &step_context.settings,
                 stream,
                 CompactionRequestKind::Background(&cancellation),
             )
@@ -323,7 +324,7 @@ async fn run_remote_compaction_request_v2(
         }
         CompactionRequestTransport::Foreground(client_session) => client_session,
     };
-    let settings = &turn_context.initial_settings;
+    let settings = &step_context.settings;
     let max_retries = turn_context
         .model_provider()
         .info()
@@ -349,6 +350,7 @@ async fn run_remote_compaction_request_v2(
                 collect_compaction_output(
                     sess,
                     turn_context,
+                    &step_context.settings,
                     stream,
                     CompactionRequestKind::Foreground,
                 )
@@ -377,6 +379,7 @@ async fn run_remote_compaction_request_v2(
 async fn collect_compaction_output(
     sess: &Session,
     turn_context: &TurnContext,
+    settings: &crate::session::step_settings::ResolvedStepSettings,
     mut stream: ResponseStream,
     request_kind: CompactionRequestKind<'_>,
 ) -> CodexResult<RemoteCompactionV2Output> {
@@ -407,12 +410,8 @@ async fn collect_compaction_output(
                     }
                 }
                 CompactionRequestKind::Foreground => {
-                    sess.record_incomplete_response_usage(
-                        turn_context,
-                        &turn_context.initial_settings,
-                        incomplete,
-                    )
-                    .await;
+                    sess.record_incomplete_response_usage(turn_context, settings, incomplete)
+                        .await;
                     sess.send_token_count_event(turn_context).await;
                 }
             }
@@ -1266,6 +1265,7 @@ mod tests {
         let result = collect_compaction_output(
             &sess,
             &turn_context,
+            &turn_context.initial_settings,
             stream,
             CompactionRequestKind::Background(&cancellation),
         )
@@ -1315,6 +1315,7 @@ mod tests {
         let output = collect_compaction_output(
             &sess,
             &turn_context,
+            &turn_context.initial_settings,
             stream,
             CompactionRequestKind::Foreground,
         )

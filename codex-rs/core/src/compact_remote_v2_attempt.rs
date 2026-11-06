@@ -318,6 +318,7 @@ async fn recover_oversized_history(
         return Err(original_error);
     }
     let mut checkpoint: Option<ResponseItem> = None;
+    let mut checkpoint_configuration: Option<ResponseItem> = None;
     for _ in 0..32 {
         let boundaries = safe_compaction_boundaries(&remaining);
         if boundaries.is_empty() {
@@ -330,6 +331,7 @@ async fn recover_oversized_history(
             partial.input = checkpoint
                 .iter()
                 .cloned()
+                .chain(checkpoint_configuration.iter().cloned())
                 .chain(remaining[..split].iter().cloned())
                 .collect();
             partial.input.push(ResponseItem::CompactionTrigger {});
@@ -352,6 +354,12 @@ async fn recover_oversized_history(
                         )
                         .await?;
                     }
+                    checkpoint_configuration = remaining[..split]
+                        .iter()
+                        .rev()
+                        .find(|item| matches!(item, ResponseItem::ConfigurationUpdate { .. }))
+                        .cloned()
+                        .or(checkpoint_configuration);
                     checkpoint = Some(output.compaction_output);
                     remaining.drain(..split);
                     break;
@@ -369,6 +377,7 @@ async fn recover_oversized_history(
         combined.input = checkpoint
             .iter()
             .cloned()
+            .chain(checkpoint_configuration.iter().cloned())
             .chain(remaining.iter().cloned())
             .collect();
         combined.input.push(ResponseItem::CompactionTrigger {});

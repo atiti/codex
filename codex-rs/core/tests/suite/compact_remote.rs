@@ -1875,6 +1875,88 @@ async fn oversized_remote_compaction_preserves_history_with_staged_checkpoint(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_compaction_replays_reasoning_update_after_checkpoint() -> Result<()> {
+    use codex_protocol::openai_models::ReasoningEffort;
+    use codex_protocol::protocol::ThreadSettingsOverrides;
+    use core_test_support::submit_thread_settings;
+
+    skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done", "item":{"type":"compaction", "encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(
+        &server,
+        vec![
+            responses::sse_completed("first"),
+            responses::sse_completed("second"),
+            responses::sse_completed("third"),
+            responses::sse_completed("fourth"),
+            responses::sse_completed("fifth"),
+            responses::sse_completed("sixth"),
+            responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
+            compact("PREFIX", "prefix"),
+            compact("FINAL", "final"),
+            responses::sse_completed("after"),
+        ],
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model_info_override("gpt-5.4", |model| {
+            model.use_responses_lite = true;
+            model.supports_reasoning_effort_updates = true;
+        })
+        .with_config(|config| {
+            config.features.disable(Feature::IncrementalTools).unwrap();
+            config
+                .features
+                .enable(Feature::ReasoningEffortOverride)
+                .unwrap();
+            config.model_reasoning_effort = Some(ReasoningEffort::Medium);
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_text_turn("FIRST").await?;
+    submit_thread_settings(
+        &test.codex,
+        ThreadSettingsOverrides {
+            effort: Some(Some(ReasoningEffort::High)),
+            ..Default::default()
+        },
+    )
+    .await?;
+    for message in ["SECOND", "THIRD", "FOURTH", "FIFTH", "SIXTH"] {
+        test.submit_text_turn(message).await?;
+    }
+    test.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&test.codex).await;
+    test.submit_text_turn("AFTER").await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 10);
+    assert!(requests[7].input().iter().any(
+        |item| item["type"] == "configuration_update" && item["reasoning"]["effort"] == "high"
+    ));
+    let next = requests[8].input();
+    let checkpoint = next
+        .iter()
+        .position(|item| item["type"] == "compaction")
+        .unwrap();
+    let update = next
+        .iter()
+        .position(|item| {
+            item["type"] == "configuration_update" && item["reasoning"]["effort"] == "high"
+        })
+        .unwrap();
+    assert!(checkpoint < update);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn oversized_compaction_preserves_history_with_additional_tools() -> Result<()> {
     oversized_compaction_preserves_declared_tools(/*searched*/ false).await
 }

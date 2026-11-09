@@ -419,8 +419,12 @@ class InstallShTest(unittest.TestCase):
             oldest = releases / f"{versions[0]}-{target}"
             helper = oldest / "bin/codex-code-mode-host"
             source = root / "helper.c"
-            source.write_text("#include <unistd.h>\nint main(void) { sleep(300); return 0; }\n")
-            subprocess.run(["cc", str(source), "-o", str(helper)], check=True, capture_output=True)
+            source.write_text(
+                "#include <unistd.h>\nint main(void) { sleep(300); return 0; }\n"
+            )
+            subprocess.run(
+                ["cc", str(source), "-o", str(helper)], check=True, capture_output=True
+            )
             if system.sysname == "Darwin":
                 # A copied macOS system binary cannot run with its platform signature.
                 subprocess.run(

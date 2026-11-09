@@ -440,6 +440,13 @@ async fn activation_fixture(models: Vec<ModelInfo>) -> ActivationFixture {
     let configuration = &mut mutable.state.get_mut().session_configuration;
     let config = Arc::make_mut(&mut configuration.original_config_do_not_use);
     config.model = Some(MODEL_A.to_string());
+    config.model_providers.insert(
+        "test-compatible".to_string(),
+        codex_model_provider_info::ModelProviderInfo {
+            tool_compatibility: Some(ToolCompatibility::FunctionsAndApplyPatch),
+            ..Default::default()
+        },
+    );
     config.features = mutable.features.clone();
     let settings = Arc::make_mut(&mut configuration.step_settings);
     settings.collaboration_mode = settings.collaboration_mode.with_updates(
@@ -924,6 +931,34 @@ async fn delayed_activation_does_not_retarget_a_task(change: TaskChangeDuringLoo
         &expected_inputs,
     ));
     assert_eq!(desired_step_settings(&session).await, desired);
+    session.abort_all_tasks(TurnAbortReason::Replaced).await;
+}
+
+#[tokio::test]
+async fn provider_switch_preserves_destination_catalog_origin() {
+    let ActivationFixture {
+        session,
+        turn,
+        lookup,
+        ..
+    } = activation_fixture(activation_models()).await;
+    lookup.release();
+    let outcome = session
+        .apply_routed_turn_settings(
+            &turn.sub_id,
+            TurnSettingsUpdate {
+                model: Some(MODEL_B.to_string()),
+                ..Default::default()
+            },
+            Some("test-compatible".to_string()),
+            None,
+        )
+        .await;
+    assert_eq!(outcome, TurnSettingsUpdateOutcome::Applied);
+    let settings = turn.next_step_settings.load_full();
+    assert_eq!(settings.model_info.slug, MODEL_B);
+    assert_eq!(settings.model_info.origin, ModelOrigin::ExplicitConfig);
+    assert_eq!(settings.model_info.tool_mode, Some(ToolMode::Direct));
     session.abort_all_tasks(TurnAbortReason::Replaced).await;
 }
 

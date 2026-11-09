@@ -323,7 +323,11 @@ async fn run_remote_compaction_request_v2(
         }
         CompactionRequestTransport::Foreground(client_session) => client_session,
     };
-    let settings = &turn_context.initial_settings;
+    // A prompt hook can retarget the active step (model and ChatGPT account)
+    // while the frozen initial turn model stays on the session. Compaction is
+    // itself a model request, so it has to use the routed step. Sending the
+    // initial model to the failover account returns model_not_found.
+    let settings = &step_context.settings;
     let max_retries = turn_context
         .model_provider()
         .info()

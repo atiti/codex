@@ -6839,7 +6839,11 @@ async fn pre_turn_remote_compaction_uses_prompt_hook_routed_model() -> Result<()
     test.submit_turn("second").await?;
     let requests = requests.requests();
     assert_eq!(requests.len(), 3);
-    assert_eq!(requests[0].body_json()["model"], "gpt-6-luna", "prompt hook must apply before checking compaction");
+    assert_eq!(
+        requests[0].body_json()["model"],
+        "gpt-6-luna",
+        "prompt hook must apply before checking compaction"
+    );
     assert_eq!(requests[1].body_json()["model"], "gpt-6-luna");
     assert_eq!(requests[1].inputs_of_type("compaction_trigger").len(), 1);
     Ok(())

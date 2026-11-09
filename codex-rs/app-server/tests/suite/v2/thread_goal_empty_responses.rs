@@ -18,7 +18,7 @@ use codex_app_server_protocol::ThreadGoalGetResponse;
 use codex_app_server_protocol::ThreadGoalSetResponse;
 use codex_app_server_protocol::ThreadGoalStatus;
 use codex_app_server_protocol::ThreadGoalUpdatedNotification;
-use codex_app_server_protocol::ThreadItem;
+use codex_app_server_protocol::ThreadItemPayload;
 use codex_app_server_protocol::ThreadStartParams;
 use codex_app_server_protocol::ThreadStartResponse;
 use codex_app_server_protocol::TurnCompletedNotification;
@@ -263,7 +263,7 @@ async fn completion_review_continue_keeps_goal_active_and_reports_activity() -> 
             app.read_notification("item/completed"),
         )
         .await??;
-        if let ThreadItem::AgentMessage { text, .. } = item.item
+        if let ThreadItemPayload::AgentMessage { text, .. } = item.item.payload
             && text.contains("Review agent · continue (attempt 1)")
         {
             saw_continue = true;

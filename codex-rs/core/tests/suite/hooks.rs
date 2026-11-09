@@ -6809,3 +6809,36 @@ async fn goal_continuation_can_be_blocked_before_sampling() -> Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_turn_remote_compaction_uses_prompt_hook_routed_model() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let requests = mount_sse_sequence(&server, vec![
+        sse(vec![ev_assistant_message("first", "first"), ev_completed_with_tokens("first-response", 500)]),
+        sse(vec![json!({"type":"response.output_item.done", "item":{"type":"compaction", "encrypted_content":"summary"}}), ev_completed("compact-response")]),
+        sse(vec![ev_assistant_message("second", "second"), ev_completed("second-response")]),
+    ]).await;
+    let mut builder = test_codex().with_model("gpt-6.1-terra")
+        .with_pre_build_hook(|home| {
+            write_user_prompt_submit_hook(home, "never block", "unused").unwrap();
+            let path = home.join("user_prompt_submit_hook.py");
+            let mut script = fs::read_to_string(&path).unwrap();
+            script.push_str("else:\n    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'model': 'gpt-6-luna', 'stripProviderState': True}}))\n");
+            fs::write(path, script).unwrap();
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config.features.enable(Feature::StepModelSwitching).unwrap();
+            config.features.enable(Feature::RemoteCompactionV2).unwrap();
+            config.model_auto_compact_token_limit = Some(200);
+        });
+    let test = builder.build(&server).await?;
+    test.submit_turn("first").await?;
+    test.submit_turn("second").await?;
+    let requests = requests.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].body_json()["model"], "gpt-6-luna");
+    assert_eq!(requests[1].inputs_of_type("compaction_trigger").len(), 1);
+    Ok(())
+}

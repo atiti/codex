@@ -232,3 +232,201 @@ async fn progress_reviewer_runs_for_an_ordinary_active_turn() -> Result<()> {
     );
     Ok(())
 }
+
+#[cfg(unix)]
+#[test]
+fn reviewer_github_tool_is_exposed_and_runs_fixed_query() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github", || {
+        reviewer_github_tool_test(ReviewerGitHubScenario::Allowed)
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn reviewer_github_tool_denies_without_allow_rule() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github_denied", || {
+        reviewer_github_tool_test(ReviewerGitHubScenario::MissingAllowRule)
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn reviewer_github_tool_disappears_with_denied_reads() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github_restricted", || {
+        reviewer_github_tool_test(ReviewerGitHubScenario::DeniedReads)
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn reviewer_github_tool_limits_large_output() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack("reviewer_github_large", || {
+        reviewer_github_tool_test(ReviewerGitHubScenario::LargeOutput)
+    })
+}
+
+#[cfg(unix)]
+enum ReviewerGitHubScenario {
+    Allowed,
+    MissingAllowRule,
+    DeniedReads,
+    LargeOutput,
+}
+
+#[cfg(unix)]
+async fn reviewer_github_tool_test(scenario: ReviewerGitHubScenario) -> Result<()> {
+    let allow = !matches!(scenario, ReviewerGitHubScenario::MissingAllowRule);
+    let deny_reads = matches!(scenario, ReviewerGitHubScenario::DeniedReads);
+    let large_output = matches!(scenario, ReviewerGitHubScenario::LargeOutput);
+    use codex_features::Feature;
+    use core_test_support::responses::ev_function_call;
+    use core_test_support::responses::mount_sse_sequence;
+    core_test_support::skip_if_no_network!(Ok(()));
+    use std::os::unix::fs::PermissionsExt;
+    let server = start_mock_server().await;
+    let review_server = start_mock_server().await;
+    let _root = mount_response_once_match(
+        &server,
+        |r: &wiremock::Request| {
+            String::from_utf8_lossy(&r.body).contains("root stays active for github")
+        },
+        sse_response(sse(vec![ev_response_created("root"), ev_completed("root")]))
+            .set_delay(Duration::from_secs(10)),
+    )
+    .await;
+    let reviewer = mount_sse_sequence(
+        &review_server,
+        vec![
+            sse(vec![
+                ev_response_created("review1"),
+                ev_function_call(
+                    "gh1",
+                    "review_github_pull_request",
+                    r#"{"repository":"atiti/agent-router","pull_request":136}"#,
+                ),
+                ev_completed("review1"),
+            ]),
+            sse(vec![
+                ev_response_created("review2"),
+                ev_assistant_message("decision", r#"{"decision":"continue","reason":"test"}"#),
+                ev_completed("review2"),
+            ]),
+        ],
+    )
+    .await;
+    let tool_dir = tempfile::tempdir()?;
+    let gh = tool_dir.path().join("gh");
+    std::fs::write(
+        &gh,
+        if large_output {
+            "#!/bin/sh\n/usr/bin/yes x | /usr/bin/head -c 260000\n"
+        } else {
+            "#!/bin/sh\nprintf '%s\\n' '{\"state\":\"OPEN\",\"headRefOid\":\"testhead\"}'\n"
+        },
+    )?;
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755))?;
+    let path = tool_dir.path().to_string_lossy().into_owned();
+    let review_url = format!("{}/v1", review_server.uri());
+    let test = test_codex()
+        .with_model_info_override("gpt-5.5", |model| {
+            model.tool_mode = Some(codex_protocol::openai_models::ToolMode::CodeModeOnly);
+        })
+        .with_pre_build_hook(move |home| {
+            std::fs::write(home.join("config.toml"), "# load user rules\n")
+                .expect("write reviewer config");
+            std::fs::create_dir_all(home.join("rules")).expect("create reviewer rules directory");
+            std::fs::write(
+                home.join("rules/default.rules"),
+                if allow {
+                    r#"prefix_rule(pattern=["gh", "pr", "view"], decision="allow")"#
+                } else {
+                    r#"prefix_rule(pattern=["gh", "pr", "view"], decision="forbidden")"#
+                },
+            )
+            .expect("write reviewer rules");
+        })
+        .with_config(move |config| {
+            if deny_reads {
+                use codex_protocol::models::PermissionProfile;
+                use codex_protocol::permissions::FileSystemAccessMode;
+                use codex_protocol::permissions::FileSystemSandboxEntry;
+                use codex_protocol::permissions::NetworkSandboxPolicy;
+                use codex_utils_absolute_path::AbsolutePathBuf;
+                let mut fs = PermissionProfile::read_only().file_system_sandbox_policy();
+                fs.entries.push(FileSystemSandboxEntry::new(
+                    AbsolutePathBuf::try_from("/private/tmp/reviewer-denied")
+                        .expect("absolute denied-read path")
+                        .into(),
+                    FileSystemAccessMode::Deny,
+                ));
+                config
+                    .permissions
+                    .set_permission_profile(PermissionProfile::from_runtime_permissions(
+                        &fs,
+                        NetworkSandboxPolicy::Restricted,
+                    ))
+                    .expect("set reviewer permission profile");
+            }
+            config
+                .features
+                .enable(Feature::ReviewGithubEvidence)
+                .expect("enable reviewer GitHub evidence");
+            config
+                .permissions
+                .shell_environment_policy
+                .r#set
+                .insert("PATH".into(), path);
+            config.progress_review_provider = Some("review-provider".into());
+            let mut provider = config.model_provider.clone();
+            provider.base_url = Some(review_url);
+            config
+                .model_providers
+                .insert("review-provider".into(), provider);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    let started = test
+        .codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "root stays active for github".into(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let codex_core::TurnInputSubmission::Started { turn_id, .. } = started else {
+        panic!("turn did not start")
+    };
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnStarted(_))
+    })
+    .await;
+    test.codex
+        .review_progress(&turn_id, "inspect PR 136".into())
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let requests = reviewer.requests();
+    if deny_reads {
+        assert!(
+            !requests[0].body_json()["tools"]
+                .to_string()
+                .contains("review_github_pull_request")
+        );
+        return Ok(());
+    }
+    assert!(
+        requests[0].body_json()["tools"]
+            .to_string()
+            .contains("review_github_pull_request")
+    );
+    assert!(
+        requests[1].body_contains_text(if large_output {
+            "GitHub response too large"
+        } else if allow {
+            "testhead"
+        } else {
+            "requires an explicit gh pr view"
+        }),
+        "tool output must reach reviewer: {}",
+        requests[1].body_json()["input"]
+    );
+    Ok(())
+}

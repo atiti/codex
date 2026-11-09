@@ -1244,7 +1244,7 @@ async fn child_completion_wakes_parent_after_final_answer() -> Result<()> {
         sse(vec![
             ev_function_call_with_namespace(
                 "spawn-worker",
-                "collaboration",
+                "agentroute_collaboration",
                 "spawn_agent",
                 r#"{"task_name":"worker","fork_turns":"none","message":"Check whether the release is ready."}"#,
             ),
@@ -1420,7 +1420,14 @@ async fn skill_read_recovers_omitted_installation_and_reads_selected_environment
         }
     }
 
-    let executor = core_test_support::exec_server::ExecServerProcess::start().await?;
+    // Keep capability discovery independent of skills installed in the operator's home.
+    let executor_home = TempDir::new()?;
+    let executor_home_path = executor_home.path().to_str().expect("temporary home path");
+    let executor = core_test_support::exec_server::ExecServerProcess::start_with_env(&[
+        ("HOME", executor_home_path),
+        ("USERPROFILE", executor_home_path),
+    ])
+    .await?;
     // Keep byte-budget decisions stable across host temporary-directory lengths.
     let temp_root = fs::canonicalize(std::env::temp_dir())?;
     let workspace = tempfile::Builder::new()

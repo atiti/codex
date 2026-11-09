@@ -28,16 +28,16 @@ jobs:
     # Mac is the primary platform and Linux is secondary. Windows coverage is
     # explicitly enabled through the workflow input and does not run for releases.
     # Code-mode unit tests run on every enabled Bazel target.
-    # Standard hosted runners need time for a cold native build before all test shards run.
-    timeout-minutes: 180
+    # Intel's cold build takes 155 minutes, before the full test suite starts.
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos-') && 300 || 180 }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # macOS
+          # Match the native architectures and images used by public releases.
           - os: macos-15
             target: aarch64-apple-darwin
-          - os: macos-15
+          - os: macos-15-intel
             target: x86_64-apple-darwin
 
           # Linux
@@ -127,14 +127,33 @@ jobs:
             --print-failed-action-summary
             --print-failed-test-logs
           )
-          bazel_test_args=(
-            test
+          bazel_shared_args=(
             --test_env=RUST_TEST_THREADS=2
             --test_tag_filters=-argument-comment-lint
-            --test_verbose_timeout_warnings
             --build_metadata=COMMIT_SHA=${GITHUB_SHA}
           )
-          ./.github/scripts/run-bazel-ci.sh \
+          bazel_test_args=(test "${bazel_shared_args[@]}" --test_verbose_timeout_warnings)
+          bazel_test_command=(./.github/scripts/run-bazel-ci.sh)
+          if [[ -z "${BUILDBUDDY_API_KEY:-}" && "${RUNNER_ENVIRONMENT:-}" == "github-hosted" ]]; then
+            # Real-time WebSocket and helper fixtures must not compete with a
+            # cold Rust/V8 build on small hosted runners. Compile the same target
+            # set first, then let the complete test command execute every test.
+            # Bazel defers failed-attempt bodies until retries finish. Stream
+            # those files immediately so job cancellation cannot hide failures.
+            bazel_test_args+=(--test_output=all)
+            bazel_test_command=(python3 .github/scripts/stream_bazel_test_logs.py -- "${bazel_test_command[@]}")
+            bazel_build_args=(
+              build "${bazel_shared_args[@]}"
+              --build_tag_filters=-argument-comment-lint
+            )
+            ./.github/scripts/run-bazel-ci.sh \
+              "${bazel_wrapper_args[@]}" \
+              -- \
+              "${bazel_build_args[@]}" \
+              -- \
+              "${bazel_targets[@]}"
+          fi
+          "${bazel_test_command[@]}" \
             "${bazel_wrapper_args[@]}" \
             -- \
             "${bazel_test_args[@]}" \
@@ -374,7 +393,7 @@ jobs:
 
   clippy:
     # Native Mac builds fall back to local compilation without BuildBuddy.
-    timeout-minutes: ${{ matrix.os == 'macos-15' && 180 || 120 }}
+    timeout-minutes: ${{ startsWith(matrix.os, 'macos-') && 180 || 120 }}
     strategy:
       fail-fast: false
       matrix:

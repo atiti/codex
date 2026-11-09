@@ -6824,20 +6824,22 @@ async fn pre_turn_remote_compaction_uses_prompt_hook_routed_model() -> Result<()
             write_user_prompt_submit_hook(home, "never block", "unused").unwrap();
             let path = home.join("user_prompt_submit_hook.py");
             let mut script = fs::read_to_string(&path).unwrap();
-            script.push_str("else:\n    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'model': 'gpt-6-luna', 'stripProviderState': True}}))\n");
+            script.push_str("else:\n    print(json.dumps({'hookSpecificOutput': {'hookEventName': 'UserPromptSubmit', 'model': 'gpt-6-luna', 'modelProvider': 'openai', 'stripProviderState': True}}))\n");
             fs::write(path, script).unwrap();
         })
         .with_config(|config| {
             trust_discovered_hooks(config);
+            config.model_providers.insert("openai".to_string(), config.model_provider.clone());
             config.features.enable(Feature::StepModelSwitching).unwrap();
             config.features.enable(Feature::RemoteCompactionV2).unwrap();
             config.model_auto_compact_token_limit = Some(200);
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     test.submit_turn("first").await?;
     test.submit_turn("second").await?;
     let requests = requests.requests();
     assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].body_json()["model"], "gpt-6-luna", "prompt hook must apply before checking compaction");
     assert_eq!(requests[1].body_json()["model"], "gpt-6-luna");
     assert_eq!(requests[1].inputs_of_type("compaction_trigger").len(), 1);
     Ok(())

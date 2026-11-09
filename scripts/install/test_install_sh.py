@@ -427,7 +427,11 @@ class InstallShTest(unittest.TestCase):
                     capture_output=True,
                 )
             # A helper can outlive its parent CLI; retain its whole release.
-            with subprocess.Popen([str(helper), "300"]) as running:
+            # Linux multicall coreutils dispatches on argv[0], even when copied.
+            command = [str(helper), "300"]
+            if system.sysname == "Linux":
+                command = ["/bin/bash", "-c", 'exec -a sleep "$1" 300', "bash", str(helper)]
+            with subprocess.Popen(command) as running:
                 try:
                     second, _ = run_installer_in(
                         root, versions[1], **install_options[versions[1]]

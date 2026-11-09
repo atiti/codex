@@ -721,6 +721,7 @@ other non-default provider fields are not supported"
     /// Use the configured provider ID, never its user-controlled display name, for defaults.
     pub fn supports_cyber_access_programs(&self, provider_id: &str) -> bool {
         self.capabilities
+            .as_ref()
             .and_then(|capabilities| capabilities.cyber_access_programs)
             .unwrap_or(provider_id == OPENAI_PROVIDER_ID)
     }

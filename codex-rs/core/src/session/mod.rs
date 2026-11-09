@@ -836,11 +836,11 @@ impl Session {
             .get_model_info(model.as_str(), &config.to_models_manager_config())
             .await;
         if let Some(tool_compatibility) = config.model_provider.tool_compatibility {
-            model_info = step_activation::model_info_for_provider_compatibility(
+            model_info.model = Arc::new(step_activation::model_info_for_provider_compatibility(
                 &model_info,
                 &model_info,
                 Some(tool_compatibility),
-            );
+            ));
         }
         step_activation::apply_provider_context_window(&mut model_info, &config.model_provider);
         let auth = auth_manager.auth_cached();

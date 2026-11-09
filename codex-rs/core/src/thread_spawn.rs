@@ -52,7 +52,8 @@ impl ThreadSpawnRequest {
         self,
     ) -> Result<(ThreadCreateRequest, AgentMessage), ThreadSpawnError> {
         let message_text = match &self.message {
-            AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text,
+            AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text.as_str(),
+            AgentMessage::Routed { routing_prompt, .. } => routing_prompt.as_deref().unwrap_or(""),
         };
         if message_text.trim().is_empty() {
             return Err(ThreadSpawnError::Preparation(
@@ -76,6 +77,7 @@ pub(crate) struct ChildSpawnSettings {
     pub(crate) config: Config,
     pub(crate) source: SessionSource,
     pub(crate) options: SpawnAgentOptions,
+    pub(crate) requested_backend: Option<String>,
 }
 
 /// Child runtime and its effective configuration.
@@ -101,7 +103,19 @@ pub(crate) async fn spawn(
     request: ThreadSpawnRequest,
 ) -> Result<ThreadSpawnResult, ThreadSpawnError> {
     let (request, message) = request.into_parts()?;
+    let model_explicit = request.model.is_some();
+    let routing_prompt = match &message {
+        AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => Some(text.clone()),
+        AgentMessage::Routed { routing_prompt, .. } => routing_prompt.clone(),
+    };
     let (settings, task_name) = prepare(session, step_context, call_id, request).await?;
+    let message = AgentMessage::Routed {
+        message: Box::new(message),
+        routing_prompt,
+        inherited_model_provider: Some(step_context.turn.model_provider_id()),
+        requested_backend: settings.requested_backend.clone(),
+        model_explicit,
+    };
     let request = SpawnRequest {
         caller: session.thread_id,
         config: settings.config,
@@ -135,15 +149,6 @@ pub(crate) async fn prepare(
         model,
         reasoning_effort,
     } = request;
-    let message_text = match &message {
-        AgentMessage::Plaintext(text) | AgentMessage::Encrypted(text) => text.as_str(),
-        AgentMessage::Routed { routing_prompt, .. } => routing_prompt.as_deref().unwrap_or(""),
-    };
-    if message_text.trim().is_empty() {
-        return Err(ThreadSpawnError::Preparation(
-            "Empty message can't be sent to an agent".to_string(),
-        ));
-    }
     let role_name = agent_type
         .as_deref()
         .map(str::trim)
@@ -162,16 +167,6 @@ pub(crate) async fn prepare(
     .await
     .map_err(ThreadSpawnError::Preparation)?;
     let requested_backend = prepared.requested_backend.clone();
-    let inherited_model_provider = turn.model_provider_id();
-    let model_explicit = model.is_some();
-    let routing_prompt = message_text.to_owned();
-    let message = AgentMessage::Routed {
-        message: Box::new(message),
-        routing_prompt: Some(routing_prompt),
-        inherited_model_provider: Some(inherited_model_provider),
-        requested_backend,
-        model_explicit,
-    };
     let config = prepared.config;
     let task_name = turn
         .session_source
@@ -218,6 +213,7 @@ pub(crate) async fn prepare(
     };
     Ok((
         ChildSpawnSettings {
+            requested_backend,
             config,
             source: spawn_source,
             options: SpawnAgentOptions {

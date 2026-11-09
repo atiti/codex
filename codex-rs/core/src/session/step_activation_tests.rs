@@ -742,7 +742,10 @@ async fn submitted_sparse_updates_preserve_captured_steps_and_ordering() {
             &turn,
             &after.settings,
             Some(&usage),
-            crate::session::TokenUsageContext::Sampling,
+            crate::session::TokenUsageContext::Sampling {
+                includes_reasoning: false,
+                input_item_count: 0,
+            },
         )
         .await
         .expect("record routed usage");
@@ -1392,7 +1395,7 @@ fn provider_tool_compatibility_preserves_admitted_safety_authority(
     parent_review_messages(&mut admitted).policy = Some("admitted policy".to_string());
     destination.slug = "external-model".to_string();
     destination.display_name = "External model".to_string();
-    destination.used_fallback_model_metadata = true;
+    destination.origin = codex_protocol::openai_models::ModelOrigin::Synthetic;
     admitted.context_window = Some(272_000);
     admitted.max_context_window = Some(272_000);
     admitted.auto_compact_token_limit = Some(250_000);
@@ -1480,7 +1483,8 @@ fn provider_tool_compatibility_preserves_admitted_safety_authority(
     } else {
         assert_eq!(compatible.tool_mode, destination.tool_mode);
     }
-    assert!(compatible.used_fallback_model_metadata);
+    // Compatibility returns model data; the caller retains the destination's catalog origin.
+    assert_eq!(compatible.slug, destination.slug);
 }
 
 #[derive(Clone, Copy)]

@@ -105,7 +105,7 @@ pub(crate) async fn resolve_review_model(
         && !review_model.model_overridden
         && !review_model.catalog_contains_auto_review
         && turn.config.model_catalog.is_none()
-        && turn.provider.info().model_catalog_url.is_none()
+        && turn.model_provider().info().model_catalog_url.is_none()
         && !super::is_basic_session_source(&turn.session_source)
     {
         // The session retains the task through waiter cancellation. Dropping the

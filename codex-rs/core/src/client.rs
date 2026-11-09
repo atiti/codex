@@ -1056,6 +1056,7 @@ impl ModelClient {
             collect_auth_env_telemetry(provider.info(), codex_api_key_env_enabled);
         let include_attestation = provider.supports_attestation();
         let client = Self {
+            runtime_auth: self.runtime_auth.clone(),
             state: Arc::new(ModelClientState {
                 thread_id: self.state.thread_id,
                 provider,

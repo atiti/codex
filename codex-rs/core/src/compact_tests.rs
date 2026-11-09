@@ -924,6 +924,7 @@ fn grok_compaction_retry_is_bounded_and_specific() {
         CodexErrorDetails::ResponseIncomplete(Box::new(
             codex_protocol::error::ResponseIncompleteError {
                 reason: reason.to_string(),
+                partial_output: vec![],
                 response_id: None,
                 token_usage: None,
             },

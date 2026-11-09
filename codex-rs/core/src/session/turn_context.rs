@@ -1324,11 +1324,13 @@ impl Session {
         let mut model_info = if let Some(tool_compatibility) =
             session_configuration.provider.info().tool_compatibility
         {
-            step_activation::model_info_for_provider_compatibility(
+            let mut catalog = model_info.clone();
+            catalog.model = Arc::new(step_activation::model_info_for_provider_compatibility(
                 &model_info,
                 &model_info,
                 Some(tool_compatibility),
-            )
+            ));
+            catalog
         } else {
             model_info
         };

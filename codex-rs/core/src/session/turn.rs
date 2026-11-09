@@ -265,7 +265,7 @@ pub(crate) async fn run_turn(
     .await;
     if let Err(err) = compaction_result {
         // Compaction runs before the new input is recorded, so preserve it on every failure.
-        record_inputs_with_hook_outcomes(
+        let _ = record_inputs_with_hook_outcomes(
             &sess,
             &turn_context,
             &turn_context.capture_current_model_info(),
@@ -319,7 +319,7 @@ pub(crate) async fn run_turn(
         {
             Ok(requirements) => requirements,
             Err(err) => {
-                record_inputs_with_hook_outcomes(
+                let _ = record_inputs_with_hook_outcomes(
                     &sess,
                     &turn_context,
                     &turn_context.capture_current_model_info(),
@@ -348,7 +348,7 @@ pub(crate) async fn run_turn(
     {
         Ok(step_context) => step_context,
         Err(err) if matches!(err.details(), CodexErrorDetails::TurnAborted) => {
-            record_inputs_with_hook_outcomes(
+            let _ = record_inputs_with_hook_outcomes(
                 &sess,
                 &turn_context,
                 &turn_context.capture_current_model_info(),

@@ -479,11 +479,12 @@ impl Session {
         if let (Some(destination), Some((_, compatibility, _))) =
             (updated_settings.as_mut(), requested_provider.as_ref())
         {
-            destination.model_info = Arc::new(model_info_for_provider_compatibility(
+            let compatible = model_info_for_provider_compatibility(
                 &current.model_info,
                 &destination.model_info,
                 *compatibility,
-            ));
+            );
+            Arc::make_mut(&mut destination.model_info).model = Arc::new(compatible);
         }
         if let Some(destination) = updated_settings.as_mut() {
             let provider = requested_provider
@@ -491,7 +492,7 @@ impl Session {
                 .map(|(_, _, provider)| provider.clone())
                 .unwrap_or_else(|| turn_context.model_provider());
             apply_provider_context_window(
-                Arc::make_mut(&mut destination.model_info),
+                Arc::make_mut(&mut Arc::make_mut(&mut destination.model_info).model),
                 provider.info(),
             );
         }

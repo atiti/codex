@@ -251,7 +251,9 @@ async fn apply_requested_spawn_agent_model_overrides(
                 .await;
             config.model = Some(requested_model.model.clone());
             if let Some(reasoning_effort) = requested_reasoning_effort {
-                if !selected_model_info.used_fallback_model_metadata {
+                if selected_model_info.origin
+                    != codex_protocol::openai_models::ModelOrigin::Synthetic
+                {
                     validate_spawn_agent_reasoning_effort(
                         &requested_model.model,
                         &selected_model_info.supported_reasoning_levels,
@@ -259,8 +261,10 @@ async fn apply_requested_spawn_agent_model_overrides(
                     )?;
                 }
                 config.model_reasoning_effort = Some(reasoning_effort);
-            } else if !selected_model_info.used_fallback_model_metadata {
-                config.model_reasoning_effort = selected_model_info.default_reasoning_level;
+            } else if selected_model_info.origin
+                != codex_protocol::openai_models::ModelOrigin::Synthetic
+            {
+                config.model_reasoning_effort = selected_model_info.default_reasoning_level.clone();
             }
             return Ok(requested_backend);
         }

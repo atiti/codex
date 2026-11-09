@@ -1587,7 +1587,10 @@ async fn new_turn_without_provider_tool_compatibility_preserves_fallback_metadat
 
     let turn_context = session.new_default_turn().await;
 
-    assert!(turn_context.model_info().used_fallback_model_metadata);
+    assert_eq!(
+        turn_context.model_info().origin,
+        codex_protocol::openai_models::ModelOrigin::Synthetic
+    );
 
     Ok(())
 }

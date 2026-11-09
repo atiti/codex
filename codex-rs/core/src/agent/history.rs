@@ -234,22 +234,25 @@ pub(super) async fn prepare_forked_history(
             })?
             .items;
 
-    let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> =
-        if multi_agent_version == MultiAgentVersion::V2 {
-            let parent_config = parent_thread.session.get_config().await;
-            let parent_usage_hints = resolve_usage_hints(
-                &parent_config.multi_agent_v2,
-                ResolvedModelMessages::bundled().multi_agent(),
-                !parent_config.update_plan_enabled,
-            );
-            [parent_usage_hints.root, parent_usage_hints.subagent]
-                .into_iter()
-                .flatten()
-                .map(|instructions| instructions.render().into_text().unwrap_or_default())
-                .collect()
-        } else {
-            Vec::new()
-        };
+    let multi_agent_v2_usage_hint_texts_to_filter: Vec<String> = if multi_agent_version
+        == MultiAgentVersion::V2
+    {
+        let parent_config = parent_thread.session.get_config().await;
+        let parent_usage_hints = resolve_usage_hints(
+            &parent_config.multi_agent_v2,
+            ResolvedModelMessages::bundled().multi_agent(),
+            !parent_config.update_plan_enabled,
+            codex_model_provider::create_model_provider(parent_config.model_provider.clone(), None)
+                .capabilities(),
+        );
+        [parent_usage_hints.root, parent_usage_hints.subagent]
+            .into_iter()
+            .flatten()
+            .map(|instructions| instructions.render().into_text().unwrap_or_default())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let mut preserve_context_baselines = true;
     for item in forked_rollout_items.iter().rev() {
         let RolloutItem::Compacted(compacted) = item else {
@@ -467,6 +470,11 @@ pub(super) async fn prepare_forked_history(
                     &config.multi_agent_v2,
                     ResolvedModelMessages::bundled().multi_agent(),
                     !config.update_plan_enabled,
+                    codex_model_provider::create_model_provider(
+                        config.model_provider.clone(),
+                        None,
+                    )
+                    .capabilities(),
                 )
                 .subagent
             })

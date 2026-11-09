@@ -1956,7 +1956,11 @@ async fn run_ratatui_app(
     // Remote startup keeps its existing explicit --cd trust check. Resolving other
     // remote folders requires authoritative project-root information from the server.
     let trust_host = agentroute_local_server::project_trust_host(&app_server_target);
-    if !matches!(session_selection, resume_picker::SessionSelection::AgentsOverview) && (trust_host == config_update::ProjectTrustHost::Local || remote_cwd_override.is_some()) {
+    if !matches!(
+        session_selection,
+        resume_picker::SessionSelection::AgentsOverview
+    ) && (trust_host == config_update::ProjectTrustHost::Local || remote_cwd_override.is_some())
+    {
         let resumed_thread = if trust_host == config_update::ProjectTrustHost::Local
             && !matches!(app_server_target, AppServerTarget::Embedded)
             && let resume_picker::SessionSelection::Resume(target)

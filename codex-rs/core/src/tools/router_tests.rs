@@ -124,6 +124,7 @@ fn plaintext_v2_custom_namespace_calls_are_redacted_without_encryption_metadata(
                     arguments: json!({"message": "portable task"}).to_string(),
                 },
                 encrypted_function_args,
+                native_call: None,
             };
 
             assert_eq!(call.direct_source(), ToolCallSource::DirectPlaintextMessage);
@@ -140,6 +141,7 @@ fn encrypted_v2_collaboration_calls_remain_encrypted() {
             arguments: json!({"message": "gAAAA-provider-bound"}).to_string(),
         },
         encrypted_function_args: Some(vec!["message".to_string()]),
+        native_call: None,
     };
 
     assert_eq!(call.direct_source(), ToolCallSource::Direct);
@@ -154,6 +156,7 @@ fn reserved_collaboration_calls_without_metadata_remain_provider_managed() {
             arguments: json!({"message": "provider-managed"}).to_string(),
         },
         encrypted_function_args: None,
+        native_call: None,
     };
 
     assert_eq!(call.direct_source(), ToolCallSource::Direct);

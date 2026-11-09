@@ -6815,7 +6815,7 @@ async fn pre_turn_remote_compaction_uses_prompt_hook_routed_model() -> Result<()
     skip_if_no_network!(Ok(()));
     let server = start_mock_server().await;
     let requests = mount_sse_sequence(&server, vec![
-        sse(vec![ev_assistant_message("first", "first"), ev_completed_with_tokens("first-response", 500)]),
+        sse(vec![ev_assistant_message("first", "first"), ev_completed_with_tokens("first-response", /*total_tokens*/ 500)]),
         sse(vec![json!({"type":"response.output_item.done", "item":{"type":"compaction", "encrypted_content":"summary"}}), ev_completed("compact-response")]),
         sse(vec![ev_assistant_message("second", "second"), ev_completed("second-response")]),
     ]).await;

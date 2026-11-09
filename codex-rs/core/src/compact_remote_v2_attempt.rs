@@ -85,7 +85,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         captured_window,
     ) = match input {
         RemoteCompactV2AttemptInput::Foreground(client_session) => {
-            let model_info = turn_context.model_info();
+            let model_info = &step_context.settings.model_info;
             let mut history = sess.clone_history().await;
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
             let tools_in_history = step_context.settings.model_info.use_responses_lite

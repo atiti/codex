@@ -294,11 +294,20 @@ impl GoalToolExecutor {
             .goal_state_permit()
             .await
             .map_err(FunctionCallError::Fatal)?;
+        runtime
+            .validate_supervisor_stop(args.status)
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
         let review_goal_id = if args.status == ThreadGoalStatus::Complete {
             Some(self.review_completion(&invocation).await?)
         } else {
             None
         };
+        // A review can run while a worker appends a new durable event.
+        runtime
+            .validate_supervisor_stop(args.status)
+            .await
+            .map_err(FunctionCallError::RespondToModel)?;
         self.account_active_goal_progress(
             match args.status {
                 ThreadGoalStatus::Complete => codex_state::GoalAccountingMode::ActiveOrComplete,

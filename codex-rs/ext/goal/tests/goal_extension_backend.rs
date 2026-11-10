@@ -2148,3 +2148,86 @@ fn protocol_status(status: codex_state::ThreadGoalStatus) -> ThreadGoalStatus {
         codex_state::ThreadGoalStatus::Complete => ThreadGoalStatus::Complete,
     }
 }
+
+#[tokio::test]
+async fn supervisor_goal_stop_rejects_coordination_and_corrupt_inbox_but_allows_pause()
+-> anyhow::Result<()> {
+    let runtime = test_runtime().await?;
+    let thread_id = test_thread_id()?;
+    seed_thread_metadata(runtime.as_ref(), thread_id).await?;
+    runtime
+        .thread_goals()
+        .replace_thread_goal(
+            thread_id,
+            "Resolve supervised work",
+            codex_state::ThreadGoalStatus::Active,
+            /*token_budget*/ None,
+        )
+        .await?;
+    let tools = installed_tools(runtime.clone(), thread_id).await;
+    let directory = runtime.sqlite().home().join("supervisor-inbox");
+    std::fs::create_dir(&directory)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o700))?;
+    }
+    let path = directory.join(format!("{thread_id}.json"));
+    let inbox = json!({"version":1,"role":"supervisor","thread_id":thread_id,"team":"team","member":"supervisor","generation":1,"live_children":[],"events":[{"id":"overlap","state":"persisted","actionable":true,"kind":"coordination","message":"Owner overlap"}]});
+    std::fs::write(&path, serde_json::to_vec(&inbox)?)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    let update = tool_by_name(&tools, "update_goal");
+    for status in ["blocked", "complete"] {
+        let error = update
+            .handle(tool_call("update_goal", "stop", json!({"status":status})))
+            .await
+            .err()
+            .expect("pending coordination must prevent model stop");
+        assert!(
+            matches!(error, FunctionCallError::RespondToModel(message) if message.contains("unresolved coordination"))
+        );
+    }
+    std::fs::write(&path, b"{broken")?;
+    let error = update
+        .handle(tool_call(
+            "update_goal",
+            "corrupt",
+            json!({"status":"blocked"}),
+        ))
+        .await
+        .err()
+        .expect("corrupt inbox must preserve active goal");
+    assert!(
+        matches!(error, FunctionCallError::RespondToModel(message) if message.contains("invalid supervisor inbox"))
+    );
+    assert_eq!(
+        runtime
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await?
+            .expect("goal")
+            .status,
+        codex_state::ThreadGoalStatus::Active
+    );
+    update
+        .handle(tool_call(
+            "update_goal",
+            "pause",
+            json!({"status":"paused"}),
+        ))
+        .await?;
+    assert_eq!(
+        runtime
+            .thread_goals()
+            .get_thread_goal(thread_id)
+            .await?
+            .expect("goal")
+            .status,
+        codex_state::ThreadGoalStatus::Paused
+    );
+    Ok(())
+}

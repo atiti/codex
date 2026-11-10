@@ -14,6 +14,7 @@ mod progress_review;
 mod runtime;
 mod spec;
 mod steering;
+mod supervisor_inbox;
 mod tool;
 
 pub use api::GoalObjectiveUpdate;

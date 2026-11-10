@@ -1,3 +1,7 @@
+#[path = "supervisor_runtime.rs"]
+mod supervisor;
+#[path = "supervisor_stop.rs"]
+mod supervisor_stop;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
@@ -55,6 +59,8 @@ struct GoalRuntimeInner {
     root_accounting_state: Option<Arc<GoalAccountingState>>,
     enabled: AtomicBool,
     continuation_size_notice_sent: AtomicBool,
+    supervisor_notice_sent: AtomicBool,
+    supervisor_poll: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     tools_available_for_thread: bool,
     tools_visible_for_thread: bool,
     goal_state_lock: Semaphore,
@@ -110,6 +116,8 @@ impl GoalRuntimeHandle {
                 root_accounting_state: config.root_accounting_state,
                 enabled: AtomicBool::new(config.enabled),
                 continuation_size_notice_sent: AtomicBool::new(false),
+                supervisor_notice_sent: AtomicBool::new(false),
+                supervisor_poll: std::sync::Mutex::new(None),
                 tools_available_for_thread: config.tools_available_for_thread,
                 tools_visible_for_thread: config.tools_visible_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
@@ -439,6 +447,10 @@ impl GoalRuntimeHandle {
     }
 
     pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
+        self.start_supervisor_poll().await;
+        if self.continue_supervisor_if_idle().await? {
+            return Ok(());
+        }
         if !self.tools_available() {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());

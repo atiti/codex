@@ -11,6 +11,7 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadReadyInput;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
@@ -162,12 +163,21 @@ where
         })
     }
 
+    fn on_thread_ready<'a>(&'a self, input: ThreadReadyInput<'a, C>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(runtime) = goal_runtime_handle(input.thread_store) {
+                runtime.start_supervisor_poll().await;
+            }
+        })
+    }
+
     fn on_thread_resume<'a>(&'a self, input: ThreadResumeInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
 
+            runtime.resume_supervisor_receipt().await;
             if let Err(err) = runtime.restore_after_resume().await {
                 tracing::warn!(
                     "failed to restore goal runtime after thread resume for {}: {err}",
@@ -193,6 +203,14 @@ where
                 }
                 accounting.finish_turn(&turn_id);
             }
+            if matches!(
+                input.cause,
+                codex_extension_api::ThreadIdleCause::Interrupted
+                    | codex_extension_api::ThreadIdleCause::Failed
+            ) && runtime.suspend_supervisor().await
+            {
+                return;
+            }
             if let Err(err) = runtime.continue_if_idle().await {
                 tracing::warn!(
                     "failed to continue active goal for idle thread {}: {err}",
@@ -205,6 +223,7 @@ where
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if let Some(runtime) = goal_runtime_handle(input.thread_store) {
+                runtime.stop_supervisor_poll();
                 self.goal_service.unregister_runtime(&runtime);
             }
         })
@@ -240,6 +259,7 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            runtime.supervisor_turn_started().await;
             if !runtime.is_enabled() {
                 return;
             }
@@ -316,6 +336,7 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            runtime.finish_supervisor_turn().await;
             if !runtime.is_enabled() {
                 return;
             }
@@ -382,6 +403,9 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            if input.reason == codex_protocol::protocol::TurnAbortReason::Interrupted {
+                runtime.suspend_supervisor().await;
+            }
             if !runtime.is_enabled() {
                 runtime.accounting_state().reset_empty_responses();
                 return;
@@ -426,6 +450,7 @@ where
                 return;
             };
 
+            runtime.suspend_supervisor().await;
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its

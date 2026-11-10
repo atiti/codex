@@ -89,28 +89,13 @@ impl GoalRuntimeHandle {
     }
 
     pub(crate) async fn start_supervisor_poll(&self) {
-        let home = self.supervisor_home().await;
-        if supervisor_inbox::load(&home, &self.thread_id().to_string())
-            .ok()
-            .flatten()
-            .is_none()
-        {
+        if !self.tools_available() {
             return;
         }
         let Ok(mut task) = self.inner.supervisor_poll.lock() else {
             return;
         };
         if task.is_some() {
-            return;
-        }
-        if !home
-            .join("supervisor-inbox-cursors")
-            .join(format!("{}.json", self.thread_id()))
-            .exists()
-            && let Err(error) =
-                save_cursor(&home, &self.thread_id().to_string(), &Cursor::default())
-        {
-            tracing::warn!(%error, "failed to persist supervisor registration receipt");
             return;
         }
         let weak = Arc::downgrade(&self.inner);
@@ -138,6 +123,9 @@ impl GoalRuntimeHandle {
 
     // true means supervisor waiting/coordination owns this boundary; ordinary goal continuation must wait.
     pub(crate) async fn continue_supervisor_if_idle(&self) -> Result<bool, String> {
+        if !self.tools_available() {
+            return Ok(false);
+        }
         let _permit = self.goal_state_permit().await?;
         let home = self.supervisor_home().await;
         let loaded =
@@ -167,6 +155,29 @@ impl GoalRuntimeHandle {
                 return Ok(true);
             }
         };
+        let Some(manager) = self.inner.thread_manager.upgrade() else {
+            return Ok(true);
+        };
+        let Ok(thread) = manager.get_thread(self.thread_id()).await else {
+            return Ok(true);
+        };
+        // Discovery alone never registers ordinary threads. Only a validated bound
+        // snapshot establishes enrollment, and its marker precedes any admission.
+        self.inner
+            .supervisor_enrolled
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        if !home
+            .join("supervisor-inbox-cursors")
+            .join(format!("{}.json", self.thread_id()))
+            .exists()
+        {
+            let initial = Cursor {
+                suspended: thread.agent_status().await
+                    == codex_protocol::protocol::AgentStatus::Interrupted,
+                ..Cursor::default()
+            };
+            save_cursor(&home, &self.thread_id().to_string(), &initial)?;
+        }
         let mut value = match cursor(&home, &self.thread_id().to_string()) {
             Ok(value) => value,
             Err(error) => {
@@ -179,12 +190,6 @@ impl GoalRuntimeHandle {
                 }
                 return Ok(true);
             }
-        };
-        let Some(manager) = self.inner.thread_manager.upgrade() else {
-            return Ok(true);
-        };
-        let Ok(thread) = manager.get_thread(self.thread_id()).await else {
-            return Ok(true);
         };
         match super::resolution::consume(&home, self.thread_id(), &thread, &mut value).await {
             Ok(true) => {

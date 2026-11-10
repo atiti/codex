@@ -19,9 +19,8 @@ impl GoalRuntimeHandle {
             .exists()
             || self
                 .inner
-                .supervisor_poll
-                .lock()
-                .is_ok_and(|task| task.is_some())
+                .supervisor_enrolled
+                .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(crate) async fn validate_supervisor_stop(

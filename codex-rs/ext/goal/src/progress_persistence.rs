@@ -32,7 +32,7 @@ pub(crate) fn load(path: &Path) -> SavedReview {
                 && state
                     .previous
                     .as_ref()
-                    .is_none_or(|(_, text)| text.len() <= 1200)
+                    .is_none_or(|(_, text)| text.len() <= 2400)
         })
         .unwrap_or_default()
 }

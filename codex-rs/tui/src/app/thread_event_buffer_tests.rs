@@ -230,14 +230,16 @@ fn completed_tool_payloads_obey_total_replay_byte_budget() {
             notification
                 .turn
                 .items
-                .push(codex_app_server_protocol::ThreadItem::AgentMessage {
-                    id: format!("item-{index}"),
-                    text: "x".repeat(1024 * 1024),
-                    phase: None,
-                    memory_citation: None,
-                    questions: None,
-                    delivery: None,
-                });
+                .push(codex_app_server_protocol::ThreadItem::untimed(
+                    codex_app_server_protocol::ThreadItemPayload::AgentMessage {
+                        id: format!("item-{index}"),
+                        text: "x".repeat(1024 * 1024),
+                        phase: None,
+                        memory_citation: None,
+                        questions: None,
+                        delivery: None,
+                    },
+                ));
         }
         store.push_notification(event);
     }

@@ -9,6 +9,7 @@ codex_rust_crate(
     integration_compile_data_extra = [
         "src/accounting.rs",
         "src/steering.rs",
+        "src/supervisor_inbox.rs",
         "src/completion_review.rs",
         "src/progress_evidence.rs",
         "src/progress_checkpoint.rs",

@@ -22,8 +22,10 @@ runs:
       if: ${{ runner.os == 'Linux' }}
       shell: bash
       run: |
-        sudo DEBIAN_FRONTEND=noninteractive apt-get update
-        sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends pkg-config libcap-dev
+        # A stalled package mirror must not consume the entire lint job.
+        apt_options=(-o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30)
+        timeout --kill-after=30s 5m sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" update
+        timeout --kill-after=30s 5m sudo DEBIAN_FRONTEND=noninteractive apt-get "${apt_options[@]}" install -y --no-install-recommends pkg-config libcap-dev
 
     - name: Resolve app-server/exec-server compatibility releases
       if: ${{ runner.os == 'Linux' }}

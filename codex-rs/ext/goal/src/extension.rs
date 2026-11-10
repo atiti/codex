@@ -177,7 +177,6 @@ where
                 return;
             };
 
-            runtime.resume_supervisor_receipt().await;
             if let Err(err) = runtime.restore_after_resume().await {
                 tracing::warn!(
                     "failed to restore goal runtime after thread resume for {}: {err}",
@@ -259,7 +258,18 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
-            runtime.supervisor_turn_started().await;
+            if input
+                .turn_store
+                .get::<Arc<dyn codex_analytics::TurnAnalyticsMetadata>>()
+                .is_some_and(|metadata| {
+                    matches!(
+                        metadata.turn_trigger().as_deref(),
+                        None | Some("user" | "user_input")
+                    )
+                })
+            {
+                runtime.supervisor_user_resumed().await;
+            }
             if !runtime.is_enabled() {
                 return;
             }
@@ -336,7 +346,9 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
-            runtime.finish_supervisor_turn().await;
+            runtime
+                .finish_supervisor_turn(input.turn_store.level_id())
+                .await;
             if !runtime.is_enabled() {
                 return;
             }

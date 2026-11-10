@@ -1,5 +1,8 @@
 //! Safe-boundary supervision; inbox data never supplies execution authority.
 use super::GoalRuntimeHandle;
+use super::admission::Cursor;
+use super::admission::cursor;
+use super::admission::save_cursor;
 use crate::supervisor_inbox;
 use codex_core::StartIfIdleSubmission;
 use codex_core::TurnInput;
@@ -8,94 +11,14 @@ use codex_core::TurnStartOptions;
 use codex_core::context::ContextualUserFragment;
 use codex_core::context::InternalContextSource;
 use codex_core::context::InternalModelContextFragment;
-use serde::Deserialize;
-use serde::Serialize;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[derive(Default, Deserialize, Serialize)]
-struct Cursor {
-    generation: u64,
-    suspended: bool,
-    #[serde(default)]
-    action_key: u64,
-    #[serde(default)]
-    attempts: u8,
-    #[serde(default)]
-    in_flight: bool,
-}
-
-fn cursor(home: &Path, thread_id: &str) -> Result<Cursor, String> {
-    let path = home
-        .join("supervisor-inbox-cursors")
-        .join(format!("{thread_id}.json"));
-    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
-        if !metadata.is_file() {
-            return Err("supervisor cursor must be a regular file".into());
-        }
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let owner = std::fs::metadata(home).map_err(|e| e.to_string())?.uid();
-            if metadata.uid() != owner || metadata.mode() & 0o077 != 0 {
-                return Err("supervisor cursor must be owner-only".into());
-            }
-        }
-    }
-    match std::fs::read(path) {
-        Ok(data) if data.len() <= 1024 => serde_json::from_slice(&data).map_err(|e| e.to_string()),
-        Ok(_) => Err("supervisor cursor exceeds size limit".into()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Cursor::default()),
-        Err(error) => Err(error.to_string()),
-    }
-}
-
-fn save_cursor(home: &Path, thread_id: &str, value: &Cursor) -> Result<(), String> {
-    use std::io::Write;
-    let parent = home.join("supervisor-inbox-cursors");
-    std::fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
-    if !std::fs::symlink_metadata(&parent)
-        .map_err(|e| e.to_string())?
-        .is_dir()
-    {
-        return Err("supervisor cursor directory must not be a symlink".into());
-    }
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&parent, std::fs::Permissions::from_mode(0o700))
-            .map_err(|e| e.to_string())?;
-        options.mode(0o600);
-    }
-    let path = parent.join(format!("{thread_id}.json"));
-    let temporary = parent.join(format!(
-        "{thread_id}.{}.{:?}.tmp",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
-    let result = (|| {
-        serde_json::to_writer(&mut file, value)?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(&temporary, &path)?;
-        std::fs::File::open(&parent)?.sync_all()
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(temporary);
-    }
-    result.map_err(|e: std::io::Error| e.to_string())
-}
-
 impl GoalRuntimeHandle {
-    pub(crate) async fn supervisor_turn_started(&self) {
+    pub(crate) async fn supervisor_user_resumed(&self) {
+        self.inner
+            .supervisor_receipt_failed
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let home = self.supervisor_home().await;
         if supervisor_inbox::load(&home, &self.thread_id().to_string())
             .ok()
@@ -111,34 +34,18 @@ impl GoalRuntimeHandle {
         }
     }
 
-    pub(crate) async fn finish_supervisor_turn(&self) {
+    pub(crate) async fn finish_supervisor_turn(&self, turn_id: &str) {
         let Ok(_permit) = self.goal_state_permit().await else {
             return;
         };
         let home = self.supervisor_home().await;
         if let Ok(mut value) = cursor(&home, &self.thread_id().to_string())
             && value.in_flight
+            && value.admitted_turn_id.as_deref() == Some(turn_id)
         {
             value.in_flight = false;
             if let Err(error) = save_cursor(&home, &self.thread_id().to_string(), &value) {
                 tracing::warn!(%error, "failed to finish supervisor receipt");
-            }
-        }
-    }
-
-    pub(crate) async fn resume_supervisor_receipt(&self) {
-        let Ok(_permit) = self.goal_state_permit().await else {
-            return;
-        };
-        let home = self.supervisor_home().await;
-        if let Ok(mut value) = cursor(&home, &self.thread_id().to_string())
-            && value.in_flight
-            && !value.suspended
-        {
-            value.in_flight = false;
-            value.attempts = value.attempts.saturating_sub(1);
-            if let Err(error) = save_cursor(&home, &self.thread_id().to_string(), &value) {
-                tracing::warn!(%error, "failed to recover supervisor receipt");
             }
         }
     }
@@ -255,6 +162,41 @@ impl GoalRuntimeHandle {
                 return Ok(true);
             }
         };
+        let Some(manager) = self.inner.thread_manager.upgrade() else {
+            return Ok(true);
+        };
+        let Ok(thread) = manager.get_thread(self.thread_id()).await else {
+            return Ok(true);
+        };
+        match super::resolution::consume(&home, self.thread_id(), &thread, &mut value).await {
+            Ok(true) => {
+                save_cursor(&home, &self.thread_id().to_string(), &value)?;
+                self.inner
+                    .supervisor_receipt_failed
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                if !self
+                    .inner
+                    .supervisor_notice_sent
+                    .swap(true, std::sync::atomic::Ordering::Relaxed)
+                {
+                    self.inner.event_emitter.user_notice(
+                        format!("{}:supervisor-resolution-invalid", self.thread_id()),
+                        format!("Operator admission resolution could not be accepted: {error}"),
+                    );
+                }
+                return Ok(true);
+            }
+        }
+        if self
+            .inner
+            .supervisor_receipt_failed
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Ok(true);
+        }
         let goal = self
             .inner
             .state_dbs
@@ -269,6 +211,7 @@ impl GoalRuntimeHandle {
                     codex_state::ThreadGoalStatus::Paused
                         | codex_state::ThreadGoalStatus::BudgetLimited
                         | codex_state::ThreadGoalStatus::UsageLimited
+                        | codex_state::ThreadGoalStatus::Complete
                 )
             })
             || self
@@ -280,6 +223,22 @@ impl GoalRuntimeHandle {
                 .map_err(|e| e.to_string())?
         {
             return Ok(true);
+        }
+        if value.reservation.is_some() || value.in_flight {
+            if let Err(error) = super::admission::reconcile(&thread, &mut value).await {
+                self.inner
+                    .supervisor_receipt_failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.inner.event_emitter.user_notice(
+                    format!("{}:supervisor-admission-reconciliation", self.thread_id()),
+                    error,
+                );
+                return Ok(true);
+            }
+            save_cursor(&home, &self.thread_id().to_string(), &value)?;
+            if value.in_flight || value.suspended {
+                return Ok(true);
+            }
         }
         if !inbox.actionable() {
             self.inner
@@ -294,6 +253,49 @@ impl GoalRuntimeHandle {
         }
         let key = inbox.action_key();
         if key != value.action_key {
+            if let Some(goal) = goal
+                .as_ref()
+                .filter(|goal| goal.status == codex_state::ThreadGoalStatus::Blocked)
+                && inbox.resumes_goal()
+            {
+                if let Some(resumed) = self
+                    .inner
+                    .state_dbs
+                    .thread_goals()
+                    .update_thread_goal(
+                        self.thread_id(),
+                        codex_state::GoalUpdate {
+                            objective: None,
+                            status: Some(codex_state::ThreadGoalStatus::Active),
+                            token_budget: None,
+                            expected_goal_id: Some(goal.goal_id.clone()),
+                        },
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?
+                {
+                    self.inner.accounting_state.reset_empty_responses();
+                    self.inner
+                        .accounting_state
+                        .mark_idle_goal_active(resumed.goal_id.clone());
+                    self.inner.metrics.record_resumed();
+                    self.inner.analytics.status_changed(
+                        &resumed,
+                        Some(codex_state::ThreadGoalStatus::Blocked),
+                        crate::analytics::GoalEventAttribution::NoTurn,
+                    );
+                    self.inner.event_emitter.thread_goal_updated(
+                        format!("{}:supervisor-resume:{key}", self.thread_id()),
+                        /*turn_id*/ None,
+                        crate::tool::protocol_goal_from_state(resumed),
+                    );
+                }
+            } else if goal
+                .as_ref()
+                .is_some_and(|g| g.status == codex_state::ThreadGoalStatus::Blocked)
+            {
+                self.inner.event_emitter.user_notice(format!("{}:supervisor-coordination-only:{key}",self.thread_id()),"New coordination will be handled while the original goal remains blocked. Only a bound wait resolution, canonical ready step, or explicit user goal resume reactivates that goal; existing approvals and operation holds remain.");
+            }
             value.action_key = key;
             value.attempts = 0;
             self.inner
@@ -310,12 +312,6 @@ impl GoalRuntimeHandle {
             }
             return Ok(true);
         }
-        let Some(manager) = self.inner.thread_manager.upgrade() else {
-            return Ok(true);
-        };
-        let Ok(thread) = manager.get_thread(self.thread_id()).await else {
-            return Ok(true);
-        };
         let item = ContextualUserFragment::into(InternalModelContextFragment::new(
             InternalContextSource::from_static("supervisor_inbox"),
             inbox.notice(),
@@ -325,22 +321,62 @@ impl GoalRuntimeHandle {
             .get::<TurnStartOptions>()
             .map(|o| o.as_ref().clone())
             .unwrap_or_default();
+        let reservation = format!(
+            "{}-{}-{}",
+            self.thread_id(),
+            key,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        );
+        value.reservation = Some(reservation.clone());
+        value.admission_token = Some(reservation.clone());
+        value.admitted_turn_id = None;
+        value.in_flight = false;
+        if let Err(error) = save_cursor(&home, &self.thread_id().to_string(), &value) {
+            self.inner
+                .supervisor_receipt_failed
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            self.inner.event_emitter.user_notice(format!("{}:supervisor-receipt-unavailable", self.thread_id()), format!("Supervisor admission intent could not be persisted; automatic work is held until storage is repaired: {error}"));
+            return Ok(true);
+        }
         let submission = thread
             .start_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
-                    turn_trigger: Some("supervisor_inbox".into()),
+                    turn_trigger: Some(format!("supervisor_inbox:{reservation}")),
                     ..start_options
                 }),
             )
-            .await
-            .map_err(|e| e.to_string())?;
-        if matches!(submission, StartIfIdleSubmission::Started { .. }) {
-            // Never advance the durable receipt before admission. Crash redelivery has the same stable IDs.
-            value.generation = inbox.generation;
-            value.attempts += 1;
-            value.in_flight = true;
-            save_cursor(&home, &self.thread_id().to_string(), &value)?;
+            .await;
+        match submission {
+            Ok(StartIfIdleSubmission::Started { turn_id, .. }) => {
+                // Never advance the durable receipt before admission. Crash redelivery has the same stable IDs.
+                value.generation = inbox.generation;
+                value.attempts += 1;
+                value.in_flight = true;
+                value.reservation = None;
+                value.admitted_turn_id = Some(turn_id);
+                if let Err(error) = save_cursor(&home, &self.thread_id().to_string(), &value) {
+                    self.inner
+                        .supervisor_receipt_failed
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    self.inner.event_emitter.user_notice(format!("{}:supervisor-receipt-unknown", self.thread_id()), format!("Supervisor turn started but its delivery receipt could not be persisted. Automatic work is held; reconcile this admitted turn before retry: {error}"));
+                }
+            }
+            Ok(StartIfIdleSubmission::NotSubmitted { .. }) => {
+                // Explicit host rejection proves no turn was admitted for this reservation.
+                value.reservation = None;
+                save_cursor(&home, &self.thread_id().to_string(), &value)?;
+            }
+            Err(error) => {
+                self.inner
+                    .supervisor_receipt_failed
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                self.inner.event_emitter.user_notice(format!("{}:supervisor-admission-unknown", self.thread_id()), format!("Supervisor admission outcome is unknown; reconcile its durable reservation before retrying: {error}"));
+            }
         }
+
         Ok(true)
     }
 }

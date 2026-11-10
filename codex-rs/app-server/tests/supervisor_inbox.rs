@@ -1,4 +1,5 @@
 //! Black-box supervisor continuation and stopping through public app-server RPC.
+#![allow(clippy::expect_used)]
 use anyhow::Result;
 use app_test_support::MockResponsesConfig;
 use app_test_support::TestAppServer;
@@ -67,6 +68,8 @@ async fn supervisor_inbox_wakes_after_final_rejects_stops_and_bounds_duplicate_r
         final_response("bounded-replan"),
         final_response("resumed-wait"),
         final_response("resumed-replan"),
+        final_response("explicit-resume"),
+        final_response("explicit-resume-replan"),
     ])
     .await;
     let home = TempDir::new()?;
@@ -153,12 +156,40 @@ async fn supervisor_inbox_wakes_after_final_rejects_stops_and_bounds_duplicate_r
     let request = app
         .send_raw_request(
             "thread/goal/set",
-            Some(json!({"threadId":thread.id,"status":"paused"})),
+            Some(json!({"threadId":thread.id,"status":"blocked"})),
         )
         .await?;
     let _: ThreadGoalSetResponse = app.read_response(request).await?;
     snapshot["generation"] = json!(52);
-    snapshot["events"] = json!([{"id":"wait-resolved-1","state":"persisted","actionable":true,"kind":"wait_resolved","message":"User response delivered; reconcile exact approval scope"}]);
+    snapshot["events"] = json!([{"id":"wait-resolved-1","state":"persisted","actionable":true,"kind":"wait_resolved","resolves_event":"overlap-1","message":"Delivered response resolves the exact prior wait; preserve authority boundaries"}]);
+    publish(home.path(), &thread.id, &snapshot)?;
+    timeout(Duration::from_secs(30), async {
+        loop {
+            if server.received_requests().await.expect("requests").len() >= 7 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
+    let request = app
+        .send_raw_request("thread/goal/get", Some(json!({"threadId":thread.id})))
+        .await?;
+    let resumed: ThreadGoalGetResponse = app.read_response(request).await?;
+    assert_eq!(
+        resumed.goal.expect("goal").status,
+        ThreadGoalStatus::Active,
+        "fresh bound resolution must reactivate the original blocked goal"
+    );
+    let request = app
+        .send_raw_request(
+            "thread/goal/set",
+            Some(json!({"threadId":thread.id,"status":"paused"})),
+        )
+        .await?;
+    let _: ThreadGoalSetResponse = app.read_response(request).await?;
+    snapshot["generation"] = json!(53);
+    snapshot["events"] = json!([{"id":"after-user-pause","state":"persisted","actionable":true,"kind":"coordination","message":"Pending follow-up must preserve manual pause"}]);
     publish(home.path(), &thread.id, &snapshot)?;
     app.shutdown_gracefully().await?;
     let mut app = TestAppServer::builder()
@@ -176,7 +207,7 @@ async fn supervisor_inbox_wakes_after_final_rejects_stops_and_bounds_duplicate_r
     tokio::time::sleep(Duration::from_secs(3)).await;
     assert_eq!(
         server.received_requests().await.expect("requests").len(),
-        5,
+        7,
         "manual pause survives restart and pending inbox"
     );
     let request = app
@@ -188,7 +219,7 @@ async fn supervisor_inbox_wakes_after_final_rejects_stops_and_bounds_duplicate_r
     let _: ThreadGoalSetResponse = app.read_response(request).await?;
     timeout(Duration::from_secs(30), async {
         loop {
-            if server.received_requests().await.expect("requests").len() >= 7 {
+            if server.received_requests().await.expect("requests").len() >= 9 {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
@@ -196,7 +227,7 @@ async fn supervisor_inbox_wakes_after_final_rejects_stops_and_bounds_duplicate_r
     })
     .await?;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(server.received_requests().await.expect("requests").len(), 7);
+    assert_eq!(server.received_requests().await.expect("requests").len(), 9);
     app.shutdown_gracefully().await?;
     Ok(())
 }

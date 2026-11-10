@@ -10,6 +10,8 @@ codex_rust_crate(
         "src/accounting.rs",
         "src/steering.rs",
         "src/supervisor_inbox.rs",
+        "src/supervisor_admission.rs",
+        "src/supervisor_resolution.rs",
         "src/completion_review.rs",
         "src/progress_evidence.rs",
         "src/progress_checkpoint.rs",

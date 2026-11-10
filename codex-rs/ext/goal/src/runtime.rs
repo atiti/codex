@@ -1,3 +1,7 @@
+#[path = "supervisor_admission.rs"]
+mod admission;
+#[path = "supervisor_resolution.rs"]
+mod resolution;
 #[path = "supervisor_runtime.rs"]
 mod supervisor;
 #[path = "supervisor_stop.rs"]
@@ -60,6 +64,7 @@ struct GoalRuntimeInner {
     enabled: AtomicBool,
     continuation_size_notice_sent: AtomicBool,
     supervisor_notice_sent: AtomicBool,
+    supervisor_receipt_failed: AtomicBool,
     supervisor_poll: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     tools_available_for_thread: bool,
     tools_visible_for_thread: bool,
@@ -117,6 +122,7 @@ impl GoalRuntimeHandle {
                 enabled: AtomicBool::new(config.enabled),
                 continuation_size_notice_sent: AtomicBool::new(false),
                 supervisor_notice_sent: AtomicBool::new(false),
+                supervisor_receipt_failed: AtomicBool::new(false),
                 supervisor_poll: std::sync::Mutex::new(None),
                 tools_available_for_thread: config.tools_available_for_thread,
                 tools_visible_for_thread: config.tools_visible_for_thread,
@@ -237,6 +243,8 @@ impl GoalRuntimeHandle {
         });
         match goal.status {
             codex_state::ThreadGoalStatus::Active => {
+                // This entry point applies an explicit user-facing goal mutation.
+                self.supervisor_user_resumed().await;
                 if self.inner.accounting_state.current_turn_id().is_some() {
                     let _ = self
                         .inner

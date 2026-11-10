@@ -39,6 +39,14 @@ impl GoalRuntimeHandle {
                 Ok(())
             };
         };
+        let receipt = super::admission::cursor(&home, &self.thread_id().to_string())?;
+        if receipt.reservation.is_some()
+            || (receipt.in_flight
+                && receipt.admitted_turn_id.as_deref()
+                    != self.inner.accounting_state.current_turn_id().as_deref())
+        {
+            return Err("Supervisor admission outcome is unresolved; reconcile the durable reservation and exact turn before stopping.".into());
+        }
         inbox.validate_stop(status)?;
         if let Some(manager) = self.inner.thread_manager.upgrade() {
             for id in manager

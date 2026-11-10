@@ -63,6 +63,14 @@ pub(crate) struct Event {
     message: String,
     kind: String,
     wait: Option<Wait>,
+    resolves_event: Option<String>,
+    source: Option<Source>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct Source {
+    team: String,
+    member: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -86,7 +94,10 @@ impl Event {
                         .question_ref
                         .as_ref()
                         .is_some_and(|s| !s.trim().is_empty()),
-                    "external" => true,
+                    "external" => wait
+                        .question_ref
+                        .as_ref()
+                        .is_some_and(|s| !s.trim().is_empty()),
                     _ => false,
                 }
         })
@@ -134,6 +145,21 @@ impl Inbox {
             return Err("Supervisor has unresolved coordination, live children, or an undelivered wait. Read the durable inbox and record an evidenced disposition; preserve pending approvals and reconcile unknown operations. Keep the goal active while waiting quietly for live workers or a delivered user/external dependency.".to_string());
         }
         Ok(())
+    }
+
+    pub(crate) fn resumes_goal(&self) -> bool {
+        self.events.iter().any(|event| {
+            event.needs_action()
+                && ((event.kind == "wait_resolved"
+                    && event
+                        .resolves_event
+                        .as_ref()
+                        .is_some_and(|id| !id.trim().is_empty()))
+                    || (event.kind == "packet_step"
+                        && event.source.as_ref().is_some_and(|source| {
+                            source.team == self.team && source.member == "packet-scheduler"
+                        })))
+        })
     }
 
     pub(crate) fn action_key(&self) -> u64 {

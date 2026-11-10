@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use codex_extension_api::ExtensionEventSink;
+use codex_extension_api::ExtensionWarning;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::protocol::AgentMessageEvent;
 use codex_protocol::protocol::Event;
@@ -31,6 +32,18 @@ impl GoalEventEmitter {
                 turn_id,
                 goal,
             }),
+        });
+    }
+
+    pub(crate) fn supervisor_notice(
+        &self,
+        thread_id: codex_protocol::ThreadId,
+        message: impl Into<String>,
+    ) {
+        self.sink.emit_warning(ExtensionWarning {
+            thread_id: thread_id.to_string(),
+            turn_id: None,
+            message: message.into(),
         });
     }
 

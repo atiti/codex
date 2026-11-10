@@ -237,26 +237,34 @@ async fn supervisor_inbox_user_interrupt_survives_new_event_and_restart() -> Res
     use codex_app_server_protocol::TurnCompletedNotification;
     use codex_app_server_protocol::TurnInterruptParams;
     use codex_app_server_protocol::TurnInterruptResponse;
-    use codex_app_server_protocol::TurnStartResponse;
+    use codex_app_server_protocol::TurnStartedNotification;
     use codex_app_server_protocol::TurnStatus;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
     use tokio::sync::Notify;
+    use wiremock::Mock;
     use wiremock::ResponseTemplate;
     let server = responses::start_mock_server().await;
     let arrived = Arc::new(Notify::new());
     let notify = Arc::clone(&arrived);
-    let model = responses::mount_response_once_match(
-        &server,
-        move |_: &wiremock::Request| {
-            notify.notify_one();
-            true
-        },
-        ResponseTemplate::new(200)
-            .insert_header("content-type", "text/event-stream")
-            .set_body_string(final_response("delayed"))
-            .set_delay(Duration::from_secs(30)),
-    )
-    .await;
+    let count = Arc::new(AtomicUsize::new(0));
+    let requests = Arc::clone(&count);
+    Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(move |_: &wiremock::Request| {
+            let n = requests.fetch_add(1, Ordering::SeqCst);
+            let response = ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_string(final_response(&format!("cancel-{n}")));
+            if n == 1 {
+                notify.notify_one();
+                response.set_delay(Duration::from_secs(30))
+            } else {
+                response
+            }
+        })
+        .mount(&server)
+        .await;
     let home = TempDir::new()?;
     MockResponsesConfig::new(&server.uri())
         .with_model("mock-model")
@@ -273,8 +281,8 @@ async fn supervisor_inbox_user_interrupt_survives_new_event_and_restart() -> Res
     let ThreadStartResponse { thread, .. } = app.read_response(request).await?;
     let mut snapshot = json!({"version":1,"role":"supervisor","thread_id":thread.id,"team":"team","member":"supervisor","generation":1,"live_children":[],"events":[]});
     publish(home.path(), &thread.id, &snapshot)?;
-    let request = app
-        .send_turn_start_request(TurnStartParams {
+    let initial = app
+        .start_turn_and_wait_for_completion(TurnStartParams {
             thread_id: thread.id.clone(),
             input: vec![UserInput::Text {
                 text: "Supervise".into(),
@@ -283,12 +291,23 @@ async fn supervisor_inbox_user_interrupt_survives_new_event_and_restart() -> Res
             ..Default::default()
         })
         .await?;
-    let TurnStartResponse { turn } = app.read_response(request).await?;
+    snapshot["generation"] = json!(2);
+    snapshot["events"] = json!([{"id":"admitted","kind":"coordination","state":"persisted","actionable":true,"message":"Controlled inbox turn to interrupt"}]);
+    publish(home.path(), &thread.id, &snapshot)?;
+    let started = timeout(Duration::from_secs(30), async {
+        loop {
+            let started: TurnStartedNotification = app.read_notification("turn/started").await?;
+            if started.turn.id != initial.turn.id {
+                return Ok::<_, anyhow::Error>(started);
+            }
+        }
+    })
+    .await??;
     timeout(Duration::from_secs(30), arrived.notified()).await?;
     let request = app
         .send_turn_interrupt_request(TurnInterruptParams {
             thread_id: thread.id.clone(),
-            turn_id: turn.id,
+            turn_id: started.turn.id,
         })
         .await?;
     let _: TurnInterruptResponse = app.read_response(request).await?;
@@ -298,11 +317,11 @@ async fn supervisor_inbox_user_interrupt_survives_new_event_and_restart() -> Res
     )
     .await??;
     assert_eq!(completed.turn.status, TurnStatus::Interrupted);
-    snapshot["generation"] = json!(2);
+    snapshot["generation"] = json!(3);
     snapshot["events"] = json!([{"id":"after-cancel","kind":"coordination","state":"persisted","actionable":true,"message":"New worker report must preserve user cancellation"}]);
     publish(home.path(), &thread.id, &snapshot)?;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(model.requests().len(), 1);
+    assert_eq!(count.load(Ordering::SeqCst), 2);
     app.shutdown_gracefully().await?;
     let mut app = TestAppServer::builder()
         .with_codex_home(home.path())
@@ -311,13 +330,21 @@ async fn supervisor_inbox_user_interrupt_survives_new_event_and_restart() -> Res
         .await?;
     let request = app
         .send_thread_resume_request(ThreadResumeParams {
-            thread_id: thread.id,
+            thread_id: thread.id.clone(),
             ..Default::default()
         })
         .await?;
     let _: ThreadResumeResponse = app.read_response(request).await?;
     tokio::time::sleep(Duration::from_secs(3)).await;
-    assert_eq!(model.requests().len(), 1);
+    assert_eq!(count.load(Ordering::SeqCst), 2);
+    let request = app.send_raw_request("thread/goal/set", Some(json!({"threadId":thread.id,"objective":"Resume synthetic coordination","status":"active"}))).await?;
+    let _: ThreadGoalSetResponse = app.read_response(request).await?;
+    timeout(Duration::from_secs(20), async {
+        while count.load(Ordering::SeqCst) < 3 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?;
     app.shutdown_gracefully().await?;
     Ok(())
 }

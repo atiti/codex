@@ -248,6 +248,20 @@ pub trait ThreadStore: Any + Send + Sync {
     /// already-durable thread data.
     fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()>;
 
+    /// Returns only the exact host-triggered turn's start and latest terminal receipt.
+    /// Backends must respect canonical lineage boundaries and reject duplicate admissions.
+    fn load_turn_events(
+        &self,
+        _thread_id: ThreadId,
+        _trigger: String,
+    ) -> ThreadStoreFuture<'_, Vec<RolloutItem>> {
+        Box::pin(async {
+            Err(ThreadStoreError::Unsupported {
+                operation: "load_turn_events",
+            })
+        })
+    }
+
     /// Loads persisted history for resume, fork, and memory jobs.
     fn load_history(
         &self,

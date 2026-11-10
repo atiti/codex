@@ -27,6 +27,24 @@ impl GoalRuntimeHandle {
             && let Ok(mut value) = cursor(&home, &self.thread_id().to_string())
             && value.suspended
         {
+            // Settle the cancelled admission before applying the user's resume.
+            // Otherwise its durable TurnAborted receipt would suspend us again.
+            if value.reservation.is_some() || value.in_flight {
+                let Some(manager) = self.inner.thread_manager.upgrade() else {
+                    return;
+                };
+                let Ok(thread) = manager.get_thread(self.thread_id()).await else {
+                    return;
+                };
+                if super::admission::reconcile(&thread, &mut value)
+                    .await
+                    .is_err()
+                    || value.reservation.is_some()
+                    || value.in_flight
+                {
+                    return;
+                }
+            }
             value.suspended = false;
             if let Err(error) = save_cursor(&home, &self.thread_id().to_string(), &value) {
                 tracing::warn!(%error, "failed to clear supervisor suspension");
@@ -139,8 +157,8 @@ impl GoalRuntimeHandle {
                     .supervisor_notice_sent
                     .swap(true, std::sync::atomic::Ordering::Relaxed)
                 {
-                    self.inner.event_emitter.user_notice(
-                        format!("{}:supervisor-inbox-invalid", self.thread_id()),
+                    self.inner.event_emitter.supervisor_notice(
+                        self.thread_id(),
                         format!(
                             "Supervisor inbox needs repair before automatic continuation: {error}"
                         ),
@@ -157,7 +175,7 @@ impl GoalRuntimeHandle {
                     .supervisor_notice_sent
                     .swap(true, std::sync::atomic::Ordering::Relaxed)
                 {
-                    self.inner.event_emitter.user_notice(format!("{}:supervisor-cursor-invalid", self.thread_id()), format!("Supervisor delivery receipt needs repair before automatic continuation: {error}"));
+                    self.inner.event_emitter.supervisor_notice(self.thread_id(), format!("Supervisor delivery receipt needs repair before automatic continuation: {error}"));
                 }
                 return Ok(true);
             }
@@ -182,8 +200,8 @@ impl GoalRuntimeHandle {
                     .supervisor_notice_sent
                     .swap(true, std::sync::atomic::Ordering::Relaxed)
                 {
-                    self.inner.event_emitter.user_notice(
-                        format!("{}:supervisor-resolution-invalid", self.thread_id()),
+                    self.inner.event_emitter.supervisor_notice(
+                        self.thread_id(),
                         format!("Operator admission resolution could not be accepted: {error}"),
                     );
                 }
@@ -229,10 +247,9 @@ impl GoalRuntimeHandle {
                 self.inner
                     .supervisor_receipt_failed
                     .store(true, std::sync::atomic::Ordering::Relaxed);
-                self.inner.event_emitter.user_notice(
-                    format!("{}:supervisor-admission-reconciliation", self.thread_id()),
-                    error,
-                );
+                self.inner
+                    .event_emitter
+                    .supervisor_notice(self.thread_id(), error);
                 return Ok(true);
             }
             save_cursor(&home, &self.thread_id().to_string(), &value)?;
@@ -294,7 +311,7 @@ impl GoalRuntimeHandle {
                 .as_ref()
                 .is_some_and(|g| g.status == codex_state::ThreadGoalStatus::Blocked)
             {
-                self.inner.event_emitter.user_notice(format!("{}:supervisor-coordination-only:{key}",self.thread_id()),"New coordination will be handled while the original goal remains blocked. Only a bound wait resolution, canonical ready step, or explicit user goal resume reactivates that goal; existing approvals and operation holds remain.");
+                self.inner.event_emitter.supervisor_notice(self.thread_id(),"New coordination will be handled while the original goal remains blocked. Only a bound wait resolution, canonical ready step, or explicit user goal resume reactivates that goal; existing approvals and operation holds remain.");
             }
             value.action_key = key;
             value.attempts = 0;
@@ -308,7 +325,7 @@ impl GoalRuntimeHandle {
                 .supervisor_notice_sent
                 .swap(true, std::sync::atomic::Ordering::Relaxed)
             {
-                self.inner.event_emitter.user_notice(format!("{}:supervisor-coordination-stalled", self.thread_id()), "Supervisor coordination remains unresolved after two attempts. The goal and inbox remain open. Record an evidenced disposition or new coordination event to continue; pending approvals and unknown operations remain held.");
+                self.inner.event_emitter.supervisor_notice(self.thread_id(), "Supervisor coordination remains unresolved after two attempts. The goal and inbox remain open. Record an evidenced disposition or new coordination event to continue; pending approvals and unknown operations remain held.");
             }
             return Ok(true);
         }
@@ -338,7 +355,7 @@ impl GoalRuntimeHandle {
             self.inner
                 .supervisor_receipt_failed
                 .store(true, std::sync::atomic::Ordering::Relaxed);
-            self.inner.event_emitter.user_notice(format!("{}:supervisor-receipt-unavailable", self.thread_id()), format!("Supervisor admission intent could not be persisted; automatic work is held until storage is repaired: {error}"));
+            self.inner.event_emitter.supervisor_notice(self.thread_id(), format!("Supervisor admission intent could not be persisted; automatic work is held until storage is repaired: {error}"));
             return Ok(true);
         }
         let submission = thread
@@ -361,7 +378,7 @@ impl GoalRuntimeHandle {
                     self.inner
                         .supervisor_receipt_failed
                         .store(true, std::sync::atomic::Ordering::Relaxed);
-                    self.inner.event_emitter.user_notice(format!("{}:supervisor-receipt-unknown", self.thread_id()), format!("Supervisor turn started but its delivery receipt could not be persisted. Automatic work is held; reconcile this admitted turn before retry: {error}"));
+                    self.inner.event_emitter.supervisor_notice(self.thread_id(), format!("Supervisor turn started but its delivery receipt could not be persisted. Automatic work is held; reconcile this admitted turn before retry: {error}"));
                 }
             }
             Ok(StartIfIdleSubmission::NotSubmitted { .. }) => {
@@ -373,7 +390,7 @@ impl GoalRuntimeHandle {
                 self.inner
                     .supervisor_receipt_failed
                     .store(true, std::sync::atomic::Ordering::Relaxed);
-                self.inner.event_emitter.user_notice(format!("{}:supervisor-admission-unknown", self.thread_id()), format!("Supervisor admission outcome is unknown; reconcile its durable reservation before retrying: {error}"));
+                self.inner.event_emitter.supervisor_notice(self.thread_id(), format!("Supervisor admission outcome is unknown; reconcile its durable reservation before retrying: {error}"));
             }
         }
 

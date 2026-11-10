@@ -22,6 +22,7 @@ mod thread_history;
 mod thread_history_materialization;
 mod thread_rollout_resolver;
 mod thread_sections;
+mod turn_events;
 mod unarchive_thread;
 mod update_thread_metadata;
 
@@ -600,6 +601,14 @@ impl ThreadStore for LocalThreadStore {
 
     fn discard_thread(&self, thread_id: ThreadId) -> ThreadStoreFuture<'_, ()> {
         Box::pin(async move { live_writer::discard_thread(self, thread_id).await })
+    }
+
+    fn load_turn_events(
+        &self,
+        thread_id: ThreadId,
+        trigger: String,
+    ) -> ThreadStoreFuture<'_, Vec<RolloutItem>> {
+        Box::pin(turn_events::load(self, thread_id, trigger))
     }
 
     fn load_history(

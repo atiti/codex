@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::sync::Mutex;
 
 #[derive(Default)]
-struct RecordingEventSink(Mutex<Vec<Event>>);
+struct RecordingEventSink(Mutex<Vec<Event>>, Mutex<Vec<ExtensionWarning>>);
 
 impl ExtensionEventSink for RecordingEventSink {
     fn emit(&self, event: Event) {
@@ -18,8 +18,8 @@ impl ExtensionEventSink for RecordingEventSink {
             .push(event);
     }
 
-    fn emit_warning(&self, _warning: ExtensionWarning) {
-        panic!("unexpected extension warning");
+    fn emit_warning(&self, warning: ExtensionWarning) {
+        self.1.lock().expect("warning lock").push(warning);
     }
 }
 
@@ -37,4 +37,20 @@ fn user_notice_emits_visible_commentary() {
             if message.message == "Shorten the goal to resume it."
                 && message.phase == Some(MessagePhase::Commentary)
     ));
+}
+
+#[test]
+fn supervisor_notice_uses_supported_thread_warning() {
+    let sink = Arc::new(RecordingEventSink::default());
+    let emitter = GoalEventEmitter::new(sink.clone());
+    let thread = codex_protocol::ThreadId::default();
+    emitter.supervisor_notice(thread, "Exact admission needs operator reconciliation.");
+    let warnings = sink.1.lock().expect("warning lock");
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0].thread_id, thread.to_string());
+    assert_eq!(
+        warnings[0].message,
+        "Exact admission needs operator reconciliation."
+    );
+    assert!(sink.0.lock().expect("event lock").is_empty());
 }

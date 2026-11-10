@@ -112,11 +112,16 @@ pub(super) async fn reconcile(
     {
         return Ok(());
     }
+    let token = value
+        .reservation
+        .as_deref()
+        .or(value.admission_token.as_deref())
+        .ok_or("Missing admission token")?;
     let history = thread
-        .load_history(/*include_archived*/ false)
+        .load_turn_events(format!("supervisor_inbox:{token}"))
         .await
         .map_err(|e| e.to_string())?;
-    let result = reconcile_history(value, &history.items);
+    let result = reconcile_history(value, &history);
     if let Some(id) = value.admitted_turn_id.as_deref()
         && thread.current_turn_model(id).await.is_some()
     {

@@ -322,6 +322,16 @@ impl LiveThread {
         self.thread_store.discard_thread(self.thread_id).await
     }
 
+    /// Reads a bounded exact-trigger admission receipt from the canonical backend.
+    pub async fn load_turn_events(&self, trigger: String) -> ThreadStoreResult<Vec<RolloutItem>> {
+        // Standard persistence fences background TurnStart work and materializes an empty bound thread.
+        self.persist(PersistContext::Standard).await?;
+        self.flush().await?;
+        self.thread_store
+            .load_turn_events(self.thread_id, trigger)
+            .await
+    }
+
     pub async fn load_history(
         &self,
         include_archived: bool,

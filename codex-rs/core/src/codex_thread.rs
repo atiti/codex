@@ -1099,6 +1099,17 @@ impl CodexThread {
             .await
     }
 
+    /// Reads only the exact host-triggered turn's bounded canonical receipt.
+    pub async fn load_turn_events(&self, trigger: String) -> ThreadStoreResult<Vec<RolloutItem>> {
+        let live = self
+            .session
+            .live_thread_for_persistence("read turn receipt")
+            .map_err(|error| ThreadStoreError::Internal {
+                message: error.to_string(),
+            })?;
+        live.load_turn_events(trigger).await
+    }
+
     pub async fn load_history(
         &self,
         include_archived: bool,

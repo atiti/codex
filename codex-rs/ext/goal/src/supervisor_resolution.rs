@@ -47,10 +47,10 @@ pub(super) async fn consume(
         return Ok(false);
     };
     let history = thread
-        .load_history(/*include_archived*/ false)
+        .load_turn_events(format!("supervisor_inbox:{token}"))
         .await
         .map_err(|e| e.to_string())?;
-    let recorded_id = super::admission::admitted_turn_id(&history.items, &token);
+    let recorded_id = super::admission::admitted_turn_id(&history, &token);
     if let Some(id) = recorded_id
         && thread.current_turn_model(id).await.is_some()
     {

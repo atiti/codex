@@ -149,7 +149,6 @@ mod session_end;
 mod skills_list;
 mod sleep;
 mod sqlite_recovery;
-mod supervisor_inbox;
 mod thread_archive;
 mod thread_attachments;
 mod thread_delete;

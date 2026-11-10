@@ -200,3 +200,188 @@ async fn supervisor_inbox_wakes_after_final_rejects_stops_and_bounds_duplicate_r
     app.shutdown_gracefully().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn supervisor_inbox_user_interrupt_survives_new_event_and_restart() -> Result<()> {
+    use codex_app_server_protocol::TurnCompletedNotification;
+    use codex_app_server_protocol::TurnInterruptParams;
+    use codex_app_server_protocol::TurnInterruptResponse;
+    use codex_app_server_protocol::TurnStartResponse;
+    use codex_app_server_protocol::TurnStatus;
+    use std::sync::Arc;
+    use tokio::sync::Notify;
+    use wiremock::ResponseTemplate;
+    let server = responses::start_mock_server().await;
+    let arrived = Arc::new(Notify::new());
+    let notify = Arc::clone(&arrived);
+    let model = responses::mount_response_once_match(
+        &server,
+        move |_: &wiremock::Request| {
+            notify.notify_one();
+            true
+        },
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(final_response("delayed"))
+            .set_delay(Duration::from_secs(30)),
+    )
+    .await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("mock-model")
+        .enable_feature(Feature::Goals)
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .build_initialized_with_timeout(Duration::from_secs(30))
+        .await?;
+    let request = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.read_response(request).await?;
+    let mut snapshot = json!({"version":1,"role":"supervisor","thread_id":thread.id,"team":"team","member":"supervisor","generation":1,"live_children":[],"events":[]});
+    publish(home.path(), &thread.id, &snapshot)?;
+    let request = app
+        .send_turn_start_request(TurnStartParams {
+            thread_id: thread.id.clone(),
+            input: vec![UserInput::Text {
+                text: "Supervise".into(),
+                text_elements: Vec::new(),
+            }],
+            ..Default::default()
+        })
+        .await?;
+    let TurnStartResponse { turn } = app.read_response(request).await?;
+    timeout(Duration::from_secs(30), arrived.notified()).await?;
+    let request = app
+        .send_turn_interrupt_request(TurnInterruptParams {
+            thread_id: thread.id.clone(),
+            turn_id: turn.id,
+        })
+        .await?;
+    let _: TurnInterruptResponse = app.read_response(request).await?;
+    let completed: TurnCompletedNotification = timeout(
+        Duration::from_secs(30),
+        app.read_notification("turn/completed"),
+    )
+    .await??;
+    assert_eq!(completed.turn.status, TurnStatus::Interrupted);
+    snapshot["generation"] = json!(2);
+    snapshot["events"] = json!([{"id":"after-cancel","kind":"coordination","state":"persisted","actionable":true,"message":"New worker report must preserve user cancellation"}]);
+    publish(home.path(), &thread.id, &snapshot)?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(model.requests().len(), 1);
+    app.shutdown_gracefully().await?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .build_initialized_with_timeout(Duration::from_secs(30))
+        .await?;
+    let request = app
+        .send_thread_resume_request(ThreadResumeParams {
+            thread_id: thread.id,
+            ..Default::default()
+        })
+        .await?;
+    let _: ThreadResumeResponse = app.read_response(request).await?;
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    assert_eq!(model.requests().len(), 1);
+    app.shutdown_gracefully().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn supervisor_inbox_own_admitted_turn_can_complete_after_disposition() -> Result<()> {
+    use std::sync::Arc;
+    use std::sync::Mutex;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    let server = MockServer::start().await;
+    let sequence = Arc::new(AtomicUsize::new(0));
+    let context = Arc::new(Mutex::new(
+        None::<(std::path::PathBuf, String, serde_json::Value)>,
+    ));
+    let fixture = Arc::clone(&context);
+    let count = Arc::clone(&sequence);
+    Mock::given(wiremock::matchers::method("POST")).respond_with(move |_: &wiremock::Request| {
+        let n = count.fetch_add(1,Ordering::SeqCst);
+        let body = match n {
+            1 => responses::sse(vec![responses::ev_function_call("inspect","get_goal","{}"),responses::ev_completed("inspect")]),
+            2 => {
+                let guard = fixture.lock().expect("fixture lock");
+                let (home,thread,resolved) = guard.as_ref().expect("resolved fixture");
+                publish(home,thread,resolved).expect("publish coordinator disposition");
+                responses::sse(vec![responses::ev_function_call("finish","update_goal",r#"{"status":"complete"}"#),responses::ev_completed("finish")])
+            }
+            3 => responses::sse(vec![responses::ev_assistant_message("review",r#"{"decision":"complete","reason":"Controlled worker result and owner disposition verified."}"#),responses::ev_completed("review")]),
+            _ => final_response(&format!("final-{n}")),
+        };
+        ResponseTemplate::new(200).insert_header("content-type","text/event-stream").set_body_string(body)
+    }).mount(&server).await;
+    let home = TempDir::new()?;
+    MockResponsesConfig::new(&server.uri())
+        .with_model("mock-model")
+        .enable_feature(Feature::Goals)
+        .write(home.path())?;
+    let mut app = TestAppServer::builder()
+        .with_codex_home(home.path())
+        .without_managed_config()
+        .build_initialized_with_timeout(Duration::from_secs(30))
+        .await?;
+    let request = app
+        .send_thread_start_request_with_auto_env(ThreadStartParams::default())
+        .await?;
+    let ThreadStartResponse { thread, .. } = app.read_response(request).await?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_secs_f64();
+    let mut snapshot = json!({"version":1,"role":"supervisor","thread_id":thread.id,"team":"team","member":"supervisor","generation":1,"live_children":[{"id":"worker","state":"waiting","observed_at":now}],"events":[]});
+    publish(home.path(), &thread.id, &snapshot)?;
+    let request = app.send_raw_request("thread/goal/set",Some(json!({"threadId":thread.id,"objective":"Verify controlled worker result and disposition"}))).await?;
+    let _: ThreadGoalSetResponse = app.read_response(request).await?;
+    app.start_turn_and_wait_for_completion(TurnStartParams {
+        thread_id: thread.id.clone(),
+        input: vec![UserInput::Text {
+            text: "Supervise controlled worker".into(),
+            text_elements: Vec::new(),
+        }],
+        ..Default::default()
+    })
+    .await?;
+    snapshot["generation"] = json!(2);
+    snapshot["events"] = json!([{"id":"result","state":"persisted","actionable":true,"kind":"coordination","message":"Controlled worker returned result; accept and disposition"}]);
+    let mut resolved = snapshot.clone();
+    resolved["generation"] = json!(3);
+    resolved["events"][0]["state"] = json!("dispositioned");
+    resolved["events"][0]["actionable"] = json!(false);
+    resolved["live_children"][0]["state"] = json!("complete");
+    *context.lock().expect("fixture lock") =
+        Some((home.path().to_path_buf(), thread.id.clone(), resolved));
+    publish(home.path(), &thread.id, &snapshot)?;
+    timeout(Duration::from_secs(30), async {
+        loop {
+            let request = app
+                .send_raw_request("thread/goal/get", Some(json!({"threadId":thread.id})))
+                .await?;
+            let result: ThreadGoalGetResponse = app.read_response(request).await?;
+            if result
+                .goal
+                .is_some_and(|goal| goal.status == ThreadGoalStatus::Complete)
+            {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+    assert!(
+        sequence.load(Ordering::SeqCst) >= 4,
+        "independent completion review must run"
+    );
+    app.shutdown_gracefully().await?;
+    Ok(())
+}

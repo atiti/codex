@@ -220,6 +220,8 @@ async fn network_only_human_output() -> Result<()> {
         .output()?;
     let stdout = String::from_utf8(output.stdout)?;
     assert!(output.status.success(), "{stdout}");
+    let stdout = Regex::new(r"(?m)^Codex Doctor v[^\n]+")?
+        .replace(&stdout, "Codex Doctor v0.0.0");
     insta::assert_snapshot!("network_only_human_output", stdout);
     Ok(())
 }
@@ -243,6 +245,8 @@ async fn network_only_config_failure_human_output() -> Result<()> {
     let file_row = Regex::new(r"(?m)^(      file +).+[\\/]config\.toml$")?;
     assert!(file_row.is_match(&stdout), "{stdout}");
     let stdout = file_row.replace_all(&stdout, "${1}<CODEX_HOME>/config.toml");
+    let stdout = Regex::new(r"(?m)^Codex Doctor v[^\n]+")?
+        .replace(&stdout, "Codex Doctor v0.0.0");
     insta::assert_snapshot!("network_only_config_failure_human_output", stdout);
     Ok(())
 }

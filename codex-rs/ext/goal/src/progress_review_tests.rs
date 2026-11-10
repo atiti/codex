@@ -226,7 +226,10 @@ fn missing_receipt_is_explicit_and_acknowledged_receipts_are_preserved() {
     let received = format!("{missing}\nAcknowledgement: accepted. Next action: audit");
     assert_eq!(review_with_receipt_status(received.clone()), received);
     let keep = "Independent progress review [id]: continue. Proceed";
-    assert_eq!(review_with_receipt_status(keep.into()), keep);
+    assert_eq!(
+        review_with_receipt_status(keep.into()),
+        format!("{keep}\nAcknowledgement: missing")
+    );
 }
 
 #[test]

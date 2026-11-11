@@ -1920,6 +1920,29 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    /// Sanitize a recovery snapshot using the same provider boundary as the failed request.
+    pub(crate) fn sanitize_compaction_recovery_input(
+        &self,
+        input: &mut Vec<ResponseItem>,
+        provider: &ModelProviderInfo,
+    ) {
+        normalize_response_items_for_provider(
+            input,
+            provider,
+            &self.foreign_provider_state_ids,
+            self.strip_unattributed_provider_state,
+        );
+    }
+
+    /// Preserve turn affinity and account identity after the caller sanitizes the snapshot.
+    pub(crate) fn sanitized_compaction_recovery_session(&self) -> ModelClientSession {
+        let mut session = self
+            .client
+            .new_session_for_provider(Arc::clone(&self.client.state.provider));
+        session.turn_state = Arc::clone(&self.turn_state);
+        session
+    }
+
     pub(crate) fn inference_tools_changed(&self, tools: &Arc<[ToolSpec]>) -> bool {
         let previous = self
             .client

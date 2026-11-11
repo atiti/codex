@@ -520,3 +520,65 @@ async fn resumed_sample_filters_only_foreign_provider_state(
     );
     Ok(())
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn staged_compaction_after_provider_switch_preserves_new_checkpoint_only() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = wiremock::MockServer::start().await;
+    let compact = |summary: &str, id: &str| {
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"compaction","encrypted_content":summary}}),
+            responses::ev_completed(id),
+        ])
+    };
+    let mock = responses::mount_sse_sequence(&server, vec![
+        sse(vec![
+            json!({"type":"response.output_item.done","item":{"type":"reasoning","id":"rs_foreign","summary":[],"encrypted_content":"FOREIGN_SECRET"}}),
+            responses::ev_assistant_message("msg-original", "FIRST_ANSWER"),
+            responses::ev_completed("first"),
+        ]),
+        sse(vec![responses::ev_assistant_message("msg-second", "SECOND_ANSWER"), responses::ev_completed_with_tokens("second", /*total_tokens*/ 500)]),
+        responses::sse_failed("too-large", "context_length_exceeded", "context too large"),
+        compact("OWN_PREFIX", "prefix"),
+        compact("OWN_FINAL", "final"),
+        responses::sse_completed("after"),
+    ]).await;
+    let initial = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider_id = "agentroute-azure".to_string();
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    initial.submit_turn("FIRST_CONTEXT").await?;
+    initial.submit_turn("SECOND_CONTEXT").await?;
+    let home = initial.home.clone();
+    let path = initial
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+    initial.codex.shutdown_and_wait().await?;
+    let resumed = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider.supports_websockets = false;
+            config.model_auto_compact_token_limit = Some(200);
+        })
+        .resume(&server, home, path)
+        .await?;
+    resumed.submit_turn("AFTER_SWITCH").await?;
+    resumed.codex.shutdown_and_wait().await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 6);
+    for request in &requests[2..] {
+        assert!(!request.body_contains_text("FOREIGN_SECRET"));
+    }
+    assert!(requests[3].body_contains_text("FIRST_CONTEXT"));
+    assert!(requests[4].body_contains_text("OWN_PREFIX"));
+    assert!(requests[4].body_contains_text("SECOND_CONTEXT"));
+    assert!(requests[5].body_contains_text("OWN_FINAL"));
+    assert!(requests[5].body_contains_text("AFTER_SWITCH"));
+    Ok(())
+}

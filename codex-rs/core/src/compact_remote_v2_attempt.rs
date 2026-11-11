@@ -1,5 +1,8 @@
 //! Builds and sends foreground and speculative remote V2 compaction attempts.
 
+#[path = "compact_remote_v2_staged_recovery.rs"]
+mod staged_recovery;
+
 use crate::context::UserGoalUpdate;
 use codex_protocol::ResponseItemId;
 use codex_protocol::openai_models::CatalogModel;
@@ -26,6 +29,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_history::CodexHarnessMetadata;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
@@ -220,14 +224,44 @@ pub(super) async fn run_remote_compact_v2_attempt(
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,
     }));
-    let compaction_output_result = run_remote_compaction_request_v2(
-        sess,
-        step_context,
-        &prompt,
-        &responses_metadata,
-        transport,
-    )
-    .await;
+    let compaction_output_result = match transport {
+        CompactionRequestTransport::Foreground(client) => {
+            let result = run_remote_compaction_request_v2(
+                sess,
+                step_context,
+                &prompt,
+                &responses_metadata,
+                CompactionRequestTransport::Foreground(&mut *client),
+            )
+            .await;
+            match result {
+                Err(error)
+                    if matches!(error.details(), CodexErrorDetails::ContextWindowExceeded) =>
+                {
+                    staged_recovery::recover_oversized_history(
+                        sess,
+                        step_context,
+                        &prompt,
+                        &responses_metadata,
+                        client,
+                        error,
+                    )
+                    .await
+                }
+                result => result,
+            }
+        }
+        background => {
+            run_remote_compaction_request_v2(
+                sess,
+                step_context,
+                &prompt,
+                &responses_metadata,
+                background,
+            )
+            .await
+        }
+    };
     trace_attempt.record_result(
         compaction_output_result
             .as_ref()

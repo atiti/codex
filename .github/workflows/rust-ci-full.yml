@@ -11,6 +11,7 @@ on:
 jobs:
   # --- CI that doesn't need specific targets ---------------------------------
   general:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Format / etc
     runs-on: ubuntu-24.04
     defaults:
@@ -30,6 +31,7 @@ jobs:
         run: just bench-smoke
 
   cargo_shear:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: cargo shear
     runs-on: ubuntu-24.04
     defaults:
@@ -48,6 +50,7 @@ jobs:
         run: cargo shear --deny-warnings
 
   argument_comment_lint_package:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Argument comment lint package
     runs-on: ubuntu-24.04
     env:
@@ -90,6 +93,7 @@ jobs:
           RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 120
@@ -117,6 +121,7 @@ jobs:
 
   # --- CI to validate on different os/targets --------------------------------
   cargo_voice_inputs:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Cargo voice inputs - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     environment:
@@ -151,7 +156,7 @@ jobs:
 
   lint_build:
     needs: cargo_voice_inputs
-    if: &lint_build_if ${{ !cancelled() }}
+    if: &lint_build_if ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: &lint_build_name Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: &lint_build_runner ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: &lint_build_timeout 30
@@ -449,7 +454,7 @@ jobs:
 
   tests_macos_aarch64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — macos-15 - aarch64-apple-darwin
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -462,7 +467,7 @@ jobs:
 
   tests_linux_x64_remote:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — ubuntu-24.04 - x86_64-unknown-linux-gnu (remote)
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -476,7 +481,7 @@ jobs:
 
   tests_linux_arm64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -489,7 +494,7 @@ jobs:
 
   tests_windows_x64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — windows-x64 - x86_64-pc-windows-msvc
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -502,7 +507,7 @@ jobs:
 
   tests_windows_arm64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — windows-arm64 - aarch64-pc-windows-msvc
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
@@ -533,7 +538,7 @@ jobs:
         tests_windows_x64,
         tests_windows_arm64,
       ]
-    if: always()
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (always()) }}
     runs-on: ubuntu-24.04
     steps:
       - name: Summarize

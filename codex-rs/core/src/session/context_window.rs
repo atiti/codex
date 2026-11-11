@@ -27,10 +27,14 @@ pub(crate) async fn context_window_token_status(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ContextWindowTokenStatus {
-    context_window_token_status_with_config(
+    // Prompt hooks can route the turn before the first sampling step exists.
+    // The frozen initial model can have a different context budget.
+    let model_info = turn_context.capture_current_model_info();
+    context_window_token_status_for_model(
         sess,
         turn_context.config.as_ref(),
-        turn_context.model_info().as_ref(),
+        turn_context,
+        model_info.as_ref(),
     )
     .await
 }

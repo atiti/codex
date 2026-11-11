@@ -1,3 +1,6 @@
+mod review_github;
+pub use review_github::ReviewGithubHandler;
+pub(crate) use review_github::ReviewerGithubPolicy;
 pub(crate) mod apply_patch;
 pub(crate) mod apply_patch_spec;
 mod current_time;
@@ -27,6 +30,9 @@ pub(crate) mod request_user_input_spec;
 mod send_message_to_user_async;
 pub(crate) mod shell_spec;
 mod sleep;
+mod task_work;
+pub use task_work::TaskWorkHandler;
+pub(crate) use task_work::task_work_prompt_overlap;
 mod test_sync;
 pub(crate) mod test_sync_spec;
 mod tool_search;

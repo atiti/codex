@@ -439,6 +439,12 @@ pub enum Feature {
     GuardianExt,
     /// Enable persisted thread goals and automatic goal continuation.
     Goals,
+    /// Independently review the direction of long-running root threads.
+    ProgressReview,
+    /// Allow isolated reviewers to query GitHub through the bounded host bridge.
+    ReviewGithubEvidence,
+    /// Local current-task titles and exact resource ownership across independent tasks.
+    TaskAwareness,
     /// Add current context-window metadata to model-visible context.
     TokenBudget,
     /// Enables experimental context management.
@@ -2112,10 +2118,28 @@ pub const FEATURES: &[FeatureSpec] = &[
         default_enabled: false,
     },
     FeatureSpec {
+        id: Feature::TaskAwareness,
+        key: "task_awareness",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
         id: Feature::Goals,
         key: "goals",
         stage: Stage::Stable,
         default_enabled: true,
+    },
+    FeatureSpec {
+        id: Feature::ReviewGithubEvidence,
+        key: "review_github_evidence",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::ProgressReview,
+        key: "progress_review",
+        stage: Stage::UnderDevelopment,
+        default_enabled: false,
     },
     FeatureSpec {
         id: Feature::TokenBudget,

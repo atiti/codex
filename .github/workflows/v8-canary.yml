@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   metadata:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     outputs:
       # Older revisions can contain a detector that does not emit this output.
@@ -73,7 +74,7 @@ jobs:
     name: Build ${{ matrix.variant }} ${{ matrix.target }}
     needs: metadata
     # Metadata always runs; only relevant changes pay for the large matrix.
-    if: ${{ needs.metadata.outputs.canary_required == 'true' }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (needs.metadata.outputs.canary_required == 'true') }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -109,25 +110,25 @@ jobs:
             sandbox: true
             target: aarch64-unknown-linux-gnu
             variant: ptrcomp-sandbox
-          - runner: macos-15-intel
+          - runner: macos-15
             bazel_config: ci-macos
             platform: macos_amd64
             sandbox: false
             target: x86_64-apple-darwin
             variant: release
-          - runner: macos-15-intel
+          - runner: macos-15
             bazel_config: ci-macos
             platform: macos_amd64
             sandbox: true
             target: x86_64-apple-darwin
             variant: ptrcomp-sandbox
-          - runner: macos-15-xlarge
+          - runner: macos-15
             bazel_config: ci-macos
             platform: macos_arm64
             sandbox: false
             target: aarch64-apple-darwin
             variant: release
-          - runner: macos-15-xlarge
+          - runner: macos-15
             bazel_config: ci-macos
             platform: macos_arm64
             sandbox: true
@@ -293,7 +294,7 @@ jobs:
   build-windows-source:
     name: Build ptrcomp-sandbox ${{ matrix.target }} from source
     needs: metadata
-    if: ${{ needs.metadata.outputs.windows_source_required == 'true' }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (needs.metadata.outputs.windows_source_required == 'true') }}
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read

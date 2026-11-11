@@ -12,6 +12,7 @@ use codex_protocol::turn_input::CyberAccessProgram;
 use codex_protocol::user_input::UserInput;
 use codex_rollout::RolloutItem;
 use codex_rollout::RolloutRecorder;
+use core_test_support::hooks::trust_discovered_hooks;
 use core_test_support::responses;
 use core_test_support::streaming_sse::StreamingSseChunk;
 use core_test_support::streaming_sse::start_streaming_sse_server;
@@ -26,6 +27,111 @@ use wiremock::Mock;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+#[test_case("gpt-daybreak-blue-latest", true, None, Some("daybreak_blue"); "ChatGPT model supplies missing program")]
+#[test_case("gpt-daybreak-blue-latest", true, Some(CyberAccessProgram::Standard), Some("standard"); "explicit program is preserved")]
+#[test_case("gpt-daybreak-blue-latest", false, None, None; "API key does not infer subscription program")]
+#[test_case("gpt-5.1", true, None, None; "ordinary model has no inferred program")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn daybreak_model_pairs_program_on_actual_request(
+    model: &str,
+    chatgpt: bool,
+    explicit_program: Option<CyberAccessProgram>,
+    expected_program: Option<&str>,
+) -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let server = responses::start_mock_server().await;
+    let request = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-daybreak")]),
+    )
+    .await;
+    let auth = if chatgpt {
+        CodexAuth::create_dummy_chatgpt_auth_for_testing()
+    } else {
+        CodexAuth::from_api_key("test-key")
+    };
+    let test = test_codex()
+        .with_auth(auth)
+        .with_model(model)
+        .build_with_auto_env(&server)
+        .await?;
+    submit(&test, explicit_program).await?;
+    let body = request.single_request().body_json();
+    assert_eq!(
+        json!([body["model"], body.get("access_programs")]),
+        json!([
+            model,
+            expected_program.map(|program| json!({"cyber": program}))
+        ])
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn daybreak_hook_route_pairs_program_without_explicit_turn_setting() -> Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    core_test_support::skip_if_wine_exec!(
+        Ok(()),
+        "command hooks currently require a host-native shell"
+    );
+    let server = responses::start_mock_server().await;
+    let request = responses::mount_sse_once(
+        &server,
+        responses::sse(vec![responses::ev_completed("resp-hook-daybreak")]),
+    )
+    .await;
+    let test = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model("daybreak-route-start")
+        .with_pre_build_hook(|home| {
+            let output = json!({"hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "model": "gpt-daybreak-blue-latest"
+            }});
+            let command = if cfg!(windows) {
+                format!("Write-Output '{output}'")
+            } else {
+                format!("printf '%s\\n' '{output}'")
+            };
+            let hooks = json!({"hooks": {"UserPromptSubmit": [{"hooks": [{
+                "type": "command",
+                "command": command
+            }]}]}});
+            std::fs::write(home.join("hooks.json"), hooks.to_string())
+                .expect("write Daybreak hook config");
+        })
+        .with_config(|config| {
+            trust_discovered_hooks(config);
+            config
+                .features
+                .enable(Feature::StepModelSwitching)
+                .expect("enable routing hook model changes");
+            // Keep the real Cyber safety metadata identical across the routed model change.
+            let destination = codex_models_manager::bundled_models_response()
+                .expect("bundled models")
+                .models
+                .into_iter()
+                .find(|model| model.slug == "gpt-daybreak-blue-latest")
+                .expect("Daybreak Blue model");
+            let mut initial = destination.clone();
+            initial.slug = "daybreak-route-start".to_owned();
+            config.model_catalog = Some(codex_protocol::openai_models::ModelsResponse {
+                models: vec![initial, destination],
+            });
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    submit(&test, /*program*/ None).await?;
+    let body = request.single_request().body_json();
+    assert_eq!(
+        json!([body["model"], body["access_programs"]]),
+        json!(["gpt-daybreak-blue-latest", {"cyber": "daybreak_blue"}])
+    );
+    test.codex.shutdown_and_wait().await?;
+    Ok(())
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn recover_turn_restores_cyber_access_program_without_making_it_sticky() -> Result<()> {
@@ -186,6 +292,7 @@ async fn cyber_access_program_custom_provider_requires_capability(
         .await;
         let test = test_codex()
             .with_auth(auth)
+            .with_model("gpt-daybreak-blue-latest")
             .with_config(move |config| {
                 // Keep the display name "OpenAI": provider identity must not use it.
                 config.model_provider_id = "custom".to_owned();
@@ -257,14 +364,17 @@ async fn cyber_access_program_custom_provider_preserves_api_key_feature_gate() -
     Ok(())
 }
 
-#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "openai"; "chatgpt")]
-#[test_case(CodexAuth::from_api_key("test-api-key"), "openai"; "api_key")]
-#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "proxy"; "custom_chatgpt")]
-#[test_case(CodexAuth::from_api_key("test-api-key"), "proxy"; "custom_api_key")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "openai", "gpt-5.1", Some(CyberAccessProgram::DaybreakBlue); "chatgpt explicit")]
+#[test_case(CodexAuth::from_api_key("test-api-key"), "openai", "gpt-5.1", Some(CyberAccessProgram::DaybreakBlue); "api_key explicit")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "openai", "gpt-daybreak-blue-latest", None; "chatgpt inferred")]
+#[test_case(CodexAuth::create_dummy_chatgpt_auth_for_testing(), "proxy", "gpt-5.1", Some(CyberAccessProgram::DaybreakBlue); "custom chatgpt")]
+#[test_case(CodexAuth::from_api_key("test-api-key"), "proxy", "gpt-5.1", Some(CyberAccessProgram::DaybreakBlue); "custom api key")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cyber_access_program_survives_mid_turn_remote_compaction_v2(
     auth: CodexAuth,
     provider_id: &'static str,
+    model: &str,
+    program: Option<CyberAccessProgram>,
 ) -> Result<()> {
     core_test_support::skip_if_no_network!(Ok(()));
     let server = responses::start_mock_server().await;
@@ -293,6 +403,7 @@ async fn cyber_access_program_survives_mid_turn_remote_compaction_v2(
     .await;
     let test = test_codex()
         .with_auth(auth)
+        .with_model(model)
         .with_config(move |config| {
             config.model_provider_id = provider_id.to_owned();
             if provider_id == "proxy" {
@@ -315,7 +426,7 @@ async fn cyber_access_program_survives_mid_turn_remote_compaction_v2(
         .build_with_auto_env(&server)
         .await?;
 
-    submit(&test, Some(CyberAccessProgram::DaybreakBlue)).await?;
+    submit(&test, program).await?;
 
     let requests = requests.requests();
     assert_eq!(
@@ -387,6 +498,7 @@ async fn cyber_access_program_is_inherited_by_child_turns() -> Result<()> {
                     .enable(Feature::Collab)
                     .expect("enable multi-agent tools");
                 if is_v2 {
+                    config.multi_agent_v2.tool_namespace = Some("collaboration".to_owned());
                     config
                         .features
                         .enable(Feature::MultiAgentV2)

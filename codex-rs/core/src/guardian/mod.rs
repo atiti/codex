@@ -35,6 +35,7 @@ pub(crate) mod test_host;
 
 use codex_protocol::items::ModelInvocationContext;
 use codex_protocol::openai_models::CatalogModel;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_protocol::config_types::ApprovalsReviewer;
@@ -84,6 +85,31 @@ const GUARDIAN_MAX_TOOL_ENTRY_TOKENS: usize = {
 };
 pub(crate) const GUARDIAN_MAX_ROOT_MESSAGE_TOKENS: usize = 900;
 pub(crate) use codex_guardian_reviewer::GUARDIAN_MAX_NODE_REPL_TOOL_RESULT_TOKENS;
+
+/// Turn-scoped ChatGPT profiles that Guardian may use without changing the answer route.
+#[derive(Debug, Clone)]
+pub(crate) struct GuardianReviewerProfiles {
+    pub(crate) current_name: Option<String>,
+    pub(crate) fallbacks: Vec<GuardianReviewerProfile>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct GuardianReviewerProfile {
+    pub(crate) name: String,
+    pub(crate) codex_home: PathBuf,
+}
+
+#[derive(Clone)]
+struct GuardianReviewerIdentity {
+    name: Option<String>,
+    auth_manager: Option<Arc<codex_login::AuthManager>>,
+}
+
+#[derive(Clone)]
+struct GuardianReviewerFallbackState {
+    active: GuardianReviewerIdentity,
+    fallbacks: std::collections::VecDeque<GuardianReviewerProfile>,
+}
 
 /// Captures review inputs from the issuing step without retaining its MCP bindings or tool router.
 /// Background network approvals and Unix interception use the active task's resolved settings.

@@ -1657,7 +1657,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
 
     // mock responses from the model
 
-    let reasoning_response_1 = ev_reasoning_item("m1", &["I will create a react app"], &[]);
+    let reasoning_response_1 = ev_reasoning_item("encitem_m1", &["I will create a react app"], &[]);
     let encrypted_content_1 = reasoning_response_1["item"]["encrypted_content"]
         .as_str()
         .unwrap();
@@ -1675,7 +1675,7 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r2", token_count_used_after_compaction),
     ]);
 
-    let reasoning_response_2 = ev_reasoning_item("m3", &["I will create a node app"], &[]);
+    let reasoning_response_2 = ev_reasoning_item("encitem_m3", &["I will create a node app"], &[]);
     let encrypted_content_2 = reasoning_response_2["item"]["encrypted_content"]
         .as_str()
         .unwrap();
@@ -1693,14 +1693,15 @@ async fn multiple_auto_compact_per_task_runs_after_token_limit_hit() {
         ev_completed_with_tokens("r4", token_count_used_after_compaction),
     ]);
 
-    let reasoning_response_3 = ev_reasoning_item("m6", &["I will create a python app"], &[]);
+    let reasoning_response_3 =
+        ev_reasoning_item("encitem_m6", &["I will create a python app"], &[]);
     let encrypted_content_3 = reasoning_response_3["item"]["encrypted_content"]
         .as_str()
         .unwrap();
 
     // third chunk of work
     let model_reasoning_response_3_sse = sse(vec![
-        ev_reasoning_item("m6", &["I will create a python app"], &[]),
+        ev_reasoning_item("encitem_m6", &["I will create a python app"], &[]),
         ev_exec_command_call("r6-shell", "echo make-python"),
         ev_completed_with_tokens("r6", token_count_used),
     ]);
@@ -5810,6 +5811,8 @@ async fn snapshot_request_shape_pre_turn_compaction_strips_incoming_model_switch
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_model_info_override(previous_model, |_| {})
         .with_config(move |config| {
+            config.base_instructions =
+                Some(codex_models_manager::model_info::BASE_INSTRUCTIONS.to_string());
             config.update_plan_enabled = true;
             config.model_provider = model_provider;
             set_test_compact_prompt(config);
@@ -6305,3 +6308,57 @@ async fn remote_v2_compaction_refreshes_instructions_and_preserves_them_on_cold_
 
 #[path = "compact_program_tests.rs"]
 mod program_tests;
+
+#[test]
+fn grok_compaction_retries_incomplete_without_losing_history() -> Result<()> {
+    core_test_support::test_codex::run_test_with_large_stack(
+        "grok_compaction_retry",
+        grok_compaction_retry_impl,
+    )
+}
+
+async fn grok_compaction_retry_impl() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = start_mock_server().await;
+    let responses = mount_sse_sequence(&server, vec![
+        sse(vec![ev_assistant_message("initial", "initial answer"), ev_completed("initial")]),
+        sse(vec![ev_assistant_message("partial", "discarded partial"), json!({"type":"response.incomplete", "response":{"id":"partial", "incomplete_details":{"reason":"max_output_tokens"}, "usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}})]),
+        sse(vec![ev_assistant_message("summary", "finished concise summary"), ev_completed("summary")]),
+        sse(vec![ev_assistant_message("final", "task continued"), ev_completed("final")]),
+    ]).await;
+    let provider = non_openai_model_provider(&server);
+    let test = test_codex()
+        .with_config(move |config| {
+            config.model_provider_id = "agentroute-grok".to_string();
+            config.model_provider = provider.clone();
+            config
+                .model_providers
+                .insert("agentroute-grok".to_string(), provider);
+            set_test_compact_prompt(config);
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    test.submit_turn("important original context").await?;
+    test.codex.submit(Op::Compact).await?;
+    wait_for_event(&test.codex, |event| {
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    test.submit_turn("continue after compact").await?;
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 4);
+    let retry = requests[2].body_json().to_string();
+    assert!(body_contains_text(&retry, "important original context"));
+    assert!(body_contains_text(
+        &retry,
+        "previous checkpoint exceeded its output limit"
+    ));
+    assert!(!body_contains_text(&retry, "discarded partial"));
+    let final_request = requests[3].body_json().to_string();
+    assert!(body_contains_text(
+        &final_request,
+        "finished concise summary"
+    ));
+    assert!(!body_contains_text(&final_request, "discarded partial"));
+    Ok(())
+}

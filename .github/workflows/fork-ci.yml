@@ -1,0 +1,131 @@
+name: Fork CI
+
+# The maintained fork checks its supported distribution platforms once per PR.
+# The upstream workflows remain available upstream and for deliberate manual runs.
+on:
+  pull_request:
+    branches: [main, 'agentroute-release-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    if: github.repository == 'atiti/codex'
+    name: Build and basic tests (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+        working-directory: codex-rs
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_PROFILE_TEST_DEBUG: '0'
+      CARGO_BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-ci
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libcap-dev libasound2-dev
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
+        with:
+          targets: ${{ matrix.target }}
+          components: rustfmt
+      - name: Verify native runner architecture
+        run: |
+          test "$(rustc -vV | sed -n 's/^host: //p')" = '${{ matrix.target }}'
+      - uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2.87.21
+        with:
+          tool: cargo-nextest
+      - name: Restore Cargo registry and Git sources
+        id: sources
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: fork-sources-v1-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fork-sources-v1-${{ runner.os }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}-
+      - name: Restore compiled Cargo artifacts
+        id: target
+        uses: actions/cache/restore@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: fork-target-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            fork-target-v1-${{ matrix.target }}-${{ hashFiles('codex-rs/Cargo.lock', 'codex-rs/rust-toolchain.toml') }}-
+      # This verifies the pinned manifests and artifacts from openai/codex releases.
+      # Failure is fatal: never silently fall back to compiling V8 from source.
+      - uses: ./.github/actions/setup-rusty-v8
+        with:
+          target: ${{ matrix.target }}
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+      - name: Build CLI, app-server, and code-mode companion
+        run: |
+          cargo build --locked --target '${{ matrix.target }}' \
+            -p codex-cli --bin codex \
+            -p codex-app-server --bin codex-app-server \
+            -p codex-code-mode-host --bin codex-code-mode-host
+      - name: Run focused goal, thread-store, and protocol tests
+        run: |
+          just test --locked --target '${{ matrix.target }}' \
+            -p codex-goal-extension -p codex-thread-store \
+            -p codex-protocol -p codex-code-mode-protocol
+      - name: Run remote compaction attempt regression
+        run: |
+          just test --locked --target '${{ matrix.target }}' \
+            -p codex-core -E 'test(staged_recovery) | test(staged_compaction) | test(oversized_compaction) | test(oversized_remote_compaction)'
+      # Explicit saves run even when a build/test failed, retaining useful work.
+      # Run/attempt suffixes allow warmed caches to advance without overwriting keys.
+      - name: Save Cargo registry and Git sources
+        if: always() && steps.sources.outcome == 'success'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: ${{ steps.sources.outputs.cache-primary-key }}
+      - name: Save compiled Cargo artifacts
+        if: always() && steps.target.outcome == 'success'
+        uses: actions/cache/save@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: ${{ env.CARGO_TARGET_DIR }}
+          key: ${{ steps.target.outputs.cache-primary-key }}
+
+  required:
+    name: Fork CI required
+    if: always() && github.repository == 'atiti/codex'
+    needs: [build-test]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Require both supported platforms to pass
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 .github/scripts/check_ci_results.py

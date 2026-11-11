@@ -1,3 +1,11 @@
+#[path = "supervisor_admission.rs"]
+mod admission;
+#[path = "supervisor_resolution.rs"]
+mod resolution;
+#[path = "supervisor_runtime.rs"]
+mod supervisor;
+#[path = "supervisor_stop.rs"]
+mod supervisor_stop;
 use std::sync::Arc;
 use std::sync::Weak;
 use std::sync::atomic::AtomicBool;
@@ -54,6 +62,11 @@ struct GoalRuntimeInner {
     accounting_state: Arc<GoalAccountingState>,
     root_accounting_state: Option<Arc<GoalAccountingState>>,
     enabled: AtomicBool,
+    continuation_size_notice_sent: AtomicBool,
+    supervisor_notice_sent: AtomicBool,
+    supervisor_receipt_failed: AtomicBool,
+    supervisor_enrolled: AtomicBool,
+    supervisor_poll: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     tools_available_for_thread: bool,
     tools_visible_for_thread: bool,
     goal_state_lock: Semaphore,
@@ -108,6 +121,11 @@ impl GoalRuntimeHandle {
                 accounting_state,
                 root_accounting_state: config.root_accounting_state,
                 enabled: AtomicBool::new(config.enabled),
+                continuation_size_notice_sent: AtomicBool::new(false),
+                supervisor_notice_sent: AtomicBool::new(false),
+                supervisor_receipt_failed: AtomicBool::new(false),
+                supervisor_enrolled: AtomicBool::new(false),
+                supervisor_poll: std::sync::Mutex::new(None),
                 tools_available_for_thread: config.tools_available_for_thread,
                 tools_visible_for_thread: config.tools_visible_for_thread,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
@@ -197,6 +215,9 @@ impl GoalRuntimeHandle {
             return Ok(());
         }
 
+        self.inner
+            .continuation_size_notice_sent
+            .store(false, Ordering::Relaxed);
         self.inner.accounting_state.reset_empty_responses();
         let replaced_existing_goal = previous_goal
             .as_ref()
@@ -224,6 +245,8 @@ impl GoalRuntimeHandle {
         });
         match goal.status {
             codex_state::ThreadGoalStatus::Active => {
+                // This entry point applies an explicit user-facing goal mutation.
+                self.supervisor_user_resumed().await;
                 if self.inner.accounting_state.current_turn_id().is_some() {
                     let _ = self
                         .inner
@@ -434,6 +457,10 @@ impl GoalRuntimeHandle {
     }
 
     pub(crate) async fn continue_if_idle(&self) -> Result<(), String> {
+        self.start_supervisor_poll().await;
+        if self.continue_supervisor_if_idle().await? {
+            return Ok(());
+        }
         if !self.tools_available() {
             self.inner.accounting_state.clear_active_goal();
             return Ok(());
@@ -471,10 +498,16 @@ impl GoalRuntimeHandle {
             .map_err(|err| err.to_string())?
         else {
             self.inner.accounting_state.clear_active_goal();
+            self.inner
+                .continuation_size_notice_sent
+                .store(false, Ordering::Relaxed);
             return Ok(());
         };
         if goal.status != codex_state::ThreadGoalStatus::Active {
             self.inner.accounting_state.clear_active_goal();
+            self.inner
+                .continuation_size_notice_sent
+                .store(false, Ordering::Relaxed);
             return Ok(());
         }
         let start_options = thread
@@ -482,15 +515,45 @@ impl GoalRuntimeHandle {
             .get::<TurnStartOptions>()
             .map(|options| options.as_ref().clone())
             .unwrap_or_default();
-        let item = continuation_steering_item(
+        let goal_routing = codex_protocol::turn_input::GoalRoutingContext {
+            goal_id: goal.goal_id.clone(),
+            objective: goal.objective.clone(),
+        };
+        let review = self
+            .inner
+            .state_dbs
+            .thread_goals()
+            .get_completion_review(self.thread_id(), &goal.goal_id)
+            .await
+            .map_err(|err| err.to_string())?;
+        let goal_id = goal.goal_id.clone();
+        let Some(item) = continuation_steering_item(
             &protocol_goal_from_state(goal),
             thread.config().await.update_plan_enabled,
-        );
+            review.as_ref(),
+        ) else {
+            tracing::warn!(
+                goal_id = %goal_id,
+                "skipping goal continuation because its full context exceeds the safe size limit"
+            );
+            if !self
+                .inner
+                .continuation_size_notice_sent
+                .swap(true, Ordering::Relaxed)
+            {
+                self.inner.event_emitter.user_notice(
+                    format!("{}:{goal_id}:continuation-context-limit", self.thread_id()),
+                    "Automatic goal continuation could not start because the saved objective exceeds the safe context limit. Shorten the objective in goal settings to resume it.",
+                );
+            }
+            return Ok(());
+        };
 
         match thread
             .start_turn_if_idle(
                 TurnInputRequest::new(TurnInput::ResponseItem(item)).on_start(TurnStartOptions {
                     turn_trigger: Some("goal".to_string()),
+                    goal_routing: Some(goal_routing),
                     ..start_options
                 }),
             )

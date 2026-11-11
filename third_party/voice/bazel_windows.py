@@ -103,6 +103,9 @@ def main():
                     for line in (root / config["status"]).read_text().splitlines()
                     if line.startswith("STABLE_GIT_COMMIT ")
                 ]
+                status_lines = (root / config["status"]).read_text().splitlines()
+                status_keys = [line.split(" ", 1)[0][:80] for line in status_lines[:16]]
+                print(f"Workspace status keys: {status_keys}", file=sys.stderr)
                 steps = receipt.get("steps", [])
                 checks = {
                     "commit_count": len(commits) == 1,

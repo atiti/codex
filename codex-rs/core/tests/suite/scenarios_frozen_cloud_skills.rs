@@ -88,8 +88,14 @@ async fn frozen_cloud_skills_with_named_executor_request_history() -> Result<()>
         })
         .build(&server)
         .await?;
-    let executor =
-        core_test_support::exec_server::ExecServerProcess::start_with_version("0.164.0").await?;
+    let executor = core_test_support::exec_server::ExecServerProcess::start_with_version_and_env(
+        "0.164.0",
+        &[(
+            "HOME",
+            workspace.path().to_str().expect("temporary home is UTF-8"),
+        )],
+    )
+    .await?;
     test.thread_manager
         .environment_manager()
         .upsert_environment(

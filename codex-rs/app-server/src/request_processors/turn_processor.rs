@@ -80,6 +80,7 @@ fn validate_response_item_image_urls(items: &[ResponseItem]) -> Result<(), JSONR
 
 #[derive(Clone)]
 pub(crate) struct TurnRequestProcessor {
+    thread_list_state_permit: Arc<Semaphore>,
     auth_manager: Arc<AuthManager>,
     thread_manager: Arc<ThreadManager>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -139,6 +140,7 @@ struct ThreadSettingsBuildParams {
 impl TurnRequestProcessor {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
+        thread_list_state_permit: Arc<Semaphore>,
         auth_manager: Arc<AuthManager>,
         thread_manager: Arc<ThreadManager>,
         outgoing: Arc<OutgoingMessageSender>,
@@ -152,6 +154,7 @@ impl TurnRequestProcessor {
         turn_cost_worker: Option<crate::turn_cost_worker::TurnCostWorkerHandle>,
     ) -> Self {
         Self {
+            thread_list_state_permit,
             auth_manager,
             thread_manager,
             outgoing,
@@ -693,6 +696,7 @@ impl TurnRequestProcessor {
                     .with_thread_settings(thread_settings)
                     .on_start(TurnStartOptions {
                         turn_trigger: params.turn_trigger,
+                        goal_routing: None,
                         parent_turn_id: params.parent_turn_id,
                         initiating_agent_path: None,
                         root_turn_id: params.root_turn_id,
@@ -1533,6 +1537,7 @@ impl TurnRequestProcessor {
 
     fn listener_task_context(&self) -> ListenerTaskContext {
         ListenerTaskContext {
+            task_title_permit: Arc::clone(&self.thread_list_state_permit),
             thread_manager: Arc::clone(&self.thread_manager),
             thread_state_manager: self.thread_state_manager.clone(),
             outgoing: Arc::clone(&self.outgoing),

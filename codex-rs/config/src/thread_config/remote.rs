@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use codex_model_provider_info::ModelProviderCapabilities;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::WireApi;
 use codex_protocol::config_types::ModelProviderAuthInfo;
 use codex_utils_absolute_path::AbsolutePathBuf;
@@ -159,6 +160,18 @@ fn model_provider_from_proto(
         ));
     }
     let id = provider.id;
+    let tool_compatibility = match provider.tool_compatibility.as_deref() {
+        Some("functions_and_apply_patch") => Some(ToolCompatibility::FunctionsAndApplyPatch),
+        Some("functions_and_apply_patch_preserve_reasoning") => {
+            Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning)
+        }
+        Some(unknown) => {
+            return Err(parse_error(format!(
+                "remote thread config returned unknown tool_compatibility: {unknown}"
+            )));
+        }
+        None => None,
+    };
     let wire_api = match proto::WireApi::try_from(provider.wire_api) {
         Ok(proto::WireApi::Responses) => WireApi::Responses,
         Ok(proto::WireApi::Unspecified) => {
@@ -205,6 +218,8 @@ fn model_provider_from_proto(
         location: provider.location,
         credential_file: provider.credential_file.map(Into::into),
         include_internal_metadata: false,
+        tool_compatibility,
+        approval_review_model: provider.approval_review_model,
     };
     Ok((id, info))
 }
@@ -240,6 +255,8 @@ fn model_provider_to_proto(
         include_internal_metadata: _,
         credential_file,
         capabilities,
+        tool_compatibility,
+        approval_review_model,
     } = provider;
 
     proto::ModelProvider {
@@ -268,6 +285,16 @@ fn model_provider_to_proto(
         supports_standalone_web_search,
         project_id,
         location,
+        tool_compatibility: tool_compatibility.map(|compatibility| {
+            match compatibility {
+                ToolCompatibility::FunctionsAndApplyPatch => "functions_and_apply_patch",
+                ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning => {
+                    "functions_and_apply_patch_preserve_reasoning"
+                }
+            }
+            .to_string()
+        }),
+        approval_review_model,
     }
 }
 
@@ -469,6 +496,9 @@ mod tests {
         expected.credential_file = Some(workspace_dir().join("adc.json").into_path_buf());
         expected.auth = None;
         expected.experimental_bearer_token = Some("synthetic-provider-token".into());
+        expected.tool_compatibility =
+            Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning);
+        expected.approval_review_model = Some("synthetic-review-model".to_string());
         for capabilities in [
             None,
             Some(ModelProviderCapabilities::default()),
@@ -560,6 +590,8 @@ mod tests {
                             supports_standalone_web_search: true,
                             project_id: None,
                             location: None,
+                            tool_compatibility: None,
+                            approval_review_model: None,
                         }],
                         features: HashMap::from([
                             ("plugins".to_string(), false),
@@ -623,6 +655,8 @@ mod tests {
             supports_websockets: true,
             supports_standalone_web_search: true,
             gateway_oauth: None,
+            tool_compatibility: None,
+            approval_review_model: None,
             aws: None,
             capabilities: Some(ModelProviderCapabilities {
                 cyber_access_programs: Some(true),

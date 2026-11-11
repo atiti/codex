@@ -19,6 +19,7 @@ mod listener_shutdown_tests;
 
 #[derive(Clone)]
 pub(super) struct ListenerTaskContext {
+    pub(super) task_title_permit: Arc<tokio::sync::Semaphore>,
     pub(super) thread_manager: Arc<ThreadManager>,
     pub(super) thread_state_manager: ThreadStateManager,
     pub(super) outgoing: Arc<OutgoingMessageSender>,
@@ -494,6 +495,7 @@ async fn start_listener(
         )
     };
     let ListenerTaskContext {
+        task_title_permit,
         outgoing,
         thread_manager,
         thread_state_manager,
@@ -573,6 +575,19 @@ async fn start_listener(
                         conversation_id,
                     );
 
+                    // TaskWorkHandler emits this item after committing the work record.
+                    // Refresh while the turn is running so long tasks show their current topic.
+                    let task_updated = matches!(
+                        &event.msg,
+                        EventMsg::ItemCompleted(completed)
+                            if matches!(&completed.item, codex_protocol::items::TurnItem::AgentMessage(item)
+                                if item.id.starts_with("task-work-"))
+                    );
+                    if (task_updated || matches!(event.msg, EventMsg::TurnComplete(_)))
+                        && let Err(error) = crate::task_work::sync_title(conversation_id, &conversation, &thread_manager, &thread_outgoing, &task_title_permit).await
+                    {
+                        tracing::warn!(%error, "could not refresh task title");
+                    }
                     // Publish the committed receipt before turn/completed so completion
                     // remains the last notification for this terminal result.
                     if let Some(summary) = terminal_summary

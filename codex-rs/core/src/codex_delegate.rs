@@ -102,6 +102,33 @@ pub(crate) async fn run_codex_thread_interactive(
     };
     let mut thread_extension_init = codex_extension_api::ExtensionDataInit::default();
     thread_extension_init.insert(isolation);
+    if isolation == codex_extension_api::SessionIsolation::Isolated
+        && config
+            .features
+            .enabled(codex_features::Feature::ReviewGithubEvidence)
+        && matches!(subagent_source, SubAgentSource::Review)
+    {
+        let parent_policy = parent_session
+            .services
+            .exec_policy
+            .current_for_prefix_rules(parent_ctx.allow_prefix_rules());
+        let github_rules = parent_policy
+            .rules()
+            .iter_all()
+            .filter(|(program, _)| program.as_str() == "gh")
+            .flat_map(|(program, rules)| {
+                rules
+                    .iter()
+                    .map(move |rule| (program.clone(), Arc::clone(rule)))
+            })
+            .collect();
+        let github_policy =
+            codex_execpolicy::Policy::from_parts(github_rules, Vec::new(), Default::default());
+        thread_extension_init.insert(crate::tools::handlers::ReviewerGithubPolicy(Arc::new(
+            github_policy,
+        )));
+    }
+
     let spawn_result = Session::spawn(SessionSpawnArgs {
         attached_thread: false,
         startup: Some(Arc::clone(&startup)),
@@ -244,6 +271,7 @@ pub(crate) async fn run_codex_thread_one_shot(
     subagent_source: SubAgentSource,
     final_output_json_schema: Option<Value>,
     initial_history: Option<InitialHistory>,
+    isolation: codex_extension_api::SessionIsolation,
 ) -> Result<(Arc<Session>, SessionIo), CodexErr> {
     // Use a child token so we can stop the delegate after completion without
     // requiring the caller to cancel the parent token.
@@ -260,7 +288,7 @@ pub(crate) async fn run_codex_thread_one_shot(
         parent_environments,
         child_cancel.clone(),
         subagent_source,
-        codex_extension_api::SessionIsolation::Inherit,
+        isolation,
         initial_history,
         GitEnrichmentPolicy::Fresh,
         codex_sandboxing::WindowsSandboxProxySettingsMode::Reconcile,

@@ -173,6 +173,12 @@ pub struct ConfigToml {
     /// Review model override used by the `/review` feature.
     pub review_model: Option<String>,
 
+    /// Optional independent progress reviewer model and provider.
+    pub progress_review_model: Option<String>,
+    pub progress_review_provider: Option<String>,
+    /// AgentRoute-authorized live review routes, encoded as bounded JSON.
+    pub progress_review_routes: Option<String>,
+
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
 

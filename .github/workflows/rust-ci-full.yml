@@ -11,6 +11,7 @@ on:
 jobs:
   # --- CI that doesn't need specific targets ---------------------------------
   general:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Format / etc
     runs-on: ubuntu-24.04
     defaults:
@@ -30,6 +31,7 @@ jobs:
         run: just bench-smoke
 
   cargo_shear:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: cargo shear
     runs-on: ubuntu-24.04
     defaults:
@@ -48,17 +50,18 @@ jobs:
         run: cargo shear --deny-warnings
 
   argument_comment_lint_package:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Argument comment lint package
     runs-on: ubuntu-24.04
     env:
-      CARGO_DYLINT_VERSION: 6.1.0
-      DYLINT_LINK_VERSION: 6.1.0
+      CARGO_DYLINT_VERSION: 6.3.0
+      DYLINT_LINK_VERSION: 6.3.0
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
       - uses: ./.github/actions/setup-ci
-      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+      - uses: dtolnay/rust-toolchain@e081816240890017053eacbb1bdf337761dc5582 # 1.95.0
         with:
           toolchain: nightly-2026-08-20
           components: llvm-tools-preview, rustc-dev, rust-src
@@ -90,6 +93,7 @@ jobs:
           RUST_MIN_STACK: "8388608" # 8 MiB
 
   argument_comment_lint_prebuilt:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Argument comment lint - ${{ matrix.name }}
     runs-on: ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: 120
@@ -103,12 +107,9 @@ jobs:
           - name: Linux
             runner: ubuntu-24.04
           - name: macOS
-            runner: macos-15-xlarge
+            runner: macos-15
           - name: Windows
-            runner: windows-x64
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
+            runner: windows-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -120,6 +121,7 @@ jobs:
 
   # --- CI to validate on different os/targets --------------------------------
   cargo_voice_inputs:
+    if: ${{ github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch' }}
     name: Cargo voice inputs - ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
     environment:
@@ -154,7 +156,7 @@ jobs:
 
   lint_build:
     needs: cargo_voice_inputs
-    if: &lint_build_if ${{ !cancelled() }}
+    if: &lint_build_if ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: &lint_build_name Lint/Build — ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: &lint_build_runner ${{ matrix.runs_on || matrix.runner }}
     timeout-minutes: &lint_build_timeout 30
@@ -165,7 +167,7 @@ jobs:
       # Speed up repeated builds across CI runs by caching compiled objects, except on
       # arm64 macOS runners cross-targeting x86_64 where ring/cc-rs can produce
       # mixed-architecture archives under sccache.
-      USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15-xlarge' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
+      USE_SCCACHE: ${{ (startsWith(matrix.runner, 'windows') || (matrix.runner == 'macos-15' && matrix.target == 'x86_64-apple-darwin')) && 'false' || 'true' }}
       CARGO_INCREMENTAL: "0"
       SCCACHE_CACHE_SIZE: 10G
 
@@ -173,56 +175,38 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
             profile: dev
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: x86_64-apple-darwin
             profile: dev
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-arm64
-          - runner: windows-x64
+          - runner: windows-latest
             target: x86_64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
           # Hopefully this also pre-populates the build cache to speed up
           # releases.
-          - runner: macos-15-xlarge
+          - runner: macos-15
             target: aarch64-apple-darwin
             profile: release
-          - runner: windows-x64
+          - runner: windows-latest
             target: x86_64-pc-windows-msvc
             profile: release
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-x64
-          - runner: windows-arm64
+          - runner: windows-11-arm
             target: aarch64-pc-windows-msvc
             profile: release
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-windows-arm64
 
     steps: &lint_build_steps
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -457,36 +441,24 @@ jobs:
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: dev
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-arm64
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-x64
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-musl
             profile: release
-            runs_on:
-              group: ${{ github.event.repository.name }}-runners
-              labels: ${{ github.event.repository.name }}-linux-arm64
     steps: *lint_build_steps
 
   tests_macos_aarch64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
-    name: Tests — macos-15-xlarge - aarch64-apple-darwin
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
+    name: Tests — macos-15 - aarch64-apple-darwin
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
-      runner: macos-15-xlarge
+      runner: macos-15
       target: aarch64-apple-darwin
       profile: ci-test
       artifact_id: macos-aarch64
@@ -495,13 +467,11 @@ jobs:
 
   tests_linux_x64_remote:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — ubuntu-24.04 - x86_64-unknown-linux-gnu (remote)
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
       runner: ubuntu-24.04
-      runner_group: ${{ github.event.repository.name }}-runners
-      runner_labels: ${{ github.event.repository.name }}-linux-x64
       target: x86_64-unknown-linux-gnu
       profile: ci-test
       artifact_id: linux-x64-remote
@@ -511,13 +481,11 @@ jobs:
 
   tests_linux_arm64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — ubuntu-24.04-arm - aarch64-unknown-linux-gnu
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
       runner: ubuntu-24.04-arm
-      runner_group: ${{ github.event.repository.name }}-runners
-      runner_labels: ${{ github.event.repository.name }}-linux-arm64
       target: aarch64-unknown-linux-gnu
       profile: ci-test
       artifact_id: linux-arm64
@@ -526,13 +494,11 @@ jobs:
 
   tests_windows_x64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — windows-x64 - x86_64-pc-windows-msvc
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
-      runner: windows-x64
-      runner_group: ${{ github.event.repository.name }}-runners
-      runner_labels: ${{ github.event.repository.name }}-windows-x64
+      runner: windows-latest
       target: x86_64-pc-windows-msvc
       profile: ci-test
       artifact_id: windows-x64
@@ -541,16 +507,12 @@ jobs:
 
   tests_windows_arm64:
     needs: cargo_voice_inputs
-    if: ${{ !cancelled() }}
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (!cancelled()) }}
     name: Tests — windows-arm64 - aarch64-pc-windows-msvc
     uses: ./.github/workflows/rust-ci-full-nextest-platform.yml
     with:
-      runner: windows-arm64
-      runner_group: ${{ github.event.repository.name }}-runners
-      runner_labels: ${{ github.event.repository.name }}-windows-arm64
-      archive_runner: windows-x64
-      archive_runner_group: ${{ github.event.repository.name }}-runners
-      archive_runner_labels: ${{ github.event.repository.name }}-windows-x64
+      runner: windows-11-arm
+      archive_runner: windows-latest
       target: aarch64-pc-windows-msvc
       profile: ci-test
       artifact_id: windows-arm64
@@ -576,7 +538,7 @@ jobs:
         tests_windows_x64,
         tests_windows_arm64,
       ]
-    if: always()
+    if: ${{ (github.repository == 'openai/codex' || github.event_name == 'workflow_dispatch') && (always()) }}
     runs-on: ubuntu-24.04
     steps:
       - name: Summarize

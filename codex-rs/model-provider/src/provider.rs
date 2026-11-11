@@ -841,6 +841,8 @@ mod tests {
             location: None,
             credential_file: None,
             include_internal_metadata: false,
+            tool_compatibility: None,
+            approval_review_model: None,
         }
     }
 

@@ -71,6 +71,10 @@ async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
     test.submit_turn("Continue with the first step.").await?;
     let requests = mock.requests();
     assert_eq!(requests.len(), 3);
+    assert_eq!(
+        requests[0].instructions_text(),
+        requests[2].instructions_text()
+    );
     assert_eq!(requests[1].inputs_of_type("compaction_trigger").len(), 1);
     assert_eq!(
         requests[2].inputs_of_type("compaction")[0]["encrypted_content"],
@@ -87,7 +91,9 @@ async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
                 SnapshotEntry::items(&replacement).labeled("Stored replacement before next turn"),
                 SnapshotEntry::captured(&requests[2]).labeled("First turn after /compact"),
             ],
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())

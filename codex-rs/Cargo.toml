@@ -424,7 +424,7 @@ lazy_static = "1"
 libc = "0.2.182"
 # Keep SQLx's bundled SQLite on a version containing the WAL-reset corruption fix:
 # https://www.sqlite.org/wal.html#the_wal_reset_bug
-libsqlite3-sys = { version = "0.37", default-features = false }
+libsqlite3-sys = { version = "0.39", default-features = false }
 linkify = "0.11"
 log = "0.4"
 lru = "0.18.2"
@@ -572,7 +572,7 @@ windows-sys = "0.61.2"
 winreg = "0.55.0"
 # Keep the zip 2.x feature set. In zip 9, `bzip2-rs` selects the bzip2-sys
 # backend we already build; the default selects libbz2-rs-sys instead.
-zip = { version = "9.0.0", default-features = false, features = [
+zip = { version = "9.0.5", default-features = false, features = [
     "aes-crypto",
     "bzip2-rs",
     "deflate",
@@ -582,7 +582,7 @@ zip = { version = "9.0.0", default-features = false, features = [
     "xz",
     "zstd",
 ] }
-zstd = "0.13"
+zstd = "0.14.3"
 
 wiremock = "0.6"
 zeroize = "1.8.2"
@@ -671,6 +671,8 @@ inherits = "test"
 opt-level = 0
 
 [patch.crates-io]
+# SQLx upstream #4502 widens the SQLite binding range for the security update.
+sqlx-sqlite = { path = "vendor/sqlx-sqlite" }
 # Uncomment to debug local changes.
 # ratatui = { path = "../../ratatui" }
 crossterm = { git = "https://github.com/openai-oss-forks/crossterm", rev = "ed1cdab335221515706178d68495bba2aed1924f" }

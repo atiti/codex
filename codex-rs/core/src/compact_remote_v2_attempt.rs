@@ -1,5 +1,8 @@
 //! Builds and sends foreground and speculative remote V2 compaction attempts.
 
+#[path = "compact_remote_v2_staged_recovery.rs"]
+mod staged_recovery;
+
 use crate::context::UserGoalUpdate;
 use codex_protocol::ResponseItemId;
 use codex_protocol::openai_models::CatalogModel;
@@ -26,6 +29,7 @@ use codex_analytics::CompactionReason;
 use codex_analytics::CompactionTrigger;
 use codex_history::CodexHarnessMetadata;
 use codex_protocol::error::CodexErr;
+use codex_protocol::error::CodexErrorDetails;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::models::BaseInstructions;
 use codex_protocol::models::ResponseItem;
@@ -88,7 +92,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         captured_window,
     ) = match input {
         RemoteCompactV2AttemptInput::Foreground(client_session) => {
-            let model_info = turn_context.model_info();
+            let model_info = &step_context.settings.model_info;
             let mut history = sess.clone_history().await;
             let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
             let tools_in_history = step_context.settings.model_info.use_responses_lite
@@ -107,7 +111,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
                 trim_function_call_history_to_fit_context_window(
                     &mut history,
                     turn_context,
-                    turn_context.model_context_window(),
+                    step_context.settings.model_info.usable_context_window(),
                     &base_instructions,
                 );
             if rewritten_outputs > 0 {
@@ -129,6 +133,22 @@ pub(super) async fn run_remote_compact_v2_attempt(
             let trace_input_history = compaction_trace
                 .is_enabled()
                 .then(|| history.raw_items().cloned().collect());
+            let client_session = client_session.unwrap_or_else(|| {
+                owned_client_session.insert(
+                    sess.services
+                        .model_client
+                        .new_session_for_foreign_provider_history(
+                            &turn_context.model_provider_id(),
+                            turn_context.model_provider(),
+                            history.annotated_items(),
+                        )
+                        .unwrap_or_else(|| {
+                            sess.services
+                                .model_client
+                                .new_session_for_provider(turn_context.model_provider())
+                        }),
+                )
+            });
             let (mut input, metadata): (Vec<_>, Vec<_>) = history
                 .for_prompt_annotated(
                     &model_info.input_modalities,
@@ -141,9 +161,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
             sess.services
                 .executed_tool_calls
                 .attach_to_compaction_prompt(&mut input);
-            let client_session = client_session.unwrap_or_else(|| {
-                owned_client_session.insert(sess.services.model_client.new_session())
-            });
+
             (
                 model_info,
                 input_goal_ids,
@@ -187,6 +205,7 @@ pub(super) async fn run_remote_compact_v2_attempt(
         output_schema: None,
         output_schema_strict: true,
         cyber_access_program: turn_context.cyber_access_program,
+        model_provider_id: Some(turn_context.model_provider_id()),
     };
 
     let mut responses_metadata = match captured_window {
@@ -205,14 +224,44 @@ pub(super) async fn run_remote_compact_v2_attempt(
         "input": &prompt.input,
         "parallel_tool_calls": prompt.parallel_tool_calls,
     }));
-    let compaction_output_result = run_remote_compaction_request_v2(
-        sess,
-        step_context,
-        &prompt,
-        &responses_metadata,
-        transport,
-    )
-    .await;
+    let compaction_output_result = match transport {
+        CompactionRequestTransport::Foreground(client) => {
+            let result = run_remote_compaction_request_v2(
+                sess,
+                step_context,
+                &prompt,
+                &responses_metadata,
+                CompactionRequestTransport::Foreground(&mut *client),
+            )
+            .await;
+            match result {
+                Err(error)
+                    if matches!(error.details(), CodexErrorDetails::ContextWindowExceeded) =>
+                {
+                    staged_recovery::recover_oversized_history(
+                        sess,
+                        step_context,
+                        &prompt,
+                        &responses_metadata,
+                        client,
+                        error,
+                    )
+                    .await
+                }
+                result => result,
+            }
+        }
+        background => {
+            run_remote_compaction_request_v2(
+                sess,
+                step_context,
+                &prompt,
+                &responses_metadata,
+                background,
+            )
+            .await
+        }
+    };
     trace_attempt.record_result(
         compaction_output_result
             .as_ref()

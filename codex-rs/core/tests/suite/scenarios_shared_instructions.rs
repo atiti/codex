@@ -180,7 +180,7 @@ async fn running_descendants_refresh_only_shared_thread_instructions(shared: boo
             context_snapshot::format_request_history_snapshot(
                 "A host updates and clears shared instructions for surviving descendants. A separately started thread uses captured instructions over its live provider, then resumes with them explicitly cleared.",
                 &request_history,
-                &ContextSnapshotOptions::default(),
+                &ContextSnapshotOptions::default().rewrite_known_segments(),
             )
         );
     }

@@ -8573,6 +8573,15 @@
       "description": "Named profiles to facilitate switching between different configurations.",
       "type": "object"
     },
+    "progress_review_effort": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/ReasoningEffort"
+        }
+      ],
+      "default": null,
+      "description": "Reasoning effort for an independent progress review. Missing means medium."
+    },
     "progress_review_model": {
       "description": "Optional independent progress reviewer model and provider.",
       "type": "string"

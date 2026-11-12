@@ -14,6 +14,7 @@ use codex_protocol::models::BaseInstructionsProvenance;
 use codex_protocol::models::MessagePhase;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::Event;
 use codex_protocol::protocol::EventMsg;
@@ -192,6 +193,12 @@ pub(crate) async fn run_with_instructions(
         if let Some(model) = config.progress_review_model.clone() {
             config.model = Some(model);
         }
+        config.model_reasoning_effort = Some(
+            config
+                .progress_review_effort
+                .clone()
+                .unwrap_or(ReasoningEffort::Medium),
+        );
     }
     // A host bridge must never weaken managed restrictions or denied reads.
     if !review_github_allowed(

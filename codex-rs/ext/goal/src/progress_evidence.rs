@@ -2,7 +2,16 @@
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
-const EVIDENCE_LIMIT: usize = 16_000;
+const TRAJECTORY_LIMIT: usize = 24_000;
+const TOOL_RESULT_LIMIT: usize = 12;
+const MESSAGE_CLIP: usize = 2_000;
+const TOOL_RESULT_HEAD: usize = 1_000;
+const TOOL_RESULT_TAIL: usize = 1_000;
+const RENDERED_REVIEW_LIMIT: usize = 36_000;
+const REVIEW_MARKERS: usize =
+    "<progress_review_evidence>".len() + "</progress_review_evidence>".len();
+
+pub(crate) const REPEATED_ADJUST_NOTICE: &str = "The same adjust reason repeated on this user revision. Replan or ask the user before continuing the same approach.";
 
 #[derive(Debug, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -87,8 +96,19 @@ pub(crate) fn evidence_packet(
         return String::new();
     }
     let mut selected = Vec::new();
-    let mut remaining = EVIDENCE_LIMIT;
+    let mut remaining = TRAJECTORY_LIMIT;
+    let mut tool_results = 0usize;
     for item in items.iter().rev() {
+        let is_tool_result = matches!(
+            item,
+            ResponseItem::FunctionCallOutput { .. } | ResponseItem::CustomToolCallOutput { .. }
+        );
+        if is_tool_result {
+            tool_results += 1;
+            if tool_results > TOOL_RESULT_LIMIT {
+                continue;
+            }
+        }
         let text = match item {
             ResponseItem::Message { role, content, .. }
                 if role == "user" || role == "assistant" =>
@@ -97,7 +117,7 @@ pub(crate) fn evidence_packet(
                     .iter()
                     .filter_map(|part| match part {
                         ContentItem::InputText { text } | ContentItem::OutputText { text, .. } => {
-                            Some(clipped(text, /*limit*/ 2000))
+                            Some(clipped(text, MESSAGE_CLIP))
                         }
                         _ => None,
                     })
@@ -107,18 +127,15 @@ pub(crate) fn evidence_packet(
             }
             ResponseItem::FunctionCall {
                 name, arguments, ..
-            } => format!("tool {name}: {}", clipped(arguments, /*limit*/ 2000)),
+            } => format!("tool {name}: {}", clipped(arguments, MESSAGE_CLIP)),
             ResponseItem::CustomToolCall { name, input, .. } => {
-                format!("tool {name}: {}", clipped(input, /*limit*/ 2000))
+                format!("tool {name}: {}", clipped(input, MESSAGE_CLIP))
             }
             ResponseItem::FunctionCallOutput { output, .. }
             | ResponseItem::CustomToolCallOutput { output, .. } => {
                 format!(
                     "tool result: {}",
-                    clipped(
-                        output.text_content().unwrap_or("[non-text output omitted]"),
-                        /*limit*/ 2000
-                    )
+                    head_and_tail(output.text_content().unwrap_or("[non-text output omitted]"))
                 )
             }
             _ => continue,
@@ -134,11 +151,41 @@ pub(crate) fn evidence_packet(
         }
     }
     selected.reverse();
+    let original = user_messages.first().map(String::as_str).unwrap_or("");
+    while !selected.is_empty()
+        && !rendered_review_within_limit(&format_packet(
+            original,
+            turn_request,
+            goal,
+            user,
+            prior,
+            &selected.join("\n"),
+        ))
+    {
+        selected.remove(0);
+    }
+    shrink_to_rendered_limit(&format_packet(
+        original,
+        turn_request,
+        goal,
+        user,
+        prior,
+        &selected.join("\n"),
+    ))
+}
+
+fn format_packet(
+    original: &str,
+    turn_request: Option<&str>,
+    goal: Option<&str>,
+    user: &str,
+    prior: Option<&str>,
+    trajectory: &str,
+) -> String {
     let mut user_end = user.len().min(4000);
     while !user.is_char_boundary(user_end) {
         user_end -= 1;
     }
-    let original = user_messages.first().map(String::as_str).unwrap_or("");
     let mut original_end = original.len().min(4000);
     while !original.is_char_boundary(original_end) {
         original_end -= 1;
@@ -150,8 +197,103 @@ pub(crate) fn evidence_packet(
         clipped(goal.unwrap_or("none"), /*limit*/ 4000),
         &user[..user_end],
         clipped(prior.unwrap_or("unavailable"), /*limit*/ 2400),
-        selected.join("\n")
+        trajectory
     )
+}
+
+pub(crate) fn rendered_review_within_limit(packet: &str) -> bool {
+    let rendered_len = REVIEW_MARKERS + escaped_len(packet);
+    rendered_len <= 48_000
+        && rendered_len <= RENDERED_REVIEW_LIMIT
+        && rendered_len.saturating_add(3) / 4 <= 9_000
+}
+
+fn escaped_len(packet: &str) -> usize {
+    packet.chars().fold(0, |sum, ch| {
+        sum + match ch {
+            '&' => "&amp;".len(),
+            '<' => "&lt;".len(),
+            '>' => "&gt;".len(),
+            _ => ch.len_utf8(),
+        }
+    })
+}
+
+fn shrink_to_rendered_limit(packet: &str) -> String {
+    if rendered_review_within_limit(packet) {
+        return packet.to_string();
+    }
+    let mut low = 0;
+    let mut high = packet.len();
+    while low < high {
+        let mut mid = low + (high - low).div_ceil(2);
+        while mid > low && !packet.is_char_boundary(mid) {
+            mid -= 1;
+        }
+        if mid == low {
+            break;
+        }
+        if rendered_review_within_limit(&packet[..mid]) {
+            low = mid;
+        } else {
+            high = mid - 1;
+            while high > low && !packet.is_char_boundary(high) {
+                high -= 1;
+            }
+        }
+    }
+    packet[..low].to_string()
+}
+
+fn head_and_tail(text: &str) -> String {
+    if text.len() <= TOOL_RESULT_HEAD + TOOL_RESULT_TAIL {
+        return text.to_string();
+    }
+    let head_end = floor_char_boundary(text, TOOL_RESULT_HEAD);
+    let mut tail_start = text.len().saturating_sub(TOOL_RESULT_TAIL);
+    while !text.is_char_boundary(tail_start) {
+        tail_start += 1;
+    }
+    if tail_start <= head_end {
+        return text.to_string();
+    }
+    format!("{} … {}", &text[..head_end], &text[tail_start..])
+}
+
+fn floor_char_boundary(text: &str, limit: usize) -> usize {
+    let mut end = text.len().min(limit);
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
+}
+
+pub(crate) fn parse_stored_review(text: &str) -> Option<(&str, &str)> {
+    let rest = text
+        .lines()
+        .next()?
+        .trim()
+        .strip_prefix("Independent progress review [")?;
+    let (decision, reason) = rest.split_once("]: ")?.1.split_once(". ")?;
+    matches!(decision, "continue" | "adjust" | "replan").then_some((decision, reason))
+}
+
+pub(crate) fn next_review_decision(
+    previous: Option<&str>,
+    decision: &str,
+    reason: &str,
+) -> (String, Option<&'static str>) {
+    let repeated =
+        previous
+            .and_then(parse_stored_review)
+            .is_some_and(|(prior_decision, prior_reason)| {
+                prior_decision == "adjust" && decision == "adjust" && prior_reason == reason
+            });
+    if repeated {
+        ("replan".to_string(), Some(REPEATED_ADJUST_NOTICE))
+    } else {
+        (decision.to_string(), None)
+    }
 }
 
 fn clipped(text: &str, limit: usize) -> &str {

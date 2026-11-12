@@ -13,6 +13,35 @@ use codex_core::context::InternalContextSource;
 use codex_core::context::InternalModelContextFragment;
 use std::sync::Arc;
 use std::time::Duration;
+use std::time::Instant;
+
+/// Debounce changes without allowing a continuous stream to postpone delivery forever.
+#[derive(Default)]
+pub(super) struct BatchWindow {
+    pending: Option<(u64, Instant, Instant)>,
+}
+
+impl BatchWindow {
+    fn ready(&mut self, key: u64, now: Instant) -> bool {
+        let (seen, first, changed) = self.pending.get_or_insert((key, now, now));
+        if *seen != key {
+            *seen = key;
+            *changed = now;
+        }
+        if now.duration_since(*changed) >= Duration::from_secs(3)
+            || now.duration_since(*first) >= Duration::from_secs(10)
+        {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn clear(&mut self) {
+        self.pending = None;
+    }
+}
 
 impl GoalRuntimeHandle {
     pub(crate) async fn supervisor_user_resumed(&self) {
@@ -247,6 +276,9 @@ impl GoalRuntimeHandle {
         {
             return Ok(true);
         }
+        if value.reservation.is_none() && value.admitted_turn_id.is_some() {
+            super::admission::save_delivery_receipt(&home, &self.thread_id().to_string(), &value)?;
+        }
         if value.reservation.is_some() || value.in_flight {
             if let Err(error) = super::admission::reconcile(&thread, &mut value).await {
                 self.inner
@@ -262,7 +294,13 @@ impl GoalRuntimeHandle {
                 return Ok(true);
             }
         }
+        if value.reservation.is_none() && value.admitted_turn_id.is_some() {
+            super::admission::save_delivery_receipt(&home, &self.thread_id().to_string(), &value)?;
+        }
         if !inbox.actionable() {
+            if let Ok(mut batch) = self.inner.supervisor_batch.lock() {
+                batch.clear();
+            }
             self.inner
                 .supervisor_notice_sent
                 .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -334,6 +372,15 @@ impl GoalRuntimeHandle {
             }
             return Ok(true);
         }
+        let ready = self
+            .inner
+            .supervisor_batch
+            .lock()
+            .map_err(|_| "Supervisor batch lock poisoned")?
+            .ready(key, Instant::now());
+        if !ready {
+            return Ok(true);
+        }
         let item = ContextualUserFragment::into(InternalModelContextFragment::new(
             InternalContextSource::from_static("supervisor_inbox"),
             inbox.notice(),
@@ -352,6 +399,7 @@ impl GoalRuntimeHandle {
                 .unwrap_or_default()
                 .as_nanos()
         );
+        value.notice_event_ids = inbox.delivered_event_ids();
         value.reservation = Some(reservation.clone());
         value.admission_token = Some(reservation.clone());
         value.admitted_turn_id = None;
@@ -379,7 +427,15 @@ impl GoalRuntimeHandle {
                 value.in_flight = true;
                 value.reservation = None;
                 value.admitted_turn_id = Some(turn_id);
-                if let Err(error) = save_cursor(&home, &self.thread_id().to_string(), &value) {
+                if let Err(error) = save_cursor(&home, &self.thread_id().to_string(), &value)
+                    .and_then(|_| {
+                        super::admission::save_delivery_receipt(
+                            &home,
+                            &self.thread_id().to_string(),
+                            &value,
+                        )
+                    })
+                {
                     self.inner
                         .supervisor_receipt_failed
                         .store(true, std::sync::atomic::Ordering::Relaxed);
@@ -389,6 +445,7 @@ impl GoalRuntimeHandle {
             Ok(StartIfIdleSubmission::NotSubmitted { .. }) => {
                 // Explicit host rejection proves no turn was admitted for this reservation.
                 value.reservation = None;
+                value.notice_event_ids.clear();
                 save_cursor(&home, &self.thread_id().to_string(), &value)?;
             }
             Err(error) => {
@@ -400,5 +457,24 @@ impl GoalRuntimeHandle {
         }
 
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::BatchWindow;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn coalesces_changes_but_never_starves_a_busy_inbox() {
+        let start = Instant::now();
+        let mut batch = BatchWindow::default();
+        assert!(!batch.ready(1, start));
+        assert!(!batch.ready(2, start + Duration::from_secs(2)));
+        assert!(!batch.ready(2, start + Duration::from_secs(4)));
+        assert!(batch.ready(2, start + Duration::from_secs(5)));
+        assert!(!batch.ready(3, start + Duration::from_secs(6)));
+        assert!(!batch.ready(4, start + Duration::from_secs(14)));
+        assert!(batch.ready(5, start + Duration::from_secs(16)));
     }
 }

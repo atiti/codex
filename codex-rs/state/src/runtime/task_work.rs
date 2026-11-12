@@ -41,6 +41,11 @@ pub struct TaskWorkTitle {
     pub pending_name: Option<String>,
 }
 
+/// Echo a rejected resource key back to the caller without letting an oversized key flood the error.
+fn shown_resource_key(key: &str) -> String {
+    key.chars().take(96).collect()
+}
+
 impl StateRuntime {
     /// Replace this task's claims atomically. Any conflict leaves existing claims intact.
     /// Leases expire after one hour; callers renew while the task is active.
@@ -69,18 +74,23 @@ impl StateRuntime {
             "resource keys must be unique"
         );
         for resource in &work.resources {
+            let shown = shown_resource_key(resource);
             anyhow::ensure!(resource.len() <= 256 && !resource.chars().any(char::is_whitespace)
                 && ["github:", "file:", "bug:"].iter().any(|prefix| resource.starts_with(prefix) && resource.len() > prefix.len()),
-                "use a canonical github:, file:, or bug: resource key (at most 256 bytes)");
+                "invalid resource key {shown:?}: use github:owner/repo#123 (lowercase; issues and pull requests both use #), file:/absolute/path, or bug:repository:stable-signature, with no spaces and at most 256 bytes. A bare name such as repo#123 or a branch name needs one of these prefixes");
         }
         for key in &work.resources {
+            let shown = shown_resource_key(key);
+            let github_hint = format!(
+                "GitHub key {shown:?} must be github:owner/repo#123 in lowercase; use #123 for pull requests too, because github:owner/repo/pull/123 is rejected"
+            );
             if let Some(reference) = key.strip_prefix("github:") {
                 let (repo, number) = reference
                     .split_once('#')
-                    .ok_or_else(|| anyhow::anyhow!("GitHub key requires owner/repo#number"))?;
+                    .ok_or_else(|| anyhow::anyhow!(github_hint.clone()))?;
                 let (owner, name) = repo
                     .split_once('/')
-                    .ok_or_else(|| anyhow::anyhow!("GitHub key requires owner/repo#number"))?;
+                    .ok_or_else(|| anyhow::anyhow!(github_hint.clone()))?;
                 anyhow::ensure!(
                     !owner.is_empty()
                         && !name.is_empty()
@@ -89,7 +99,7 @@ impl StateRuntime {
                         && number
                             .parse::<u64>()
                             .is_ok_and(|parsed| parsed > 0 && parsed.to_string() == number),
-                    "GitHub keys must be canonical lowercase owner/repo#number"
+                    "{github_hint}"
                 );
             }
             if let Some(path) = key.strip_prefix("file:") {

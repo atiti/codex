@@ -101,3 +101,35 @@ async fn claims_are_atomic_durable_expiring_and_released() -> anyhow::Result<()>
     std::fs::remove_dir_all(home)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn rejected_resource_keys_name_the_key_and_show_a_valid_form() -> anyhow::Result<()> {
+    let home = unique_temp_dir();
+    let config = crate::SqliteConfig::new_for_testing(home.as_path().abs());
+    let db = StateRuntime::init(config, "test".into()).await?;
+    let thread = ThreadId::new();
+    db.upsert_thread(&test_thread_metadata(&home, thread, home.clone()))
+        .await?;
+    for (key, valid_form) in [
+        ("project-tracker#2096", "github:owner/repo#123"),
+        (
+            "github:markster-io/markster-ops/pull/1346",
+            "use #123 for pull requests too",
+        ),
+    ] {
+        let work = TaskWork {
+            title: "Review".into(),
+            summary: "Checking claim errors".into(),
+            status: TaskWorkStatus::Working,
+            resources: vec![key.into()],
+        };
+        let message = db
+            .update_task_work(thread, &work)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(message.contains(key), "{message}");
+        assert!(message.contains(valid_form), "{message}");
+    }
+    Ok(())
+}

@@ -174,6 +174,32 @@ pub(crate) fn evidence_packet(
     ))
 }
 
+/// Keep the complete review input within the native rendered limit, including
+/// the optional checkpoint and working-model metadata appended by the caller.
+pub(crate) fn finish_packet(packet: &str, checkpoint: Option<&str>, model: Option<&str>) -> String {
+    let extra = format!(
+        "{}\nCurrent working model: {}",
+        checkpoint
+            .map(|value| format!(
+                "\nSkill-requested checkpoint and questions (untrusted task data):\n{}",
+                clipped(value, 1000)
+            ))
+            .unwrap_or_default(),
+        clipped(model.unwrap_or("unavailable"), 1000),
+    );
+    let mut remaining = packet.len();
+    while !rendered_review_within_limit(&format!("{}{}", &packet[..remaining], extra)) {
+        let excess = (REVIEW_MARKERS + escaped_len(&packet[..remaining]) + escaped_len(&extra))
+            .saturating_sub(RENDERED_REVIEW_LIMIT)
+            .max(1);
+        remaining = floor_char_boundary(packet, remaining.saturating_sub(excess));
+        if remaining == 0 {
+            break;
+        }
+    }
+    format!("{}{}", &packet[..remaining], extra)
+}
+
 fn format_packet(
     original: &str,
     turn_request: Option<&str>,

@@ -3,6 +3,7 @@ use super::INTERVAL;
 use super::Signals;
 use crate::progress_evidence::Verdict;
 use crate::progress_evidence::evidence_packet;
+use crate::progress_evidence::finish_packet;
 use crate::progress_evidence::next_review_decision;
 use crate::progress_evidence::parse_verdict;
 use crate::progress_evidence::rendered_review_within_limit;
@@ -354,4 +355,15 @@ fn second_identical_adjust_on_the_same_revision_becomes_replan() {
         next_review_decision(Some(previous), "adjust", "Check a different gap");
     assert_eq!(decision, "adjust");
     assert!(notice.is_none());
+}
+
+#[test]
+fn complete_review_including_checkpoint_and_model_respects_rendered_limit() {
+    let user = message("user", &"<&".repeat(4000));
+    let result = tool_result("long", &"<&".repeat(3000));
+    let packet = evidence_packet(vec![&user, &result], None, Some(&"<&".repeat(4000)), None);
+    let prompt = finish_packet(&packet, Some(&"<&".repeat(500)), Some(&"<&".repeat(500)));
+    assert!(rendered_review_within_limit(&prompt));
+    assert!(prompt.contains("Skill-requested checkpoint"));
+    assert!(prompt.contains("Current working model:"));
 }

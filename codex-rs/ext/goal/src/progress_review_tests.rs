@@ -367,3 +367,23 @@ fn complete_review_including_checkpoint_and_model_respects_rendered_limit() {
     assert!(prompt.contains("Skill-requested checkpoint"));
     assert!(prompt.contains("Current working model:"));
 }
+
+#[test]
+fn saved_review_rebases_only_for_matching_durable_input() {
+    use super::{PreviousVerdict, ReviewIdentity, rebase_review_revision};
+    use std::sync::Mutex;
+    let previous = PreviousVerdict(Mutex::new(Some((2, "adjust".into()))));
+    let identity = ReviewIdentity(Mutex::new(Some("same".into())));
+    rebase_review_revision(&previous, &identity, 1, Some("same"));
+    assert_eq!(previous.0.lock().unwrap().as_ref().unwrap().0, 1);
+    rebase_review_revision(&previous, &identity, 1, Some("new-input"));
+    assert!(previous.0.lock().unwrap().is_none());
+    let previous = PreviousVerdict(Mutex::new(Some((1, "adjust".into()))));
+    let identity = ReviewIdentity(Mutex::new(Some("saved".into())));
+    rebase_review_revision(&previous, &identity, 1, None);
+    assert!(previous.0.lock().unwrap().is_none());
+    let previous = PreviousVerdict(Mutex::new(Some((2, "adjust".into()))));
+    let identity = ReviewIdentity(Mutex::new(None));
+    rebase_review_revision(&previous, &identity, 1, Some("same"));
+    assert_eq!(previous.0.lock().unwrap().as_ref().unwrap().0, 2);
+}

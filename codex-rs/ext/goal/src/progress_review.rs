@@ -1,4 +1,5 @@
 //! Optional directional review for long-running root threads, including ordinary prompts.
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -66,6 +67,66 @@ pub(crate) struct Signals {
 
 #[derive(Default)]
 pub(crate) struct PreviousVerdict(pub(crate) Mutex<Option<(u64, String)>>);
+
+#[derive(Default)]
+pub(crate) struct ReviewIdentity(pub(crate) Mutex<Option<String>>);
+
+/// A restart-stable identity over complete host-retained user input and verified answers.
+/// If the host cannot prove completeness, never carry a review across a restart.
+pub(crate) fn user_identity(
+    history: &dyn codex_extension_api::ConversationHistorySnapshot,
+) -> Option<String> {
+    use codex_history::RetainedContextEntry;
+    let retained = history.retained_context()?;
+    if !retained.user_messages_complete() || !retained.verified_answers_complete() {
+        return None;
+    }
+    let mut hash = Sha256::new();
+    let mut seen = false;
+    for (_, entry) in retained.ordered_entries() {
+        let encoded = match entry {
+            RetainedContextEntry::UserMessage(message) => {
+                seen = true;
+                serde_json::to_vec(&("user", message)).ok()?
+            }
+            RetainedContextEntry::VerifiedAnswer(answer) => {
+                seen = true;
+                serde_json::to_vec(&("answer", answer)).ok()?
+            }
+            RetainedContextEntry::AssistantMessage(_) => continue,
+        };
+        hash.update((encoded.len() as u64).to_be_bytes());
+        hash.update(encoded);
+    }
+    seen.then(|| format!("{:x}", hash.finalize()))
+}
+
+/// Rebase a saved revision only if the persisted complete user identity still matches.
+pub(crate) fn rebase_review_revision(
+    previous: &PreviousVerdict,
+    saved: &ReviewIdentity,
+    revision: u64,
+    current_identity: Option<&str>,
+) {
+    let Ok(mut saved) = saved.0.lock() else {
+        return;
+    };
+    let Ok(mut prior) = previous.0.lock() else {
+        return;
+    };
+    if let Some((prior_revision, _)) = prior.as_mut() {
+        if *prior_revision == revision {
+            // Equal process-local counters do not prove unchanged input across a restart.
+            // If both durable identities exist and disagree, invalidate the old verdict.
+            if saved.as_deref().is_some() && saved.as_deref() != current_identity {
+                *prior = None;
+                *saved = None;
+            }
+        } else if saved.as_deref().is_some() && saved.as_deref() == current_identity {
+            *prior_revision = revision;
+        }
+    }
+}
 
 #[derive(Default)]
 struct ActiveClock(Mutex<Clock>);
@@ -224,9 +285,13 @@ impl<C: Send + Sync + 'static> ThreadLifecycleContributor<C> for ProgressReview<
                 path: state_path,
                 write_lock: Mutex::new(()),
             });
+            let previous = progress_persistence::reusable_previous(&saved);
             input
                 .thread_store
-                .insert(PreviousVerdict(Mutex::new(saved.previous)));
+                .insert(ReviewIdentity(Mutex::new(saved.user_identity)));
+            input
+                .thread_store
+                .insert(PreviousVerdict(Mutex::new(previous)));
             input.thread_store.insert(ActiveClock(Mutex::new(Clock {
                 accumulated: Duration::from_secs(saved.active_seconds),
                 report_accumulated: Duration::from_secs(saved.report_seconds),
@@ -266,6 +331,7 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
             let Some(enabled) = input.thread_store.get::<Enabled>() else {
                 return;
             };
+            let input_identity = input.thread_store.get::<ReviewIdentity>();
             if let Ok(mut value) = clock.0.lock() {
                 value.start(&turn_id, std::time::Instant::now());
             }
@@ -309,6 +375,15 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                     }
                     let history = thread.conversation_history_snapshot().await;
                     let revision = history.user_message_revision();
+                    let identity = user_identity(history.as_ref());
+                    if let Some(saved_identity) = input_identity.as_ref() {
+                        rebase_review_revision(
+                            &previous_verdict,
+                            saved_identity,
+                            revision,
+                            identity.as_deref(),
+                        );
+                    }
                     let now = std::time::Instant::now();
                     let report_due = clock
                         .0
@@ -341,14 +416,24 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         .map(|value| value.remaining(std::time::Instant::now()).is_zero())
                         .unwrap_or(false);
                     if !signalled && !review_due {
-                        persist(&enabled, &clock, &previous_verdict);
+                        persist(
+                            &enabled,
+                            &clock,
+                            &previous_verdict,
+                            input_identity.as_deref(),
+                        );
                         continue;
                     }
                     last_review = tokio::time::Instant::now();
                     if let Ok(mut value) = clock.0.lock() {
                         value.reviewed(&turn_id, std::time::Instant::now());
                     }
-                    persist(&enabled, &clock, &previous_verdict);
+                    persist(
+                        &enabled,
+                        &clock,
+                        &previous_verdict,
+                        input_identity.as_deref(),
+                    );
                     let original =
                         history
                             .review_items_with_sources()
@@ -485,10 +570,19 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         Some(notice) => format!("{stored}\n{notice}"),
                         None => stored.clone(),
                     };
-                    if let Ok(mut previous) = previous_verdict.0.lock() {
+                    if let Some(saved_identity) = input_identity.as_ref()
+                        && let Ok(mut saved) = saved_identity.0.lock()
+                        && let Ok(mut previous) = previous_verdict.0.lock()
+                    {
                         *previous = Some((revision, stored));
+                        *saved = identity;
                     }
-                    persist(&enabled, &clock, &previous_verdict);
+                    persist(
+                        &enabled,
+                        &clock,
+                        &previous_verdict,
+                        input_identity.as_deref(),
+                    );
                     let display = match usage {
                         Some(usage) => format!(
                             "{message}\nReviewer route: {}\nReviewer usage: input={} cached={} output={}",
@@ -648,11 +742,17 @@ pub(crate) fn persist_from_store(store: &codex_extension_api::ExtensionData) {
         store.get::<ActiveClock>(),
         store.get::<PreviousVerdict>(),
     ) {
-        persist(&enabled, &clock, &previous);
+        let identity = store.get::<ReviewIdentity>();
+        persist(&enabled, &clock, &previous, identity.as_deref());
     }
 }
 
-fn persist(enabled: &Enabled, clock: &ActiveClock, previous: &PreviousVerdict) {
+fn persist(
+    enabled: &Enabled,
+    clock: &ActiveClock,
+    previous: &PreviousVerdict,
+    identity: Option<&ReviewIdentity>,
+) {
     let Some(path) = enabled.path.as_deref() else {
         return;
     };
@@ -662,6 +762,9 @@ fn persist(enabled: &Enabled, clock: &ActiveClock, previous: &PreviousVerdict) {
     let Ok(clock) = clock.0.lock() else {
         return;
     };
+    // Keep the identity lock until the matching verdict has been copied.
+    let identity_guard = identity.and_then(|identity| identity.0.lock().ok());
+    let user_identity = identity_guard.as_ref().and_then(|value| (*value).clone());
     let Ok(previous) = previous.0.lock() else {
         return;
     };
@@ -671,6 +774,7 @@ fn persist(enabled: &Enabled, clock: &ActiveClock, previous: &PreviousVerdict) {
             .saturating_sub(clock.report_remaining(std::time::Instant::now()))
             .as_secs(),
         previous: previous.clone(),
+        user_identity,
     };
     if let Err(error) = progress_persistence::save(path, &state) {
         tracing::warn!("could not persist progress review state: {error}");

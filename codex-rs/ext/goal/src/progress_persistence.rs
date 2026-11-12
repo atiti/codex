@@ -14,6 +14,8 @@ pub(crate) struct SavedReview {
     #[serde(default)]
     pub report_seconds: u64,
     pub previous: Option<(u64, String)>,
+    #[serde(default)]
+    pub user_identity: Option<String>,
 }
 
 pub(crate) fn path(home: &Path, thread_id: &str) -> PathBuf {
@@ -27,7 +29,11 @@ pub(crate) fn load(path: &Path) -> SavedReview {
         .filter(|data| data.len() <= 4096)
         .and_then(|data| serde_json::from_slice::<SavedReview>(&data).ok())
         .filter(|state| {
-            state.active_seconds <= 600
+            state
+                .user_identity
+                .as_ref()
+                .is_none_or(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+                && state.active_seconds <= 600
                 && state.report_seconds <= 600
                 && state
                     .previous
@@ -35,6 +41,12 @@ pub(crate) fn load(path: &Path) -> SavedReview {
                     .is_none_or(|(_, text)| text.len() <= 2400)
         })
         .unwrap_or_default()
+}
+
+/// Old files have no durable input identity; their process-local revision is unsafe to reuse.
+pub(crate) fn reusable_previous(state: &SavedReview) -> Option<(u64, String)> {
+    state.user_identity.as_ref()?;
+    state.previous.clone()
 }
 
 pub(crate) fn save(path: &Path, state: &SavedReview) -> std::io::Result<()> {

@@ -29,7 +29,7 @@ fn bound_worker_cannot_complete_until_packet_has_all_evidence() {
     let path = packets.join("sample.json");
     let mut packet = json!({"schema_version":1,"namespace":"private","id":"sample","history":[{"type":"complete","item":"worker","session":"owner","item_revision":2}],"items":[{"id":"worker","revision":2,"status":"active","assignment":{"session":"owner"},"next_step":{"state":"active"},"outcome_wait":null,"criteria":[{"evidence":[]}],"operations":{},"gates":{},"repositories":[{"path":"repo","initial_status":"clean","commit":"c","pr":"p","merge":"m","checks":"passed","clean":true,"evidence":["receipt"]}]}]});
     std::fs::write(&path, packet.to_string()).unwrap();
-    assert!(validate(&home, &workspace, "thread").is_err());
+    assert!(validate(&home, &workspace, "thread", true).is_err());
     packet["items"][0]["status"] = json!("done");
     packet["items"][0]["assignment"] = Value::Null;
     packet["items"][0]["next_step"]["state"] = json!("done");
@@ -47,17 +47,17 @@ fn bound_worker_cannot_complete_until_packet_has_all_evidence() {
     }
     packet["items"][0]["operations"] = json!({"action":{"state":"unknown"}});
     std::fs::write(&path, packet.to_string()).unwrap();
-    assert!(validate(&home, &workspace, "thread").is_err());
+    assert!(validate(&home, &workspace, "thread", true).is_err());
     packet["items"][0]["operations"] = json!({"action":{"state":"verified"}});
     std::fs::write(&path, packet.to_string()).unwrap();
-    assert!(validate(&home, &workspace, "thread").is_ok());
+    assert!(validate(&home, &workspace, "thread", true).is_ok());
     // A later completion belongs to a different owner; old evidence must not transfer.
     packet["history"]
         .as_array_mut()
         .unwrap()
         .push(json!({"type":"complete","item":"worker","session":"other"}));
     std::fs::write(&path, packet.to_string()).unwrap();
-    assert!(validate(&home, &workspace, "thread").is_err());
+    assert!(validate(&home, &workspace, "thread", true).is_err());
 }
 
 #[test]

@@ -56,9 +56,12 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-pub(crate) fn validate(home: &Path, workspace: &Path, thread: &str) -> Result<(), String> {
-    let required = std::env::var_os("AGENTROUTE_REQUIRE_WORKER_BINDING").as_deref()
-        == Some(std::ffi::OsStr::new("1"));
+pub(crate) fn validate(
+    home: &Path,
+    workspace: &Path,
+    thread: &str,
+    required: bool,
+) -> Result<(), String> {
     validate_with_requirement(home, workspace, thread, required)
 }
 

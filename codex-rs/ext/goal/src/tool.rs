@@ -309,6 +309,7 @@ impl GoalToolExecutor {
                 self.state_db.sqlite().home(),
                 &workspace,
                 &self.thread_id.to_string(),
+                runtime.worker_binding_required(),
             ) {
                 // Hold automatic continuations until a fresh external/user input
                 // resolves the missing binding or packet evidence; don't spin.
@@ -348,6 +349,7 @@ impl GoalToolExecutor {
                 self.state_db.sqlite().home(),
                 &workspace,
                 &self.thread_id.to_string(),
+                runtime.worker_binding_required(),
             ) {
                 // Hold automatic continuations until a fresh external/user input
                 // resolves the missing binding or packet evidence; don't spin.

@@ -110,6 +110,12 @@ where
             );
             let tools_available_for_thread =
                 input.persistent_thread_state_available && tools_visible_for_thread;
+            // Process-wide launch variables belong only to the root embedded worker,
+            // never to its delegated subagents or internal review threads.
+            let worker_binding_required = worker_binding_required(
+                input.session_source,
+                std::env::var_os("AGENTROUTE_REQUIRE_WORKER_BINDING").as_deref(),
+            );
             input.thread_store.insert(config);
             let accounting_state = input
                 .thread_store
@@ -154,6 +160,7 @@ where
                         enabled,
                         tools_available_for_thread,
                         tools_visible_for_thread,
+                        worker_binding_required,
                         root_accounting_state,
                     },
                 )
@@ -162,8 +169,7 @@ where
             self.goal_service.register_runtime(&runtime);
             if enabled
                 && tools_available_for_thread
-                && std::env::var_os("AGENTROUTE_REQUIRE_WORKER_BINDING").as_deref()
-                    == Some(std::ffi::OsStr::new("1"))
+                && worker_binding_required
                 && let Some(attempt) = std::env::var_os("AGENTROUTE_WORKER_ATTEMPT")
                 && let Some(workspace) = std::env::var_os("HOME")
             {
@@ -719,3 +725,11 @@ fn tool_attempt_counts_for_goal_progress(outcome: ToolCallOutcome) -> bool {
         | ToolCallOutcome::Aborted => false,
     }
 }
+
+fn worker_binding_required(source: &SessionSource, flag: Option<&std::ffi::OsStr>) -> bool {
+    !source.is_non_root_agent() && flag == Some(std::ffi::OsStr::new("1"))
+}
+
+#[cfg(test)]
+#[path = "worker_scope_tests.rs"]
+mod worker_scope_tests;

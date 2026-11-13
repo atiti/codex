@@ -42,6 +42,7 @@ pub(crate) struct GoalRuntimeConfig {
     pub(crate) enabled: bool,
     pub(crate) tools_available_for_thread: bool,
     pub(crate) tools_visible_for_thread: bool,
+    pub(crate) worker_binding_required: bool,
     pub(crate) root_accounting_state: Option<Arc<GoalAccountingState>>,
 }
 
@@ -70,6 +71,7 @@ struct GoalRuntimeInner {
     supervisor_batch: std::sync::Mutex<supervisor::BatchWindow>,
     tools_available_for_thread: bool,
     tools_visible_for_thread: bool,
+    worker_binding_required: bool,
     goal_state_lock: Semaphore,
 }
 
@@ -130,6 +132,7 @@ impl GoalRuntimeHandle {
                 supervisor_batch: std::sync::Mutex::new(supervisor::BatchWindow::default()),
                 tools_available_for_thread: config.tools_available_for_thread,
                 tools_visible_for_thread: config.tools_visible_for_thread,
+                worker_binding_required: config.worker_binding_required,
                 goal_state_lock: Semaphore::new(/*permits*/ 1),
             }),
         }
@@ -141,6 +144,10 @@ impl GoalRuntimeHandle {
 
     pub(crate) fn is_enabled(&self) -> bool {
         self.inner.enabled.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn worker_binding_required(&self) -> bool {
+        self.inner.worker_binding_required
     }
 
     pub(crate) fn tools_visible(&self) -> bool {

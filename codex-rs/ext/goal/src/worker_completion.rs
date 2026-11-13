@@ -299,9 +299,6 @@ pub(crate) fn prepare_goal(
     );
     codex_protocol::protocol::validate_thread_goal_objective(&goal)?;
     binding["thread_id"] = Value::String(thread.to_string());
-    if let Some(object) = binding.as_object_mut() {
-        object.remove("resume_thread");
-    }
     let directory = home.join("worker-goal-bindings");
     std::fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
     #[cfg(unix)]

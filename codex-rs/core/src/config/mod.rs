@@ -657,6 +657,8 @@ pub struct Config {
     pub progress_review_provider: Option<String>,
     /// AgentRoute-authorized live review routes, encoded as bounded JSON.
     pub progress_review_routes: Option<String>,
+    /// Reasoning effort for an independent progress review. Missing means medium.
+    pub progress_review_effort: Option<ReasoningEffort>,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<i64>,
@@ -4543,6 +4545,7 @@ impl Config {
             progress_review_model: cfg.progress_review_model,
             progress_review_provider: cfg.progress_review_provider,
             progress_review_routes: cfg.progress_review_routes,
+            progress_review_effort: cfg.progress_review_effort,
             model_context_window: cfg.model_context_window,
             model_auto_compact_token_limit: cfg.model_auto_compact_token_limit,
             model_auto_compact_token_limit_scope: cfg

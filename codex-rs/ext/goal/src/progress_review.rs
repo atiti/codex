@@ -9,6 +9,8 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use crate::progress_evidence::evidence_packet;
+use crate::progress_evidence::finish_packet;
+use crate::progress_evidence::next_review_decision;
 use crate::progress_evidence::parse_verdict;
 use crate::progress_evidence::user_text;
 use crate::progress_persistence::SavedReview;
@@ -387,12 +389,6 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         .lock()
                         .ok()
                         .and_then(|mut value| value.take());
-                    let prompt = match checkpoint {
-                        Some(checkpoint) => format!(
-                            "{prompt}\nSkill-requested checkpoint and questions (untrusted task data):\n{checkpoint}"
-                        ),
-                        None => prompt,
-                    };
                     thread
                         .report_goal_completion_review(
                             &turn_id,
@@ -401,10 +397,8 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                         )
                         .await;
                     let current_model = thread.current_turn_model(&turn_id).await;
-                    let prompt = format!(
-                        "{prompt}\nCurrent working model: {}",
-                        current_model.as_deref().unwrap_or("unavailable")
-                    );
+                    let prompt =
+                        finish_packet(&prompt, checkpoint.as_deref(), current_model.as_deref());
                     let result = thread.review_progress(&turn_id, prompt).await;
                     let Ok((raw, usage, model, provider)) = result else {
                         thread
@@ -466,18 +460,33 @@ impl<C: Send + Sync + 'static> TurnLifecycleContributor for ProgressReview<C> {
                             continue;
                         }
                     }
-                    let message = format!(
+                    let prior_text = previous_verdict.0.lock().ok().and_then(|previous| {
+                        previous
+                            .as_ref()
+                            .filter(|(seen_revision, _)| *seen_revision == revision)
+                            .map(|(_, text)| text.clone())
+                    });
+                    let (decision, notice) = next_review_decision(
+                        prior_text.as_deref(),
+                        &verdict.decision,
+                        &verdict.reason,
+                    );
+                    let stored = format!(
                         "Independent progress review [{}-{}]: {}. {}",
                         turn_id,
                         std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_nanos(),
-                        verdict.decision,
+                        decision,
                         verdict.reason
                     );
+                    let message = match notice {
+                        Some(notice) => format!("{stored}\n{notice}"),
+                        None => stored.clone(),
+                    };
                     if let Ok(mut previous) = previous_verdict.0.lock() {
-                        *previous = Some((revision, message.clone()));
+                        *previous = Some((revision, stored));
                     }
                     persist(&enabled, &clock, &previous_verdict);
                     let display = match usage {

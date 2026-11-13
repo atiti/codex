@@ -178,6 +178,9 @@ pub struct ConfigToml {
     pub progress_review_provider: Option<String>,
     /// AgentRoute-authorized live review routes, encoded as bounded JSON.
     pub progress_review_routes: Option<String>,
+    /// Reasoning effort for an independent progress review. Missing means medium.
+    #[serde(default)]
+    pub progress_review_effort: Option<ReasoningEffort>,
 
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,

@@ -3,9 +3,13 @@ use super::INTERVAL;
 use super::Signals;
 use crate::progress_evidence::Verdict;
 use crate::progress_evidence::evidence_packet;
+use crate::progress_evidence::finish_packet;
+use crate::progress_evidence::next_review_decision;
 use crate::progress_evidence::parse_verdict;
+use crate::progress_evidence::rendered_review_within_limit;
 use codex_extension_api::ToolCallOutcome;
 use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
 use pretty_assertions::assert_eq;
 
@@ -257,4 +261,109 @@ fn next_review_receives_recorded_receipt_and_observed_tool_evidence() {
     assert!(packet.contains("Acknowledgement: accepted"));
     assert!(packet.contains("tool search: cohort audit"));
     assert!(packet.contains("do not infer compliance from an acknowledgement alone"));
+}
+
+fn tool_result(call_id: &str, text: &str) -> ResponseItem {
+    ResponseItem::FunctionCallOutput {
+        id: None,
+        call_id: Some(call_id.into()),
+        name: None,
+        namespace: None,
+        output: FunctionCallOutputPayload::from_text(text.to_string()),
+        internal_chat_message_metadata_passthrough: None,
+    }
+}
+
+#[test]
+fn tool_results_keep_head_and_tail_and_messages_stay_prefix_clipped() {
+    let user = message("user", "Audit the complete cohort");
+    let result = tool_result(
+        "call-head-tail",
+        &format!(
+            "HEAD-MARKER{}CENTER-MARKER{}TAIL-MARKER",
+            "a".repeat(2_000),
+            "b".repeat(2_000)
+        ),
+    );
+    let assistant = message(
+        "assistant",
+        &format!("KEEP-PREFIX{}DROP-SUFFIX", "x".repeat(3_000)),
+    );
+    let packet = evidence_packet(
+        vec![&user, &assistant, &result],
+        None,
+        Some("Audit the complete cohort"),
+        None,
+    );
+    assert!(packet.contains("HEAD-MARKER"));
+    assert!(packet.contains("TAIL-MARKER"));
+    assert!(!packet.contains("CENTER-MARKER"));
+    assert!(packet.contains("KEEP-PREFIX"));
+    assert!(!packet.contains("DROP-SUFFIX"));
+    assert!(rendered_review_within_limit(&packet));
+}
+
+#[test]
+fn only_the_newest_twelve_tool_results_are_retained() {
+    let user = message("user", "Audit the complete cohort");
+    let items = vec![user];
+    let mut results = Vec::new();
+    for index in 0..13 {
+        results.push(tool_result(
+            &format!("call-{index}"),
+            &format!("result-{index:02}"),
+        ));
+    }
+    let mut refs = vec![&items[0]];
+    for result in &results {
+        refs.push(result);
+    }
+    let packet = evidence_packet(refs, None, Some("Audit the complete cohort"), None);
+    assert!(!packet.contains("result-00"));
+    assert!(packet.contains("result-01"));
+    assert!(packet.contains("result-12"));
+    assert!(rendered_review_within_limit(&packet));
+}
+
+#[test]
+fn second_identical_adjust_on_the_same_revision_becomes_replan() {
+    let previous = "Independent progress review [turn-1]: adjust. Audit the cohort";
+    let (decision, notice) = next_review_decision(Some(previous), "adjust", "Audit the cohort");
+    assert_eq!(decision, "replan");
+    let notice = notice.expect("repeated adjust should tell the agent to replan");
+    assert!(notice.contains("Replan or ask the user"));
+    assert!(notice.len() <= 1_000);
+    assert!("Audit the cohort".len() <= 1_000);
+
+    let (decision, notice) = next_review_decision(
+        Some("Independent progress review [turn-1]: replan. Audit the cohort"),
+        "adjust",
+        "Audit the cohort",
+    );
+    assert_eq!(decision, "adjust");
+    assert!(notice.is_none());
+
+    let (decision, notice) = next_review_decision(
+        Some("Independent progress review [turn-1]: continue. Proceed"),
+        "adjust",
+        "Proceed",
+    );
+    assert_eq!(decision, "adjust");
+    assert!(notice.is_none());
+
+    let (decision, notice) =
+        next_review_decision(Some(previous), "adjust", "Check a different gap");
+    assert_eq!(decision, "adjust");
+    assert!(notice.is_none());
+}
+
+#[test]
+fn complete_review_including_checkpoint_and_model_respects_rendered_limit() {
+    let user = message("user", &"<&".repeat(4000));
+    let result = tool_result("long", &"<&".repeat(3000));
+    let packet = evidence_packet(vec![&user, &result], None, Some(&"<&".repeat(4000)), None);
+    let prompt = finish_packet(&packet, Some(&"<&".repeat(500)), Some(&"<&".repeat(500)));
+    assert!(rendered_review_within_limit(&prompt));
+    assert!(prompt.contains("Skill-requested checkpoint"));
+    assert!(prompt.contains("Current working model:"));
 }

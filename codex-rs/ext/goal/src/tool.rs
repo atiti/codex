@@ -298,11 +298,77 @@ impl GoalToolExecutor {
             .validate_supervisor_stop(args.status)
             .await
             .map_err(FunctionCallError::RespondToModel)?;
+        if args.status == ThreadGoalStatus::Complete {
+            let workspace = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| {
+                    FunctionCallError::RespondToModel("workspace home unavailable".into())
+                })?
+                .join("workspace");
+            if let Err(error) = crate::worker_completion::validate(
+                self.state_db.sqlite().home(),
+                &workspace,
+                &self.thread_id.to_string(),
+            ) {
+                // Hold automatic continuations until a fresh external/user input
+                // resolves the missing binding or packet evidence; don't spin.
+                if let Some(goal) = self
+                    .state_db
+                    .thread_goals()
+                    .get_thread_goal(self.thread_id)
+                    .await
+                    .map_err(|e| FunctionCallError::Fatal(e.to_string()))?
+                {
+                    self.state_db
+                        .thread_goals()
+                        .replace_thread_goal_snapshot(&goal)
+                        .await
+                        .map_err(|e| FunctionCallError::Fatal(e.to_string()))?;
+                }
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "Worker completion held: {error}. Automatic continuation is held; report the blocker and await a verified event or user input."
+                )));
+            }
+        }
         let review_goal_id = if args.status == ThreadGoalStatus::Complete {
             Some(self.review_completion(&invocation).await?)
         } else {
             None
         };
+        // Recheck the packet after the independent review: the canonical state
+        // may have changed while the reviewer was running.
+        if args.status == ThreadGoalStatus::Complete {
+            let workspace = std::env::var_os("HOME")
+                .map(std::path::PathBuf::from)
+                .ok_or_else(|| {
+                    FunctionCallError::RespondToModel("workspace home unavailable".into())
+                })?
+                .join("workspace");
+            if let Err(error) = crate::worker_completion::validate(
+                self.state_db.sqlite().home(),
+                &workspace,
+                &self.thread_id.to_string(),
+            ) {
+                // Hold automatic continuations until a fresh external/user input
+                // resolves the missing binding or packet evidence; don't spin.
+                if let Some(goal) = self
+                    .state_db
+                    .thread_goals()
+                    .get_thread_goal(self.thread_id)
+                    .await
+                    .map_err(|e| FunctionCallError::Fatal(e.to_string()))?
+                {
+                    self.state_db
+                        .thread_goals()
+                        .replace_thread_goal_snapshot(&goal)
+                        .await
+                        .map_err(|e| FunctionCallError::Fatal(e.to_string()))?;
+                }
+                return Err(FunctionCallError::RespondToModel(format!(
+                    "Worker completion held: {error}. Automatic continuation is held; report the blocker and await a verified event or user input."
+                )));
+            }
+        }
         // A review can run while a worker appends a new durable event.
         runtime
             .validate_supervisor_stop(args.status)

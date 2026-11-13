@@ -3633,6 +3633,7 @@ dependencies = [
  "codex-utils-absolute-path",
  "codex-utils-string",
  "codex-utils-template",
+ "libc",
  "pretty_assertions",
  "serde",
  "serde_json",

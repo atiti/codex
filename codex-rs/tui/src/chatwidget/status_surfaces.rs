@@ -3,6 +3,8 @@
 //! Keeping this logic in a focused submodule makes the additive title/status
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
+use super::agentroute_wait_status::WaitStatus;
+use super::agentroute_wait_status::agentroute_wait_status;
 use super::*;
 use crate::bottom_pane::status_line_content::StatusLineRenderer;
 use crate::branch_summary;
@@ -22,8 +24,6 @@ use codex_protocol::config_types::ApprovalsReviewer;
 use codex_protocol::config_types::ServiceTier;
 use codex_protocol::models::PermissionProfile;
 use codex_utils_sandbox_summary::summarize_permission_profile;
-
-use super::status_state::TerminalTitleStatusKind;
 
 /// Items shown in the terminal title when the user has not configured a
 /// custom selection. Unnamed threads omit the name until one is available.
@@ -1070,29 +1070,45 @@ impl ChatWidget {
 
     /// Computes the compact runtime status label used by word-based status items.
     ///
-    /// Startup takes precedence over normal task states, and idle state renders
-    /// as `Ready` regardless of the last active status bucket.
+    /// A completed turn is distinct from a goal or a pending external wait.
     pub(super) fn run_state_status_text(&self) -> String {
         if self.mcp_startup_status.is_some() {
             return "Starting".to_string();
         }
 
-        match self.status_state.terminal_title_status_kind {
-            TerminalTitleStatusKind::Working if !self.bottom_pane.is_task_running() => {
-                "Ready".to_string()
+        let activity = if self.bottom_pane.program_status_blocked_kind().is_some()
+            || self.bottom_pane.terminal_title_requires_action()
+        {
+            "Needs input".to_string()
+        } else if self.bottom_pane.is_task_running() || self.is_user_turn_pending_or_running() {
+            "Working".to_string()
+        } else if !self.unified_exec_processes.is_empty() {
+            "Background process".to_string()
+        } else if let Some(goal) = self.current_goal_status.as_ref() {
+            match goal.status() {
+                AppThreadGoalStatus::Active => "Goal active",
+                AppThreadGoalStatus::Paused => "Goal paused",
+                AppThreadGoalStatus::Blocked => "Goal blocked",
+                AppThreadGoalStatus::UsageLimited => "Usage limit",
+                AppThreadGoalStatus::BudgetLimited => "Budget limit",
+                AppThreadGoalStatus::Complete => "Goal complete",
             }
-            TerminalTitleStatusKind::WaitingForBackgroundTerminal
-                if !self.bottom_pane.is_task_running() =>
-            {
-                "Ready".to_string()
+            .to_string()
+        } else {
+            match self.status_state.program_status_after_turn {
+                ProgramStatus::Error => "Error".to_string(),
+                _ => "Ready".to_string(),
             }
-            TerminalTitleStatusKind::Thinking if !self.bottom_pane.is_task_running() => {
-                "Ready".to_string()
+        };
+        if let Some(thread) = self.thread_id {
+            match agentroute_wait_status(thread.to_string().as_str()) {
+                WaitStatus::Waiting(detail) => return format!("{activity} · {detail}"),
+                WaitStatus::Unknown => return format!("{activity} · Wait status unknown"),
+                WaitStatus::Unavailable => return format!("{activity} · Wait service unavailable"),
+                WaitStatus::None => {}
             }
-            TerminalTitleStatusKind::Working => "Working".to_string(),
-            TerminalTitleStatusKind::WaitingForBackgroundTerminal => "Waiting".to_string(),
-            TerminalTitleStatusKind::Thinking => "Thinking".to_string(),
         }
+        activity
     }
 
     pub(super) fn terminal_title_spinner_text_at(&self, now: Instant) -> Option<String> {

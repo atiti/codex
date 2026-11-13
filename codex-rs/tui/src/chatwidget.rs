@@ -393,6 +393,7 @@ mod windows_sandbox_prompts;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
+mod agentroute_wait_status;
 mod status_controls;
 mod status_surface_commands;
 mod status_surfaces;
@@ -1220,6 +1221,23 @@ impl ChatWidget {
             || self.should_animate_terminal_title_action_required()
         {
             self.refresh_terminal_title();
+        }
+        // Waits can change while no model turn runs; refresh the existing status
+        // surface on a bounded timer without requiring a user keystroke.
+        if self
+            .local_settings
+            .tui
+            .status_line
+            .as_ref()
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item == "run-state" || item == "status")
+            })
+        {
+            self.refresh_status_line();
+            self.frame_requester
+                .schedule_frame_in(std::time::Duration::from_secs(3));
         }
         self.refresh_status_line_if_workspace_headline_due();
         self.refresh_thread_usage_if_settlement_due();

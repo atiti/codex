@@ -160,6 +160,32 @@ where
             });
             runtime.set_enabled(enabled);
             self.goal_service.register_runtime(&runtime);
+            if enabled
+                && tools_available_for_thread
+                && std::env::var_os("AGENTROUTE_REQUIRE_WORKER_BINDING").as_deref()
+                    == Some(std::ffi::OsStr::new("1"))
+                && let Some(attempt) = std::env::var_os("AGENTROUTE_WORKER_ATTEMPT")
+                && let Some(workspace) = std::env::var_os("HOME")
+            {
+                let result = crate::worker_completion::prepare_goal(
+                    self.state_dbs.sqlite().home(),
+                    &std::path::PathBuf::from(workspace).join("workspace"),
+                    &thread_id.to_string(),
+                    &attempt.to_string_lossy(),
+                );
+                match result {
+                    Ok(objective) => match self.state_dbs.thread_goals().insert_thread_goal(
+                        thread_id, &objective, codex_state::ThreadGoalStatus::Active, None).await {
+                        Ok(Some(goal)) => self.event_emitter.thread_goal_updated(
+                            format!("worker-goal-{thread_id}"), None, crate::tool::protocol_goal_from_state(goal)),
+                        Ok(None) => {}, // Preserve an existing unfinished goal.
+                        Err(error) => self.event_emitter.user_notice(format!("worker-goal-{thread_id}"),
+                            format!("Worker goal setup failed: {error}. Register and inspect before working.")),
+                    },
+                    Err(error) => self.event_emitter.user_notice(format!("worker-goal-{thread_id}"),
+                        format!("Worker goal setup held: {error}. Register and inspect before working.")),
+                }
+            }
         })
     }
 

@@ -152,10 +152,20 @@ impl<'call> ToolExecutor<ToolCall<'call>> for AcknowledgementTool {
                 .thread_extension_data()
                 .get::<crate::progress_review::PreviousVerdict>()
                 .ok_or_else(|| FunctionCallError::RespondToModel("no review available".into()))?;
-            let revision = thread
-                .conversation_history_snapshot()
-                .await
-                .user_message_revision();
+            let history = thread.conversation_history_snapshot().await;
+            let revision = history.user_message_revision();
+            if let Some(identity) = thread
+                .thread_extension_data()
+                .get::<crate::progress_review::ReviewIdentity>()
+            {
+                let current = crate::progress_review::user_identity(history.as_ref());
+                crate::progress_review::rebase_review_revision(
+                    &previous,
+                    &identity,
+                    revision,
+                    current.as_deref(),
+                );
+            }
             record_acknowledgement(&previous, &value, revision)?;
             crate::progress_review::persist_from_store(thread.thread_extension_data());
             thread.report_goal_completion_review(&invocation.turn_id, format!("Review response [{}]: accepted: {}; disagreed: {}; reason: {}; next action: {}", value.review_id, value.accepted, value.disagreed, value.reason, value.next_action)).await;

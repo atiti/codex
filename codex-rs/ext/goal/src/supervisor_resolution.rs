@@ -76,6 +76,7 @@ pub(super) async fn consume(
                 return Err("Not-admitted resolution contradicts a recorded turn admission".into());
             }
             value.admitted_turn_id = None;
+            value.notice_event_ids.clear();
             value.in_flight = false;
             value.reservation = None;
         }

@@ -183,6 +183,20 @@ impl Inbox {
         key.finish()
     }
 
+    pub(crate) fn delivered_event_ids(&self) -> Vec<String> {
+        self.events
+            .iter()
+            .filter(|event| event.needs_action())
+            .take(3)
+            .filter(|event| {
+                event.id.len() <= 120
+                    && !event.id.is_empty()
+                    && !event.id.chars().any(char::is_control)
+            })
+            .map(|event| event.id.clone())
+            .collect()
+    }
+
     pub(crate) fn notice(&self) -> String {
         let events = self.events.iter().filter(|event| event.needs_action()).take(3)
             .map(|event| serde_json::json!({"id": bounded(&event.id, 120), "kind": bounded(&event.kind, 60), "message": bounded(&event.message, 360)}))

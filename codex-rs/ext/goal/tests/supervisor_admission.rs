@@ -6,6 +6,7 @@ use admission::Cursor;
 use admission::cursor;
 use admission::reconcile_history;
 use admission::save_cursor;
+use admission::save_delivery_receipt;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::TurnCompleteEvent;
 use codex_protocol::protocol::TurnStartedEvent;
@@ -144,5 +145,32 @@ fn completed_previous_turn_is_not_proof_for_a_new_reservation() -> anyhow::Resul
         Some("turn-b"),
         "current-token admission must reject not-admitted resolution"
     );
+    Ok(())
+}
+
+#[test]
+fn admitted_batch_receipts_are_durable_immutable_and_never_prepared() -> anyhow::Result<()> {
+    let home = tempfile::tempdir()?;
+    let thread = "11111111-1111-4111-8111-111111111111";
+    let mut cursor = Cursor {
+        reservation: Some("token-one".into()),
+        admission_token: Some("token-one".into()),
+        notice_event_ids: vec!["a".into(), "b".into()],
+        ..Cursor::default()
+    };
+    assert!(save_delivery_receipt(home.path(), thread, &cursor).is_err());
+    cursor.reservation = None;
+    cursor.admitted_turn_id = Some("turn-one".into());
+    save_delivery_receipt(home.path(), thread, &cursor).map_err(anyhow::Error::msg)?;
+    save_delivery_receipt(home.path(), thread, &cursor).map_err(anyhow::Error::msg)?;
+    let path = home
+        .path()
+        .join("supervisor-delivery-receipts")
+        .join(thread)
+        .join("token-one.json");
+    let receipt: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+    assert_eq!(receipt["event_ids"], json!(["a", "b"]));
+    cursor.notice_event_ids = vec!["different".into()];
+    assert!(save_delivery_receipt(home.path(), thread, &cursor).is_err());
     Ok(())
 }

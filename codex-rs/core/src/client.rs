@@ -504,7 +504,9 @@ pub(crate) fn normalize_response_items_for_provider(
                     _ => {}
                 }
             }
-            if foreign {
+            // Native mail identity belongs to the harness. Keep it after stripping
+            // encrypted parts so delivery/compaction can still recognize the message.
+            if foreign && !matches!(item, ResponseItem::AgentMessage { .. }) {
                 item.set_id(/*new_id*/ None);
             }
         }
@@ -606,7 +608,9 @@ pub(crate) fn normalize_response_items_for_provider(
                         if id.starts_with("encitem_")
                 ) || matches!(
                     item,
-                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+                    ResponseItem::Compaction { .. }
+                        | ResponseItem::ContextCompaction { .. }
+                        | ResponseItem::AgentMessage { .. }
                 );
                 if !preserve_affinity_id {
                     item.set_id(/*new_id*/ None);
@@ -2067,6 +2071,29 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    /// Include newly admitted sender-owned state without losing prior explicit
+    /// account/provider filters or treating a fresh owned checkpoint as foreign.
+    pub(crate) fn include_newly_recorded_provider_history(
+        &mut self,
+        history: &[codex_history::ResponseItemEnvelope],
+        provider_id: &str,
+    ) {
+        let foreign = history.iter().filter(|envelope| {
+            envelope
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.model_provider_id.as_deref())
+                != Some(provider_id)
+        });
+        if foreign.clone().any(|envelope| {
+            crate::client_provider_history::has_provider_owned_state(&envelope.item)
+        }) {
+            self.foreign_provider_state_ids
+                .extend(foreign.filter_map(|envelope| envelope.item.id().cloned()));
+            self.strip_unattributed_provider_state = true;
+        }
+    }
+
     /// Sanitize a recovery snapshot using the same provider boundary as the failed request.
     pub(crate) fn sanitize_compaction_recovery_input(
         &self,
@@ -2566,6 +2593,11 @@ impl ResponsesHttpExecutor<'_> {
             )?;
             self.client
                 .validate_required_cyber_access_program(request.access_programs)?;
+            crate::client_provider_history::validate_checkpoint_ownership(
+                &request.input,
+                foreign_provider_state_ids,
+                strip_unattributed_provider_state,
+            )?;
             self.client.prepare_response_items_for_request(
                 &mut request.input,
                 foreign_provider_state_ids,
@@ -2861,6 +2893,11 @@ impl ModelClientSession {
             if let Some(turn_state) = self.turn_state.get() {
                 client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
             }
+            crate::client_provider_history::validate_checkpoint_ownership(
+                &request.input,
+                &self.foreign_provider_state_ids,
+                self.strip_unattributed_provider_state,
+            )?;
             self.client.prepare_response_items_for_request(
                 &mut request.input,
                 &self.foreign_provider_state_ids,

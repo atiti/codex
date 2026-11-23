@@ -481,6 +481,11 @@ async fn guardian_history_uses_deltas_between_eviction_batches(
                 Vec::new(),
                 "opaque-parent-restriction".into(),
                 /*trigger_turn*/ true,
+            )
+            .with_routing_provider_context(
+                Some(test.config.model_provider_id.clone()),
+                /*requested_backend*/ None,
+                /*model_explicit*/ false,
             ),
             start_options: Default::default(),
         })

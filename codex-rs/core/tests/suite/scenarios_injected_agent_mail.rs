@@ -36,10 +36,10 @@ async fn injected_mail_respects_delivery_boundaries() -> anyhow::Result<()> {
         vec![
             chunk(None, vec![
                 responses::ev_response_created("first"),
-                responses::ev_reasoning_item_added("boundary", &["Preparing the plan"]),
+                responses::ev_reasoning_item_added("encitem_boundary", &["Preparing the plan"]),
             ]),
             chunk(Some(boundary_gate), vec![
-                responses::ev_reasoning_item("boundary", &["Preparing the plan"], &[]),
+                responses::ev_reasoning_item("encitem_boundary", &["Preparing the plan"], &[]),
                 responses::ev_function_call(
                     "stale-plan", "update_plan",
                     r#"{"plan":[{"step":"Act before reading the worker update","status":"in_progress"}]}"#,
@@ -55,10 +55,10 @@ async fn injected_mail_respects_delivery_boundaries() -> anyhow::Result<()> {
             chunk(Some(final_gate), vec![
                 final_answer,
                 // This event proves that final-answer handling has closed delivery.
-                responses::ev_reasoning_item_added("after-final", &["Finishing"]),
+                responses::ev_reasoning_item_added("rs_after_final", &["Finishing"]),
             ]),
             chunk(Some(completion_gate), vec![
-                responses::ev_reasoning_item("after-final", &["Finishing"], &[]),
+                responses::ev_reasoning_item("rs_after_final", &["Finishing"], &[]),
                 responses::ev_completed("after-mail"),
             ]),
         ],
@@ -137,7 +137,7 @@ async fn injected_mail_respects_delivery_boundaries() -> anyhow::Result<()> {
     };
     wait_for_event(
         &test.codex,
-        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "boundary"),
+        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "encitem_boundary"),
     )
     .await;
 
@@ -165,7 +165,7 @@ async fn injected_mail_respects_delivery_boundaries() -> anyhow::Result<()> {
     release_final.send(()).expect("release final answer");
     wait_for_event(
         &test.codex,
-        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "after-final"),
+        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "rs_after_final"),
     )
     .await;
     // A later arrival must not reopen delivery, including at a trailing reasoning boundary.
@@ -259,13 +259,16 @@ async fn injected_agent_message_interrupting_sampling_survives_mid_turn_compacti
                 None,
                 vec![
                     responses::ev_response_created("first"),
-                    responses::ev_reasoning_item_added("boundary", &[long_reasoning.as_str()]),
+                    responses::ev_reasoning_item_added(
+                        "encitem_boundary",
+                        &[long_reasoning.as_str()],
+                    ),
                 ],
             ),
             chunk(
                 Some(boundary_gate),
                 vec![responses::ev_reasoning_item(
-                    "boundary",
+                    "encitem_boundary",
                     &[long_reasoning.as_str()],
                     &[],
                 )],
@@ -325,7 +328,7 @@ async fn injected_agent_message_interrupting_sampling_survives_mid_turn_compacti
         .await?;
     wait_for_event(
         &test.codex,
-        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "boundary"),
+        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "encitem_boundary"),
     )
     .await;
     test.codex

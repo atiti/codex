@@ -3548,3 +3548,31 @@ fn upstream_opaque_state_is_removed_only_for_foreign_provider_or_account() {
     assert!(!wire.contains("cipher"));
     assert!(wire.contains("plain evidence"));
 }
+
+#[test]
+fn foreign_plaintext_native_mail_preserves_harness_identity_after_ciphertext_removal() {
+    let provider = ModelProviderInfo::create_openai_provider(/*base_url*/ None);
+    let id = ResponseItemId::with_suffix("amsg", "native");
+    let message = ResponseItem::AgentMessage {
+        id: Some(id.clone()),
+        author: "/root/worker".to_string(),
+        recipient: "/root".to_string(),
+        content: vec![AgentMessageInputContent::InputText {
+            text: "Use the completed result.".to_string(),
+        }],
+        internal_chat_message_metadata_passthrough: None,
+    };
+    let mut input = vec![message.clone()];
+    if let ResponseItem::AgentMessage { content, .. } = &mut input[0] {
+        content.push(AgentMessageInputContent::EncryptedContent {
+            encrypted_content: "FOREIGN_MAIL_CIPHERTEXT".to_string(),
+        });
+    }
+    normalize_response_items_for_provider(
+        &mut input,
+        &provider,
+        &HashSet::from([id]),
+        /*strip_unattributed_provider_state*/ true,
+    );
+    assert_eq!(input, vec![message]);
+}

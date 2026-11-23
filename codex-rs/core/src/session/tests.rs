@@ -3362,7 +3362,9 @@ async fn recompute_token_usage_uses_session_base_instructions() {
         .expect("estimate with model instructions");
     assert_ne!(expected_tokens, model_estimated_tokens);
 
-    session.recompute_token_usage(&turn_context).await;
+    session
+        .recompute_token_usage(&StepContext::for_test(Arc::new(turn_context)))
+        .await;
 
     let actual_tokens = session
         .state
@@ -3394,10 +3396,54 @@ async fn recompute_token_usage_updates_model_context_window() {
         Arc::make_mut(&mut settings.model_info).effective_context_window_percent = 100;
     });
 
-    session.recompute_token_usage(&turn_context).await;
+    session
+        .recompute_token_usage(&StepContext::for_test(Arc::new(turn_context)))
+        .await;
 
     let actual = session.state.lock().await.token_info().expect("token info");
     assert_eq!(actual.model_context_window, Some(128_000));
+}
+
+#[tokio::test]
+async fn recompute_after_compaction_uses_routed_replacement_model_window() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    update_turn_settings_for_test(&mut turn_context, |settings| {
+        let model = Arc::make_mut(&mut settings.model_info);
+        model.context_window = Some(272_000);
+        model.auto_compact_token_limit = None;
+        model.effective_context_window_percent = 95;
+    });
+    let mut step = StepContext::for_test(Arc::new(turn_context));
+    let settings = Arc::make_mut(&mut Arc::make_mut(&mut step).settings);
+    let model = Arc::make_mut(&mut settings.model_info);
+    model.context_window = Some(500_000);
+    model.effective_context_window_percent = 95;
+    session.recompute_token_usage(&step).await;
+    let actual = session.state.lock().await.token_info().expect("token info");
+    assert_eq!(actual.model_context_window, Some(475_000));
+
+    // An opaque server checkpoint can expand beyond the local estimate. This
+    // usage exceeds the unknown-model fallback budget, but fits routed Sol.
+    let mut actual = actual;
+    actual.last_token_usage.total_tokens = 302_000;
+    actual.last_usage_includes_reasoning = Some(true);
+    session.state.lock().await.set_token_info(Some(actual));
+    let fallback = super::context_window::context_window_token_status_for_model(
+        &session,
+        &step.turn.config,
+        &step.turn,
+        &step.turn.initial_settings.model_info,
+    )
+    .await;
+    let routed = super::context_window::context_window_token_status_for_model(
+        &session,
+        &step.turn.config,
+        &step.turn,
+        &step.settings.model_info,
+    )
+    .await;
+    assert!(fallback.token_limit_reached);
+    assert!(!routed.token_limit_reached);
 }
 
 #[test_case(crate::session::TokenUsageContext::Sampling { includes_reasoning: false, input_item_count: 0 }; "sampling")]

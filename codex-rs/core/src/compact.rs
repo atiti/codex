@@ -537,8 +537,7 @@ async fn run_compact_task_inner_impl(
         ),
     )
     .await;
-    sess.recompute_token_usage(&replacement_step_context.turn)
-        .await;
+    sess.recompute_token_usage(&replacement_step_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;

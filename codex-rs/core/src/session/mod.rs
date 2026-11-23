@@ -5599,7 +5599,7 @@ impl Session {
             ),
         )
         .await;
-        self.recompute_token_usage(turn_context).await;
+        self.recompute_token_usage(step_context).await;
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -5898,7 +5898,8 @@ impl Session {
         budget_result
     }
 
-    pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
+    pub(crate) async fn recompute_token_usage(&self, step_context: &StepContext) {
+        let turn_context = &step_context.turn;
         let history = self.clone_history().await;
         let base_instructions = self.get_base_instructions().await;
         let Some(estimated_total_tokens) =
@@ -5925,7 +5926,9 @@ impl Session {
                 codex_rollout_budget_units: None,
             };
 
-            if let Some(model_context_window) = turn_context.model_context_window() {
+            if let Some(model_context_window) =
+                step_context.settings.model_info.usable_context_window()
+            {
                 info.model_context_window = Some(model_context_window);
             }
 

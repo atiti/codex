@@ -2535,6 +2535,19 @@ impl Session {
             .clone()
     }
 
+    /// Install a plaintext compaction prompt on the live session config.
+    /// The next turn clones this config, so a running resume can recover an
+    /// opaque checkpoint without rebuilding the thread.
+    pub(crate) async fn set_compact_prompt(&self, prompt: String) {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return;
+        }
+        let mut state = self.state.lock().await;
+        let config = Arc::make_mut(&mut state.session_configuration.original_config_do_not_use);
+        config.compact_prompt = Some(prompt.to_string());
+    }
+
     pub(crate) async fn inherited_instructions(&self) -> SessionInstructions {
         self.services
             .agents_md_manager

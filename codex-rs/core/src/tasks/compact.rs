@@ -49,7 +49,12 @@ impl SessionTask for CompactTask {
                 .build_world_state_for_step(&step_context, /*new_window*/ true)
                 .await?,
         );
-        if ctx.config.features.enabled(Feature::TokenBudget) {
+        // An explicit summary prompt requests ordinary Responses compaction so
+        // the provider can turn its owned opaque checkpoint into portable text.
+        let plaintext_compaction = crate::client_provider_history::explicit_plaintext_compaction(
+            ctx.config.compact_prompt.as_deref(),
+        );
+        if !plaintext_compaction && ctx.config.features.enabled(Feature::TokenBudget) {
             // Preparing the context may wait; this reset never sends a model request.
             session.check_rollout_budget()?;
             crate::compact_token_budget::run_manual_compact_task(
@@ -62,9 +67,7 @@ impl SessionTask for CompactTask {
         }
 
         let history = session.clone_history().await;
-        // An explicit summary prompt requests ordinary Responses compaction so
-        // the provider can turn its owned opaque checkpoint into portable text.
-        let result = match if ctx.config.compact_prompt.is_some()
+        let result = match if plaintext_compaction
             || crate::client_provider_history::requires_portable_compaction(
                 history.annotated_items(),
                 &ctx.model_provider_id(),

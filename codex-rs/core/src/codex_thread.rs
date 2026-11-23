@@ -1539,6 +1539,11 @@ impl CodexThread {
         self.session.get_config().await
     }
 
+    /// Apply an explicit plaintext compaction prompt to this loaded thread.
+    pub async fn set_compact_prompt(&self, prompt: String) {
+        self.session.set_compact_prompt(prompt).await;
+    }
+
     /// List the thread's current hook declarations, including its selected, ready environments.
     pub fn list_hooks(&self) -> codex_hooks::HookListOutcome {
         let environments = self.session.services.turn_environments.snapshot_now();

@@ -52,7 +52,7 @@ use tokio::sync::mpsc;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-const MULTI_AGENT_V2_NAMESPACE: &str = "collaboration";
+const MULTI_AGENT_V2_NAMESPACE: &str = "agentroute_collaboration";
 
 #[derive(Clone, Copy, Default)]
 enum HostAccountingBehavior {

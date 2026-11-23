@@ -19,6 +19,10 @@ impl GoalStatusState {
         Self { goal, observed_at }
     }
 
+    pub(super) fn status(&self) -> AppThreadGoalStatus {
+        self.goal.status
+    }
+
     pub(super) fn is_active(&self) -> bool {
         self.goal.status == AppThreadGoalStatus::Active
     }

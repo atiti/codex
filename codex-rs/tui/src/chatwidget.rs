@@ -329,9 +329,11 @@ mod model_command;
 mod model_popup_state;
 mod model_popups;
 mod notifications;
+mod output_rate;
 pub(crate) mod quick_dials;
 mod session_model_selection;
 use self::notifications::Notification;
+use self::output_rate::OutputRate;
 pub(crate) use self::session_model_selection::AstraModelPickerAction;
 mod permission_discovery;
 mod permission_popups;
@@ -398,6 +400,7 @@ mod windows_sandbox_prompts;
 use self::status_state::StatusIndicatorState;
 use self::status_state::StatusState;
 use self::status_state::TerminalTitleStatusKind;
+mod agentroute_wait_status;
 mod status_controls;
 mod status_surface_commands;
 mod status_surfaces;
@@ -420,6 +423,7 @@ use self::transcript::TranscriptState;
 mod turn_lifecycle;
 mod turn_runtime;
 use self::turn_lifecycle::TurnLifecycleState;
+pub(crate) use self::turn_runtime::parse_model_route;
 mod usage;
 mod user_messages;
 mod working_directory;
@@ -480,7 +484,12 @@ const ASK_FOR_APPROVAL_LABEL: &str = "Ask for approval";
 const APPROVE_FOR_ME_LABEL: &str = "Approve for me";
 const AUTO_REVIEW_DESCRIPTION: &str = "Only ask for actions detected as potentially unsafe";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_STATUS_LINE_ITEMS: [&str; 3] = ["model-with-reasoning", "current-dir", "thread-name"];
+const DEFAULT_STATUS_LINE_ITEMS: [&str; 4] = [
+    "model-with-reasoning",
+    "current-dir",
+    "thread-name",
+    "tokens-per-second",
+];
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
@@ -592,6 +601,7 @@ pub(crate) struct ChatWidget {
     pub(crate) windows_sandbox_elevated_setup_complete: bool,
     token_info: Option<TokenUsageInfo>,
     token_usage_pending: bool,
+    output_rate: OutputRate,
     // Status and polling use account usage reads; response streams may identify meters differently.
     rate_limit_snapshots_by_limit_id: BTreeMap<String, RateLimitSnapshotDisplay>,
     inherited_quota_provider: Option<String>,
@@ -619,6 +629,10 @@ pub(crate) struct ChatWidget {
     security_setup_identity: Option<crate::security_setup::Identity>,
     security_setup_dismissed: bool,
     automatic_model_switch_state: backend_banners::AutomaticModelSwitchState,
+    /// Accepted per-turn route shown in status surfaces without mutating thread defaults.
+    routed_turn_model: Option<String>,
+    routed_turn_model_provider: Option<String>,
+    routed_turn_reasoning_effort: Option<ReasoningEffortConfig>,
     backend_banner_notice_model: Option<String>,
     // Remember the account's Reserve entry notice across chats and transient banner refreshes.
     luna_reserve_notice_account_id: Option<String>,
@@ -1242,6 +1256,23 @@ impl ChatWidget {
             || self.should_animate_terminal_title_action_required()
         {
             self.refresh_terminal_title();
+        }
+        // Waits can change while no model turn runs; refresh the existing status
+        // surface on a bounded timer without requiring a user keystroke.
+        if self
+            .local_settings
+            .tui
+            .status_line
+            .as_ref()
+            .is_some_and(|items| {
+                items
+                    .iter()
+                    .any(|item| item == "run-state" || item == "status")
+            })
+        {
+            self.refresh_status_line();
+            self.frame_requester
+                .schedule_frame_in(std::time::Duration::from_secs(3));
         }
         self.refresh_status_line_if_workspace_headline_due();
         self.refresh_thread_usage_if_settlement_due();

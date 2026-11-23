@@ -336,7 +336,9 @@ async fn remote_slash_compact_preserves_context_across_windows() -> Result<()> {
                 SnapshotEntry::captured(&requests[3]).labeled("First turn after /compact"),
                 SnapshotEntry::captured(&requests[4]).labeled("Compaction after mail was sampled"),
             ],
-            &ContextSnapshotOptions::default().include_request_settings(),
+            &ContextSnapshotOptions::default()
+                .rewrite_known_segments()
+                .include_request_settings(),
         )
     );
     Ok(())

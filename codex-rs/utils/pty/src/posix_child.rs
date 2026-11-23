@@ -425,7 +425,15 @@ fn c_string(value: &OsStr) -> io::Result<CString> {
 /// onto stdio or explicitly preserve it across exec.
 pub(crate) fn child_fd(fd: OwnedFd) -> io::Result<OwnedFd> {
     // SAFETY: fcntl duplicates this live descriptor; the returned fd is newly owned.
-    let duplicate = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 3) };
+    #[cfg(all(test, target_os = "macos"))]
+    let minimum = if std::env::var_os("CODEX_TEST_HIGH_STDIO_FDS").is_some() {
+        10_240
+    } else {
+        3
+    };
+    #[cfg(not(all(test, target_os = "macos")))]
+    let minimum = 3;
+    let duplicate = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_DUPFD_CLOEXEC, minimum) };
     cvt_errno(duplicate)?;
     Ok(unsafe { OwnedFd::from_raw_fd(duplicate) })
 }

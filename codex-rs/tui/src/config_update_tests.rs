@@ -30,6 +30,65 @@ fn trusted_project_edit_targets_project_trust_level() {
 }
 
 #[tokio::test]
+async fn local_shared_project_discovers_git_root_beneath_untrusted_parent() -> Result<()> {
+    let temp_dir = tempfile::tempdir()?;
+    let temp_path = dunce::canonicalize(temp_dir.path())?;
+    let codex_home = temp_path.join("codex-home");
+    let build_parent = temp_path.join("build");
+    let project_root = build_parent.join("project");
+    let project_cwd = project_root.join("nested");
+    std::fs::create_dir_all(&codex_home)?;
+    std::fs::create_dir_all(&project_cwd)?;
+    std::fs::create_dir(project_root.join(".git"))?;
+    std::fs::write(project_root.join(".git/HEAD"), "ref: refs/heads/main\n")?;
+    let mut untrusted_parent = trusted_project_edit(&build_parent);
+    untrusted_parent.value = serde_json::json!("untrusted");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .harness_overrides(ConfigOverrides {
+            cwd: Some(codex_home.clone()),
+            ..ConfigOverrides::default()
+        })
+        .build()
+        .await?;
+    let app_server =
+        AppServerClient::InProcess(crate::tests::start_test_embedded_app_server(config).await?);
+    write_config_batch(app_server.request_handle(), vec![untrusted_parent]).await?;
+    let saved_config = std::fs::read_to_string(codex_home.join("config.toml"))?;
+
+    assert_eq!(
+        read_remote_project_trust(
+            app_server.request_handle(),
+            &project_cwd,
+            ProjectTrustHost::Local,
+        )
+        .await?,
+        Some(RemoteProjectTrust {
+            trust_level: None,
+            cwd: project_cwd.clone(),
+            trust_target: PathBuf::from(project_trust_key(&project_root)),
+        })
+    );
+    let remote_error = read_remote_project_trust(
+        app_server.request_handle(),
+        &project_cwd,
+        ProjectTrustHost::Remote,
+    )
+    .await
+    .expect_err("a genuinely remote client cannot infer the local repository root");
+    assert!(
+        remote_error
+            .to_string()
+            .contains("explicitly untrusted project")
+    );
+    assert_eq!(
+        std::fs::read_to_string(codex_home.join("config.toml"))?,
+        saved_config
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn remote_project_trust_guards_thread_start_and_preserves_repository_decisions() -> Result<()>
 {
     let temp_dir = tempfile::tempdir()?;

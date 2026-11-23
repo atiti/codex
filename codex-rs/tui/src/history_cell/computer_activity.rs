@@ -94,9 +94,9 @@ fn preview(text: &str, width: usize) -> String {
     }
 }
 
-fn error_preview(call: &McpToolCallCell) -> Option<&str> {
+fn error_preview(call: &McpToolCallCell) -> Option<String> {
     let text = match call.result.as_ref()? {
-        Err(error) => error.as_str(),
+        Err(error) => std::borrow::Cow::Borrowed(error.as_str()),
         Ok(result) => result
             .content
             .iter()
@@ -112,10 +112,11 @@ fn error_preview(call: &McpToolCallCell) -> Option<&str> {
     // CUA errors can append entire API manuals. The first nonempty line is the diagnostic;
     // preserve subsequent lines only in the full transcript, without inventing a paraphrase.
     text.strip_prefix("Script error:")
-        .unwrap_or(text)
+        .unwrap_or(&text)
         .lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
+        .map(str::to_owned)
 }
 
 impl HistoryCell for ComputerActivityCell {

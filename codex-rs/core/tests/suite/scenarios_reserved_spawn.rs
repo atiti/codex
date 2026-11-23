@@ -251,7 +251,15 @@ async fn prepared_child_instructions_preserve_native_inheritance(
     let expected_base = custom_base
         .map(str::to_owned)
         .unwrap_or_else(|| codex_prompts::render_model_instructions(child_model));
-    assert!(request.body_contains_text(&expected_base));
+    let expected_wire_base = if custom_base.is_none() {
+        // Catalog identity is neutralized at transport; all model guidance remains.
+        expected_base
+            .replacen("You are Codex, an agent based on GPT-5. ", "", 1)
+            .replace("As Codex, you ", "You ")
+    } else {
+        expected_base
+    };
+    assert!(request.body_contains_text(&expected_wire_base));
     assert!(request.body_contains_text(subagent_developer.unwrap_or(PARENT_DEVELOPER)));
     assert_eq!(
         request.body_contains_text(PARENT_DEVELOPER),

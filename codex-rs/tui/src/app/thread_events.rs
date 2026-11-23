@@ -115,6 +115,8 @@ pub(super) struct ThreadEventStore {
     /// Output received since deactivation can change the transcript rebuilt on replay.
     pub(super) replay_may_have_output: bool,
     pub(super) buffered_agent_message_delta_bytes: usize,
+    pub(super) buffered_event_bytes: usize,
+    pub(super) buffered_event_sizes: VecDeque<usize>,
     delegated_turns: VecDeque<String>,
     recap_progress: recap::RecapProgress,
 }
@@ -163,6 +165,8 @@ impl ThreadEventStore {
             active: false,
             replay_may_have_output: false,
             buffered_agent_message_delta_bytes: 0,
+            buffered_event_bytes: 0,
+            buffered_event_sizes: VecDeque::new(),
             delegated_turns: VecDeque::new(),
             recap_progress: recap::RecapProgress::default(),
         }
@@ -195,6 +199,7 @@ impl ThreadEventStore {
         for event in tail.into_iter().flatten() {
             self.push_buffered_event(event);
         }
+        self.recount_buffer_bytes();
     }
 
     pub(super) fn set_turns(&mut self, turns: Vec<Turn>) {

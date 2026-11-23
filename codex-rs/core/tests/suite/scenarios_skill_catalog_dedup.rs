@@ -2,6 +2,8 @@
 
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -12,15 +14,22 @@ use codex_login::CodexAuth;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
 use codex_skills_extension::HostSkillProvider;
+use codex_skills_extension::SkillProvider;
 use codex_skills_extension::SkillProviders;
 use codex_skills_extension::SkillsExtensionConfig;
 use codex_skills_extension::catalog::SkillAuthority;
 use codex_skills_extension::catalog::SkillCatalog;
 use codex_skills_extension::catalog::SkillCatalogEntry;
 use codex_skills_extension::catalog::SkillPackageId;
+use codex_skills_extension::catalog::SkillReadResult;
 use codex_skills_extension::catalog::SkillResourceId;
+use codex_skills_extension::catalog::SkillSearchResult;
 use codex_skills_extension::catalog::SkillSourceKind;
 use codex_skills_extension::install_with_providers;
+use codex_skills_extension::provider::SkillListQuery;
+use codex_skills_extension::provider::SkillProviderFuture;
+use codex_skills_extension::provider::SkillReadRequest;
+use codex_skills_extension::provider::SkillSearchRequest;
 use core_test_support::context_snapshot;
 use core_test_support::context_snapshot::ContextSnapshotOptions;
 use core_test_support::responses;
@@ -33,6 +42,36 @@ use serde_json::json;
 use super::super::skills_extension::CatalogSkillProvider;
 use super::super::skills_extension::RepositoryGrant;
 use super::super::skills_extension::repository_skill_grant_history;
+
+// Overriding CODEX_HOME does not change discovery of the real home directory's
+// .agents/skills. Keep this fixture's catalog and metadata budget independent of it.
+struct FixtureHostSkillProvider {
+    home: PathBuf,
+    host: HostSkillProvider,
+}
+
+impl SkillProvider for FixtureHostSkillProvider {
+    fn list<'a>(&'a self, query: SkillListQuery<'a>) -> SkillProviderFuture<'a, SkillCatalog> {
+        Box::pin(async move {
+            let mut catalog = self.host.list(query).await?;
+            catalog
+                .entries
+                .retain(|entry| Path::new(entry.main_prompt.as_str()).starts_with(&self.home));
+            Ok(catalog)
+        })
+    }
+
+    fn read<'a>(
+        &'a self,
+        request: SkillReadRequest<'a>,
+    ) -> SkillProviderFuture<'a, SkillReadResult> {
+        self.host.read(request)
+    }
+
+    fn search(&self, request: SkillSearchRequest) -> SkillProviderFuture<'_, SkillSearchResult> {
+        self.host.search(request)
+    }
+}
 
 #[test_case::test_case(false; "descriptions")]
 #[test_case::test_case(true; "omit_descriptions")]
@@ -210,7 +249,10 @@ async fn skill_catalog_deltas_survive_resume_and_rebuild_after_compaction() -> R
     let mut extensions = ExtensionRegistryBuilder::new();
     install_with_providers(
         &mut extensions,
-        SkillProviders::new().with_host_provider(Arc::new(HostSkillProvider::new())),
+        SkillProviders::new().with_host_provider(Arc::new(FixtureHostSkillProvider {
+            home: home.path().to_path_buf(),
+            host: HostSkillProvider::new(),
+        })),
         |config: &Config| SkillsExtensionConfig {
             include_instructions: config.include_skill_instructions,
             omit_descriptions: config.features.enabled(Feature::OmitSkillDescriptions),

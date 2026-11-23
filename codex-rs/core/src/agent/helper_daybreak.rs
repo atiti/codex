@@ -42,7 +42,7 @@ pub(crate) async fn spawning_intent(
 ) -> Option<SavedIntent> {
     let owner = spawn_owner?;
     if turn.config.model_provider_id != codex_model_provider_info::OPENAI_PROVIDER_ID
-        || !codex_model_provider::provider_uses_first_party_auth_path(turn.provider.info())
+        || !codex_model_provider::provider_uses_first_party_auth_path(turn.model_provider().info())
     {
         return None;
     }

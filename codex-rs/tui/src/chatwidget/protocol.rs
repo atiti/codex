@@ -149,9 +149,11 @@ impl ChatWidget {
             }
             ServerNotification::AgentMessageDelta(notification) => {
                 self.restore_realtime_transcripts_before_turn(&notification.turn_id);
-                if !self
-                    .transcript
-                    .has_replayed_cloud_text(&notification.turn_id, &notification.item_id)
+                if !notification.item_id.starts_with("agentroute-route-")
+                    && !notification.item_id.starts_with("agentroute-task-overlap-")
+                    && !self
+                        .transcript
+                        .has_replayed_cloud_text(&notification.turn_id, &notification.item_id)
                     && !self.is_realtime_delegated_reasoning_turn(&notification.turn_id)
                     && (from_replay
                         || !self.is_realtime_delegated_agent_item(
@@ -620,6 +622,10 @@ impl ChatWidget {
                 questions,
                 ..
             } => {
+                if replay_kind.is_none() {
+                    self.output_rate.reset();
+                    self.refresh_status_line();
+                }
                 let delegated = replay_kind.is_none()
                     && self.is_realtime_delegated_agent_item(&notification.turn_id, &id);
                 // Some streams carry their first text on item/started. Async questions

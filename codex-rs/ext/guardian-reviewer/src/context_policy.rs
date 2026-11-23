@@ -4,7 +4,6 @@
 use codex_features::Feature;
 use codex_features::Features;
 use codex_history::ResponseItemEnvelope;
-use codex_protocol::models::ResponseItem;
 
 use crate::GuardianContextMode;
 
@@ -33,7 +32,7 @@ impl ReviewContextPolicy {
     pub fn parent_compaction(
         self,
         history: &[ResponseItemEnvelope],
-    ) -> anyhow::Result<Option<ResponseItem>> {
+    ) -> anyhow::Result<Option<ResponseItemEnvelope>> {
         if matches!(self, Self::Legacy | Self::Independent) {
             return Ok(None);
         }
@@ -51,6 +50,9 @@ impl ReviewContextPolicy {
         );
         // The synchronous reviewer can consume checkpoints across advertised comp_hash
         // values. Let the backend validate the payload; review errors still fail closed.
-        Ok(Some(checkpoint.item.clone()))
+        Ok(history
+            .iter()
+            .find(|envelope| std::ptr::eq(&envelope.item, checkpoint.item))
+            .cloned())
     }
 }

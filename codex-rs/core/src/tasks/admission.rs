@@ -131,6 +131,7 @@ impl Session {
                 &model_info,
                 item.into_owned(),
                 Vec::new(),
+                Vec::new(),
                 PersistContext::Standard,
             )
             .await

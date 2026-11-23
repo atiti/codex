@@ -3,6 +3,8 @@
 //! Keeping this logic in a focused submodule makes the additive title/status
 //! behavior easier to review without paging through the rest of `chatwidget.rs`.
 
+use super::agentroute_wait_status::WaitStatus;
+use super::agentroute_wait_status::agentroute_wait_status;
 use super::*;
 use crate::bottom_pane::status_line_from_segments;
 use crate::branch_summary;
@@ -739,10 +741,23 @@ impl ChatWidget {
     /// git metadata.
     pub(super) fn status_line_value_for_item(&mut self, item: StatusLineItem) -> Option<String> {
         match item {
-            StatusLineItem::ModelName => Some(self.status_model_display_name().to_string()),
+            StatusLineItem::ModelName => Some(format!(
+                "{} · {}",
+                self.status_model_display_name(),
+                self.model_provider_display_name()
+            )),
             StatusLineItem::ModelWithReasoning => {
                 let service_tier = self.processing_tier_display_name().map(str::to_lowercase);
-                Some(self.model_with_reasoning_display_name(service_tier.as_deref()))
+                let label = self.reasoning_display_name();
+                let tier = service_tier
+                    .as_deref()
+                    .map(|tier| format!(" {tier}"))
+                    .unwrap_or_default();
+                Some(format!(
+                    "{} · {} · {label}{tier}",
+                    self.status_model_display_name(),
+                    self.model_provider_display_name()
+                ))
             }
             StatusLineItem::Reasoning => Some(self.reasoning_display_name()),
             StatusLineItem::Profile => self
@@ -821,6 +836,7 @@ impl ChatWidget {
                     format_tokens_compact(self.status_line_total_usage().output_tokens)
                 )
             }),
+            StatusLineItem::TokensPerSecond => self.output_rate.display(Instant::now()),
             StatusLineItem::ThreadCredits => self
                 .status_line_thread_credits_micros()
                 .map(|credits| format!("{} credits", format_credit_micros(credits))),
@@ -887,6 +903,7 @@ impl ChatWidget {
             StatusSurfacePreviewItem::UsedTokens => StatusLineItem::UsedTokens,
             StatusSurfacePreviewItem::TotalInputTokens => StatusLineItem::TotalInputTokens,
             StatusSurfacePreviewItem::TotalOutputTokens => StatusLineItem::TotalOutputTokens,
+            StatusSurfacePreviewItem::TokensPerSecond => StatusLineItem::TokensPerSecond,
             StatusSurfacePreviewItem::ThreadCredits => StatusLineItem::ThreadCredits,
             StatusSurfacePreviewItem::EstimatedThreadCost => StatusLineItem::EstimatedThreadCost,
             StatusSurfacePreviewItem::SessionId => StatusLineItem::SessionId,
@@ -997,8 +1014,21 @@ impl ChatWidget {
     }
 
     fn reasoning_display_name(&self) -> String {
-        let effort = self.status_reasoning_effort();
+        let effort = self.cloud_picker_selection.as_ref().map_or_else(
+            || {
+                self.routed_turn_reasoning_effort
+                    .clone()
+                    .or_else(|| self.effective_reasoning_effort())
+            },
+            |selection| selection.effort.clone(),
+        );
         Self::status_line_reasoning_effort_label(effort.as_ref())
+    }
+
+    fn model_provider_display_name(&self) -> &str {
+        self.routed_turn_model_provider
+            .as_deref()
+            .unwrap_or(&self.config.model_provider_id)
     }
 
     fn model_with_reasoning_display_name(&self, service_tier: Option<&str>) -> String {
@@ -1031,10 +1061,38 @@ impl ChatWidget {
 
     /// Computes the compact runtime status label used by word-based status items.
     ///
-    /// Startup takes precedence over normal task states, and idle state renders
-    /// as `Ready` regardless of the last active status bucket.
+    /// A completed turn is distinct from a goal or a pending external wait.
     pub(super) fn run_state_status_text(&self) -> String {
-        self.status_line_run_state().to_string()
+        let activity = if self.bottom_pane.program_status_blocked_kind().is_some()
+            || self.bottom_pane.terminal_title_requires_action()
+        {
+            "Needs input".to_string()
+        } else if self.bottom_pane.is_task_running() || self.is_user_turn_pending_or_running() {
+            "Working".to_string()
+        } else if !self.unified_exec_processes.is_empty() {
+            "Background process".to_string()
+        } else if let Some(goal) = self.current_goal_status.as_ref() {
+            match goal.status() {
+                AppThreadGoalStatus::Active => "Goal active",
+                AppThreadGoalStatus::Paused => "Goal paused",
+                AppThreadGoalStatus::Blocked => "Goal blocked",
+                AppThreadGoalStatus::UsageLimited => "Usage limit",
+                AppThreadGoalStatus::BudgetLimited => "Budget limit",
+                AppThreadGoalStatus::Complete => "Goal complete",
+            }
+            .to_string()
+        } else {
+            self.status_line_run_state().to_string()
+        };
+        if let Some(thread) = self.thread_id {
+            match agentroute_wait_status(thread.to_string().as_str()) {
+                WaitStatus::Waiting(detail) => return format!("{activity} · {detail}"),
+                WaitStatus::Unknown => return format!("{activity} · Wait status unknown"),
+                WaitStatus::Unavailable => return format!("{activity} · Wait service unavailable"),
+                WaitStatus::None => {}
+            }
+        }
+        activity
     }
 
     pub(super) fn status_line_config_profile(&self) -> Option<String> {

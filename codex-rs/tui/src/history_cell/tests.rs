@@ -231,6 +231,15 @@ fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
         .collect()
 }
 
+#[test]
+fn agentroute_task_overlap_notice_snapshot() {
+    let notice = new_agentroute_task_overlap_event(
+        "◆ TASK OVERLAP\nOther local tasks have active claims. Coordinate before a competing fix.\n\"Task 8b021\" — Fix SendJump proxy\ngithub:markster-io/sendjump#27"
+            .into(),
+    );
+    insta::assert_snapshot!(render_lines(&notice.display_lines(/*width*/ 80)).join("\n"));
+}
+
 fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
     render_lines(&cell.transcript_lines(u16::MAX))
 }

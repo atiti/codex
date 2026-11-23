@@ -601,85 +601,325 @@ async fn staged_compaction_preserves_new_owned_checkpoints() -> Result<()> {
     Ok(())
 }
 
+#[inline(never)]
+fn pin_compact<'a, T, F>(
+    stage: &'static str,
+    build: impl FnOnce() -> F,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>
+where
+    F: std::future::Future<Output = T> + Send + 'a,
+{
+    let fut = build();
+    Box::pin(fut)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owned_opaque_checkpoint_can_be_recovered_before_provider_switch() -> Result<()> {
     skip_if_no_network!(Ok(()));
-    let server = wiremock::MockServer::start().await;
-    let mock = responses::mount_sse_sequence(&server, vec![
-        sse(vec![responses::ev_assistant_message("fact", "PORTABLE_LEGACY_FACT"), responses::ev_completed("initial")]),
-        sse(vec![json!({"type":"response.output_item.done","item":{"type":"compaction","id":"cmp_legacy","encrypted_content":"OWNER_ONLY_CHECKPOINT"}}), responses::ev_completed("opaque")]),
-        sse(vec![responses::ev_assistant_message("summary", "PORTABLE_LEGACY_FACT"), responses::ev_completed("portable")]),
+    let fixture = seed_owned_opaque_checkpoint().await?;
+    prove_owned_opaque_checkpoint_recovery(fixture).await
+}
+
+#[inline(never)]
+fn seed_owned_opaque_checkpoint()
+-> std::pin::Pin<Box<dyn std::future::Future<Output = Result<OwnedOpaqueCheckpointFixture>> + Send>>
+{
+    Box::pin(async move {
+        let (server, mock) = mount_owned_opaque_mock().await?;
+        let owner = build_owned_opaque_session(&server).await?;
+        let home = owner.home.clone();
+        let rollout_path = owner
+            .session_configured
+            .rollout_path
+            .clone()
+            .context("rollout path")?;
+        compact_owned_session(owner).await?;
+        Ok(OwnedOpaqueCheckpointFixture {
+            server,
+            mock,
+            home,
+            rollout_path,
+        })
+    })
+}
+
+#[inline(never)]
+fn mount_owned_opaque_mock() -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<(wiremock::MockServer, responses::ResponseMock)>>
+            + Send,
+    >,
+> {
+    Box::pin(async move {
+        let server = wiremock::MockServer::start().await;
+        let mock = responses::mount_sse_sequence(&server, owned_opaque_events()).await;
+        Ok((server, mock))
+    })
+}
+
+fn owned_opaque_events() -> Vec<String> {
+    vec![
+        sse(vec![
+            responses::ev_assistant_message("fact", "PORTABLE_LEGACY_FACT"),
+            responses::ev_completed("initial"),
+        ]),
+        sse(vec![
+            json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "compaction",
+                    "id": "cmp_legacy",
+                    "encrypted_content": "OWNER_ONLY_CHECKPOINT"
+                }
+            }),
+            responses::ev_completed("opaque"),
+        ]),
+        sse(vec![
+            responses::ev_assistant_message("summary", "PORTABLE_LEGACY_FACT"),
+            responses::ev_completed("portable"),
+        ]),
         sse(vec![responses::ev_completed("continued")]),
-    ]).await;
-    let owner = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.model_provider.supports_websockets = false;
+    ]
+}
+
+#[inline(never)]
+fn build_owned_opaque_session(
+    server: &wiremock::MockServer,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<core_test_support::test_codex::TestCodex>>
+            + Send
+            + '_,
+    >,
+> {
+    Box::pin(async move {
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_provider.supports_websockets = false;
+            })
+            .build_with_auto_env(server)
+            .await
+    })
+}
+
+#[inline(never)]
+fn compact_owned_session(
+    owner: core_test_support::test_codex::TestCodex,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let owner = remember_tool_evidence(owner).await?;
+        let owner = compact_current_thread(owner).await?;
+        shutdown_test_codex(owner).await
+    })
+}
+
+#[inline(never)]
+fn remember_tool_evidence(
+    owner: core_test_support::test_codex::TestCodex,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<core_test_support::test_codex::TestCodex>> + Send>,
+> {
+    Box::pin(async move {
+        pin_compact("owned_submit_turn", || {
+            owner.submit_turn("Remember the tool evidence")
         })
-        .build_with_auto_env(&server)
         .await?;
-    owner.submit_turn("Remember the tool evidence").await?;
-    owner.codex.submit(Op::Compact).await?;
-    wait_for_turn_complete(&owner.codex).await;
-    owner.codex.shutdown_and_wait().await?;
-    let recovery = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.model_provider.supports_websockets = false;
-            config.compact_prompt = Some(
-                "Summarize the conversation in plaintext, preserving decisions and tool evidence."
-                    .to_string(),
-            );
-        })
-        .resume(
-            &server,
-            owner.home.clone(),
-            owner
-                .session_configured
-                .rollout_path
-                .clone()
-                .context("rollout path")?,
-        )
-        .await?;
-    recovery.codex.submit(Op::Compact).await?;
-    wait_for_turn_complete(&recovery.codex).await;
-    recovery.codex.shutdown_and_wait().await?;
-    let next = test_codex()
-        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
-        .with_config(|config| {
-            config.model_provider_id = "new-provider".to_string();
-            config.model_provider.supports_websockets = false;
-        })
-        .resume(
-            &server,
-            owner.home.clone(),
-            owner
-                .session_configured
-                .rollout_path
-                .clone()
-                .context("rollout path")?,
-        )
-        .await?;
-    next.submit_turn("Recall the evidence").await?;
-    next.codex.shutdown_and_wait().await?;
-    let requests = mock.requests();
-    assert_eq!(requests.len(), 4);
+        Ok(owner)
+    })
+}
+
+#[inline(never)]
+fn compact_current_thread(
+    owner: core_test_support::test_codex::TestCodex,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<core_test_support::test_codex::TestCodex>> + Send>,
+> {
+    Box::pin(async move {
+        pin_compact("compact_submit", || owner.codex.submit(Op::Compact)).await?;
+        pin_compact("compact_wait", || wait_for_turn_complete(&owner.codex)).await;
+        Ok(owner)
+    })
+}
+
+#[inline(never)]
+fn shutdown_test_codex(
+    owner: core_test_support::test_codex::TestCodex,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        pin_compact("shutdown_and_wait", || owner.codex.shutdown_and_wait()).await?;
+        Ok(())
+    })
+}
+
+struct OwnedOpaqueCheckpointFixture {
+    server: wiremock::MockServer,
+    mock: responses::ResponseMock,
+    home: std::sync::Arc<tempfile::TempDir>,
+    rollout_path: std::path::PathBuf,
+}
+
+#[inline(never)]
+fn prove_owned_opaque_checkpoint_recovery(
+    fixture: OwnedOpaqueCheckpointFixture,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        let OwnedOpaqueCheckpointFixture {
+            server,
+            mock,
+            home,
+            rollout_path,
+        } = fixture;
+        let home = recover_owned_checkpoint(&server, home, rollout_path.clone()).await?;
+        recall_after_plaintext_compaction(&server, home.clone(), rollout_path.clone()).await?;
+        let requests = mock.requests();
+        assert_eq!(requests.len(), 4);
+        assert!(
+            requests[1]
+                .input()
+                .iter()
+                .any(|item| item["type"] == "compaction_trigger")
+        );
+        assert!(
+            !requests[2]
+                .input()
+                .iter()
+                .any(|item| item["type"] == "compaction_trigger")
+        );
+        assert!(requests[2].body_contains_text("OWNER_ONLY_CHECKPOINT"));
+        assert!(!requests[3].body_contains_text("OWNER_ONLY_CHECKPOINT"));
+        assert!(requests[3].body_contains_text("PORTABLE_LEGACY_FACT"));
+        assert_plaintext_compaction_replacement(&rollout_path)?;
+        drop(home);
+        drop(mock);
+        Ok(())
+    })
+}
+
+#[inline(never)]
+fn recover_owned_checkpoint(
+    server: &wiremock::MockServer,
+    home: std::sync::Arc<tempfile::TempDir>,
+    rollout_path: std::path::PathBuf,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<std::sync::Arc<tempfile::TempDir>>> + Send + '_>,
+> {
+    Box::pin(async move {
+        let recovery = resume_with_plaintext_prompt(server, home.clone(), rollout_path).await?;
+        let recovery = compact_current_thread(recovery).await?;
+        shutdown_test_codex(recovery).await?;
+        Ok(home)
+    })
+}
+
+#[inline(never)]
+fn resume_with_plaintext_prompt(
+    server: &wiremock::MockServer,
+    home: std::sync::Arc<tempfile::TempDir>,
+    rollout_path: std::path::PathBuf,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<core_test_support::test_codex::TestCodex>>
+            + Send
+            + '_,
+    >,
+> {
+    Box::pin(async move {
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_provider.supports_websockets = false;
+                config.compact_prompt = Some(
+                    "Summarize the conversation in plaintext, preserving decisions and tool evidence."
+                        .to_string(),
+                );
+            })
+            .resume(server, home, rollout_path)
+            .await
+    })
+}
+
+#[inline(never)]
+fn recall_after_plaintext_compaction(
+    server: &wiremock::MockServer,
+    home: std::sync::Arc<tempfile::TempDir>,
+    rollout_path: std::path::PathBuf,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send + '_>> {
+    Box::pin(async move {
+        let next = resume_on_switched_provider(server, home, rollout_path).await?;
+        submit_recall_and_shutdown(next).await
+    })
+}
+
+#[inline(never)]
+fn resume_on_switched_provider(
+    server: &wiremock::MockServer,
+    home: std::sync::Arc<tempfile::TempDir>,
+    rollout_path: std::path::PathBuf,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<core_test_support::test_codex::TestCodex>>
+            + Send
+            + '_,
+    >,
+> {
+    Box::pin(async move {
+        test_codex()
+            .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+            .with_config(|config| {
+                config.model_provider_id = "new-provider".to_string();
+                config.model_provider.supports_websockets = false;
+            })
+            .resume(server, home, rollout_path)
+            .await
+    })
+}
+
+#[inline(never)]
+fn submit_recall_and_shutdown(
+    next: core_test_support::test_codex::TestCodex,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<()>> + Send>> {
+    Box::pin(async move {
+        pin_compact("recall_submit", || next.submit_turn("Recall the evidence")).await?;
+        pin_compact("recall_shutdown", || next.codex.shutdown_and_wait()).await?;
+        Ok(())
+    })
+}
+
+fn assert_plaintext_compaction_replacement(rollout_path: &std::path::Path) -> Result<()> {
+    let rollout = std::fs::read_to_string(rollout_path)?;
+    let replacement = rollout.lines().rev().find_map(|line| {
+        let value: serde_json::Value = serde_json::from_str(line).ok()?;
+        (value.get("type").and_then(serde_json::Value::as_str) == Some("compacted"))
+            .then_some(value)
+    });
+    let replacement = replacement.context("plaintext compaction replacement")?;
+    let message = replacement
+        .pointer("/payload/message")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
     assert!(
-        requests[1]
-            .input()
-            .iter()
-            .any(|item| item["type"] == "compaction_trigger")
+        !message.trim().is_empty(),
+        "prompted compaction must install a nonempty plaintext summary"
     );
     assert!(
-        !requests[2]
-            .input()
-            .iter()
-            .any(|item| item["type"] == "compaction_trigger")
+        !rollout_contains_encrypted_replacement(&replacement),
+        "prompted compaction must not retain encrypted_content"
     );
-    assert!(requests[2].body_contains_text("OWNER_ONLY_CHECKPOINT"));
-    assert!(!requests[3].body_contains_text("OWNER_ONLY_CHECKPOINT"));
-    assert!(requests[3].body_contains_text("PORTABLE_LEGACY_FACT"));
     Ok(())
+}
+
+fn rollout_contains_encrypted_replacement(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            map.get("encrypted_content")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|content| !content.is_empty())
+                || map.values().any(rollout_contains_encrypted_replacement)
+        }
+        serde_json::Value::Array(items) => items.iter().any(rollout_contains_encrypted_replacement),
+        _ => false,
+    }
 }
 
 #[test_case(false; "known foreign owner")]

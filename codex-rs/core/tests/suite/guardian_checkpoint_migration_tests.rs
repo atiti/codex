@@ -221,13 +221,15 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
             responses::ev_completed(id),
         ])
     };
-    // Old wire format, including an ordinary instruction recorded after the checkpoint.
+    // Preserve the legacy checkpoint shape with explicit original-provider attribution.
+    // Model-hash migration must not depend on inferring ownership of opaque history.
     let history: Vec<RolloutItem> = serde_json::from_value(json!([
         {"type": "compacted", "payload": {
             "message": "old checkpoint",
             "replacement_history": [{
                 "type": "compaction", "id": "old", "encrypted_content": "opaque checkpoint"
-            }]
+            }],
+            "replacement_history_metadata": [{"model_provider_id": test.config.model_provider_id}]
         }},
         {"type": "response_item", "payload": {
             "type": "message", "id": "restriction", "role": "user",
@@ -295,17 +297,9 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
         GuardianContextMode::Legacy
     );
     let mut all_requests = answer.requests();
-    // The legacy checkpoint has no recorded provider. Rebuild it through the current provider
-    // before exercising a model-hash transition; never infer ownership for the old ciphertext.
-    let rebuild = responses::mount_sse_once(&server, compact("cmp_legacy_rebuilt")).await;
-    thread.submit(Op::Compact).await?;
-    finish_turn(&thread).await;
-    all_requests.extend(rebuild.requests());
-    assert!(all_requests.iter().all(|request| {
-        !request
-            .body_json()
-            .to_string()
-            .contains("opaque checkpoint")
+    // The original provider can consume its own legacy checkpoint before the model-hash change.
+    assert!(all_requests[0].input().iter().any(|item| {
+        item["type"] == "compaction" && item["encrypted_content"] == "opaque checkpoint"
     }));
 
     // Automatic compaction records the previous model hash; the backend validates cross-model reuse.
@@ -339,7 +333,9 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
                 .latest_compaction()
                 .and_then(|checkpoint| checkpoint.model_hash)
         ),
-        (GuardianContextMode::ThreadOwned, Some("previous-model")),
+        // The continuing turn's reviewer differs from the old producer.
+        // Retain legacy review until a compatible checkpoint is installed.
+        (GuardianContextMode::Legacy, Some("previous-model")),
     );
 
     // A restart preserves owned context and the answer even when advertised model hashes differ.
@@ -356,7 +352,11 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
             GuardianContextMode::from_history(
                 thread.conversation_history_snapshot().await.as_ref()
             ),
-            GuardianContextMode::ThreadOwned,
+            if checkpoint.is_some() {
+                GuardianContextMode::ThreadOwned
+            } else {
+                GuardianContextMode::Legacy
+            },
         );
         let followup = responses::mount_sse_sequence(
             &server,

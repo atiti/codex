@@ -83,3 +83,55 @@ pub(crate) fn has_provider_owned_state(item: &ResponseItem) -> bool {
         _ => false,
     }
 }
+
+/// Provider-owned checkpoints must be summarized by their owner before changing routes.
+/// Silently deleting one can discard the only copy of assistant and tool evidence.
+pub(crate) fn validate_checkpoint_ownership(
+    input: &[ResponseItem],
+    foreign_ids: &std::collections::HashSet<codex_protocol::ResponseItemId>,
+    strip_unattributed: bool,
+) -> codex_protocol::error::Result<()> {
+    if input.iter().any(|item| {
+        matches!(
+            item,
+            ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+        ) && (item.id().is_some_and(|id| foreign_ids.contains(id))
+            || (item.id().is_none() && strip_unattributed))
+    }) {
+        return Err(codex_protocol::error::CodexErr::UnsupportedOperation(
+            r#"This history contains an opaque checkpoint from another or unknown provider/account. Resume with the original provider/account using --disable token_budget -c 'compact_prompt="Summarize the conversation in plaintext, preserving decisions and tool evidence."', then run /compact before switching. If ownership is unavailable, recover from a pre-compaction backup instead. The existing history has been preserved."#.to_string(),
+        ));
+    }
+    Ok(())
+}
+
+/// Mixed and legacy model outputs need a portable summary. Homogeneous owned
+/// checkpoints retain native compaction; an explicit compact_prompt can recover them.
+pub(crate) fn requires_portable_compaction(
+    history: &[ResponseItemEnvelope],
+    provider_id: &str,
+) -> bool {
+    history.iter().any(|envelope| {
+        let item = &envelope.item;
+        // Native mail is harness context rather than sampled model output.
+        // Metadata-free plaintext tool injection is portable host evidence, too.
+        let model_output = !matches!(item, ResponseItem::AgentMessage { .. })
+            && !matches!(item, ResponseItem::Message { role, .. } if role != "assistant")
+            && !matches!(
+                item,
+                ResponseItem::AdditionalTools { .. } | ResponseItem::ConfigurationUpdate { .. }
+            );
+        let owner = envelope
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.model_provider_id.as_deref());
+        model_output
+            && match owner {
+                Some(owner) => owner != provider_id,
+                None => {
+                    has_provider_owned_state(item)
+                        || matches!(item, ResponseItem::Message { role, .. } if role == "assistant")
+                }
+            }
+    })
+}

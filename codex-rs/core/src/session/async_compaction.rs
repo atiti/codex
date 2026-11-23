@@ -86,6 +86,13 @@ pub(super) async fn maybe_start(
         return;
     }
 
+    if crate::client_provider_history::requires_portable_compaction(
+        sess.clone_history().await.annotated_items(),
+        &turn_context.model_provider_id(),
+    ) {
+        return;
+    }
+
     let base_instructions = sess.get_prompt_base_instructions().await;
     let (prepared_input, tasks, shutdown_cancellation, launch, send) = {
         let mut state = sess.state.lock().await;

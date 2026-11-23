@@ -267,6 +267,11 @@ async fn encrypted_parent_reply_survives_incremental_guardian_reviews(
         Vec::new(),
         "opaque-parent-approval".into(),
         /*trigger_turn*/ true,
+    )
+    .with_routing_provider_context(
+        Some(test.config.model_provider_id.clone()),
+        /*requested_backend*/ None,
+        /*model_explicit*/ false,
     );
     let expected = serde_json::to_value(communication.to_model_input_item())?;
     // TurnComplete can arrive before the previous turn finishes teardown. Queue

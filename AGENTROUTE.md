@@ -16,6 +16,32 @@ previous implementation history; this branch applies the resulting features to
 the stable upstream tree. Upstream SQLx and opusic fixes replace the obsolete
 vendored SQLx source and local opusic header patch.
 
+## Provider switching and compaction
+
+Mixed-provider histories use a plaintext summary for automatic and manual
+compaction. Provider provenance is retained across restart, and foreign encrypted
+reasoning and tool state are filtered before transport. Native harness message
+identities survive this filtering. Encrypted native mail is checked against its
+sender provider before its first delivery; foreign or unattributed ciphertext
+remains stored but is omitted from transport. Same-provider compaction keeps
+upstream's native checkpoint behavior.
+
+An existing opaque checkpoint cannot be silently discarded when changing
+providers. Such a request stops before sending the checkpoint and preserves the
+history. To make a checkpoint portable, resume the thread with its original
+provider and account, supplying:
+
+```sh
+codex --disable token_budget -c 'compact_prompt="Summarize the conversation in plaintext, preserving decisions and tool evidence."' resume THREAD_ID
+```
+
+Then run `/compact` once before switching providers. An explicit `compact_prompt`
+selects ordinary Responses compaction so the owner can generate a plaintext
+summary. The recovery command disables the optional token-budget context reset,
+which deliberately starts a fresh context window without summarization. A
+checkpoint with unavailable ownership requires a pre-compaction backup; its
+ciphertext is never sent to a guessed provider.
+
 ## Existing state databases
 
 Downstream migration versions 60 through 64 keep their original meaning and

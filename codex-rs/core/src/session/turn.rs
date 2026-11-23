@@ -527,6 +527,13 @@ pub(crate) async fn run_turn(
         return Ok(None);
     }
 
+    // Sender ownership is available only after input admission. Extend the
+    // existing policy without reclassifying a newly owned compaction checkpoint.
+    client_session.include_newly_recorded_provider_history(
+        sess.clone_history().await.annotated_items(),
+        &turn_context.model_provider_id(),
+    );
+
     // Guardian can replace its submitted prompt with response items during finalization.
     // Those skip UserInput telemetry above, so emit the saved prompt after acceptance.
     if crate::guardian::is_basic_session_source(&turn_context.session_source)
@@ -624,8 +631,6 @@ pub(crate) async fn run_turn(
 
         let pending_hook_outcomes = inspect_input_hooks(&sess, &turn_context, &pending_input).await;
         if !pending_input.is_empty() {
-            // A queued prompt can change providers within this turn. Rebuild the connection
-            // before sampling with the routed model, just as for the initial prompt.
             refresh_client_session_after_hooks(
                 &sess,
                 &turn_context,
@@ -645,6 +650,13 @@ pub(crate) async fn run_turn(
         .await?
         {
             break;
+        }
+
+        if !pending_input.is_empty() {
+            client_session.include_newly_recorded_provider_history(
+                sess.clone_history().await.annotated_items(),
+                &turn_context.model_provider_id(),
+            );
         }
 
         // Input and turn-start injections are recorded before recovery can continue this turn.
@@ -2023,11 +2035,17 @@ async fn run_auto_compact(
         return Ok(true);
     }
 
-    match turn_context
-        .model_provider()
-        .capabilities()
-        .remote_compaction
-    {
+    match if crate::client_provider_history::requires_portable_compaction(
+        sess.clone_history().await.annotated_items(),
+        &turn_context.model_provider_id(),
+    ) {
+        RemoteCompactionSupport::Unsupported
+    } else {
+        turn_context
+            .model_provider()
+            .capabilities()
+            .remote_compaction
+    } {
         RemoteCompactionSupport::V2 => {
             let has_candidate = candidate.is_some();
             if !has_candidate {

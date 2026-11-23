@@ -64,7 +64,7 @@ async fn resumed_provider_switch_filters_foreign_reasoning_before_ordinary_sampl
 #[test_case(false; "automatic")]
 #[test_case(true; "manual")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn resumed_provider_switch_filters_encrypted_state_before_compaction(
+async fn resumed_provider_switch_compacts_to_portable_plaintext_summary(
     manual: bool,
 ) -> Result<()> {
     skip_if_no_network!(Ok(()));
@@ -81,13 +81,11 @@ async fn resumed_provider_switch_filters_encrypted_state_before_compaction(
                 responses::ev_completed_with_tokens("resp-before", /*total_tokens*/ 500),
             ]),
             sse(vec![
-                json!({"type": "response.output_item.done", "item": {
-                    "type": "compaction", "id": "cmp_openai_new",
-                    "encrypted_content": "OPENAI_CHECKPOINT"
-                }}),
+                responses::ev_assistant_message("summary", "PORTABLE_ASSISTANT_AND_TOOL_FACT"),
                 responses::ev_completed_with_tokens("resp-compact", /*total_tokens*/ 80),
             ]),
             sse(vec![responses::ev_completed("resp-after")]),
+            sse(vec![responses::ev_completed("resp-third-provider")]),
         ],
     )
     .await;
@@ -121,15 +119,34 @@ async fn resumed_provider_switch_filters_encrypted_state_before_compaction(
     }
     resumed.submit_turn("continue safely").await?;
     resumed.codex.shutdown_and_wait().await?;
+    let third = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider_id = "third-provider".to_string();
+        })
+        .resume(
+            &server,
+            resumed.home.clone(),
+            resumed
+                .session_configured
+                .rollout_path
+                .clone()
+                .context("rollout path")?,
+        )
+        .await?;
+    third
+        .submit_turn("continue after a second provider switch")
+        .await?;
+    third.codex.shutdown_and_wait().await?;
     let requests = mock.requests();
-    assert_eq!(requests.len(), 3);
+    assert_eq!(requests.len(), 4);
     for request in &requests[1..] {
         assert!(!request.input().iter().any(|item| {
             item.get("encrypted_content") == Some(&json!("AZURE_ONLY_CIPHERTEXT"))
         }));
     }
     assert!(
-        requests[1]
+        !requests[1]
             .input()
             .iter()
             .any(|item| item["type"] == "compaction_trigger")
@@ -140,12 +157,15 @@ async fn resumed_provider_switch_filters_encrypted_state_before_compaction(
             .to_string()
             .contains("retain this user context")
     );
-    assert!(
-        requests[2]
-            .input()
-            .iter()
-            .any(|item| { item.get("encrypted_content") == Some(&json!("OPENAI_CHECKPOINT")) })
-    );
+    for request in &requests[2..] {
+        assert!(request.body_contains_text("PORTABLE_ASSISTANT_AND_TOOL_FACT"));
+        assert!(
+            !request
+                .input()
+                .iter()
+                .any(|item| item["type"] == "compaction")
+        );
+    }
     Ok(())
 }
 
@@ -522,7 +542,7 @@ async fn resumed_sample_filters_only_foreign_provider_state(
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn staged_compaction_after_provider_switch_preserves_new_checkpoint_only() -> Result<()> {
+async fn staged_compaction_preserves_new_owned_checkpoints() -> Result<()> {
     skip_if_no_network!(Ok(()));
     let server = wiremock::MockServer::start().await;
     let compact = |summary: &str, id: &str| {
@@ -563,6 +583,7 @@ async fn staged_compaction_after_provider_switch_preserves_new_checkpoint_only()
     let resumed = test_codex()
         .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
         .with_config(|config| {
+            config.model_provider_id = "agentroute-azure".to_string();
             config.model_provider.supports_websockets = false;
             config.model_auto_compact_token_limit = Some(200);
         })
@@ -572,13 +593,185 @@ async fn staged_compaction_after_provider_switch_preserves_new_checkpoint_only()
     resumed.codex.shutdown_and_wait().await?;
     let requests = mock.requests();
     assert_eq!(requests.len(), 6);
-    for request in &requests[2..] {
-        assert!(!request.body_contains_text("FOREIGN_SECRET"));
-    }
     assert!(requests[3].body_contains_text("FIRST_CONTEXT"));
     assert!(requests[4].body_contains_text("OWN_PREFIX"));
     assert!(requests[4].body_contains_text("SECOND_CONTEXT"));
     assert!(requests[5].body_contains_text("OWN_FINAL"));
     assert!(requests[5].body_contains_text("AFTER_SWITCH"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owned_opaque_checkpoint_can_be_recovered_before_provider_switch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = wiremock::MockServer::start().await;
+    let mock = responses::mount_sse_sequence(&server, vec![
+        sse(vec![responses::ev_assistant_message("fact", "PORTABLE_LEGACY_FACT"), responses::ev_completed("initial")]),
+        sse(vec![json!({"type":"response.output_item.done","item":{"type":"compaction","id":"cmp_legacy","encrypted_content":"OWNER_ONLY_CHECKPOINT"}}), responses::ev_completed("opaque")]),
+        sse(vec![responses::ev_assistant_message("summary", "PORTABLE_LEGACY_FACT"), responses::ev_completed("portable")]),
+        sse(vec![responses::ev_completed("continued")]),
+    ]).await;
+    let owner = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    owner.submit_turn("Remember the tool evidence").await?;
+    owner.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&owner.codex).await;
+    owner.codex.shutdown_and_wait().await?;
+    let recovery = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider.supports_websockets = false;
+            config.compact_prompt = Some(
+                "Summarize the conversation in plaintext, preserving decisions and tool evidence."
+                    .to_string(),
+            );
+        })
+        .resume(
+            &server,
+            owner.home.clone(),
+            owner
+                .session_configured
+                .rollout_path
+                .clone()
+                .context("rollout path")?,
+        )
+        .await?;
+    recovery.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&recovery.codex).await;
+    recovery.codex.shutdown_and_wait().await?;
+    let next = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider_id = "new-provider".to_string();
+            config.model_provider.supports_websockets = false;
+        })
+        .resume(
+            &server,
+            owner.home.clone(),
+            owner
+                .session_configured
+                .rollout_path
+                .clone()
+                .context("rollout path")?,
+        )
+        .await?;
+    next.submit_turn("Recall the evidence").await?;
+    next.codex.shutdown_and_wait().await?;
+    let requests = mock.requests();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests[1]
+            .input()
+            .iter()
+            .any(|item| item["type"] == "compaction_trigger")
+    );
+    assert!(
+        !requests[2]
+            .input()
+            .iter()
+            .any(|item| item["type"] == "compaction_trigger")
+    );
+    assert!(requests[2].body_contains_text("OWNER_ONLY_CHECKPOINT"));
+    assert!(!requests[3].body_contains_text("OWNER_ONLY_CHECKPOINT"));
+    assert!(requests[3].body_contains_text("PORTABLE_LEGACY_FACT"));
+    Ok(())
+}
+
+#[test_case(false; "known foreign owner")]
+#[test_case(true; "unknown legacy owner")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn foreign_opaque_checkpoint_fails_closed_without_sending_or_rewriting_history(
+    legacy: bool,
+) -> Result<()> {
+    skip_if_no_network!(Ok(()));
+    let server = wiremock::MockServer::start().await;
+    let mock = responses::mount_sse_sequence(&server, vec![
+        sse(vec![responses::ev_assistant_message("fact", "LEGACY_TOOL_FACT"), responses::ev_completed("initial")]),
+        sse(vec![json!({"type":"response.output_item.done","item":{"type":"compaction","id":"cmp_legacy","encrypted_content":"OWNER_ONLY_CHECKPOINT"}}), responses::ev_completed("opaque")]),
+    ]).await;
+    let owner = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider.supports_websockets = false;
+        })
+        .build_with_auto_env(&server)
+        .await?;
+    owner.submit_turn("Remember the tool evidence").await?;
+    owner.codex.submit(Op::Compact).await?;
+    wait_for_turn_complete(&owner.codex).await;
+    owner.codex.shutdown_and_wait().await?;
+    let path = owner
+        .session_configured
+        .rollout_path
+        .clone()
+        .context("rollout path")?;
+    if legacy {
+        fn remove_owner(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let Some(metadata) = map
+                        .get_mut("metadata")
+                        .and_then(serde_json::Value::as_object_mut)
+                    {
+                        metadata.remove("model_provider_id");
+                    }
+                    for value in map.values_mut() {
+                        remove_owner(value);
+                    }
+                }
+                serde_json::Value::Array(items) => {
+                    for item in items {
+                        remove_owner(item);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut lines = std::fs::read_to_string(&path)?
+            .lines()
+            .map(serde_json::from_str::<serde_json::Value>)
+            .collect::<serde_json::Result<Vec<_>>>()?;
+        for line in &mut lines {
+            remove_owner(line);
+        }
+        std::fs::write(
+            &path,
+            lines
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<serde_json::Result<Vec<_>>>()?
+                .join("\n")
+                + "\n",
+        )?;
+    }
+    let next = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_config(|config| {
+            config.model_provider_id = "new-provider".to_string();
+            config.model_provider.supports_websockets = false;
+        })
+        .resume(&server, owner.home.clone(), path.clone())
+        .await?;
+    next.codex
+        .start_or_steer_turn(TurnInputRequest::user_input(vec![UserInput::Text {
+            text: "Recall the evidence".to_string(),
+            text_elements: Vec::new(),
+        }]))
+        .await?;
+    let error = wait_for_event(&next.codex, |event| matches!(event, EventMsg::Error(_))).await;
+    assert!(matches!(error, EventMsg::Error(error) if error.message.contains("opaque checkpoint")));
+    wait_for_turn_complete(&next.codex).await;
+    next.codex.shutdown_and_wait().await?;
+    assert_eq!(
+        mock.requests().len(),
+        2,
+        "foreign checkpoint must never leave the client"
+    );
+    assert!(std::fs::read_to_string(path)?.contains("OWNER_ONLY_CHECKPOINT"));
     Ok(())
 }

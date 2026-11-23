@@ -143,6 +143,11 @@ async fn interrupted_guardian_review_preserves_evidence_once(
                     Vec::new(),
                     evidence.into(),
                     /*trigger_turn*/ true,
+                )
+                .with_routing_provider_context(
+                    Some(test.config.model_provider_id.clone()),
+                    /*requested_backend*/ None,
+                    /*model_explicit*/ false,
                 ),
                 start_options: Default::default(),
             })
@@ -331,6 +336,11 @@ async fn guardian_retry_executes_only_after_a_completed_approval() -> Result<()>
                 Vec::new(),
                 "opaque-parent-approval".into(),
                 /*trigger_turn*/ true,
+            )
+            .with_routing_provider_context(
+                Some(test.config.model_provider_id.clone()),
+                /*requested_backend*/ None,
+                /*model_explicit*/ false,
             ),
             start_options: Default::default(),
         })

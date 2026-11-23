@@ -829,6 +829,25 @@ async fn get_model_info_tracks_metadata_origin() {
 }
 
 #[tokio::test]
+async fn sol_62_catalog_window_avoids_unknown_model_fallback() {
+    let codex_home = tempdir().expect("temp dir");
+    let manager = openai_manager_for_tests(
+        codex_home.path().to_path_buf(),
+        TestModelsEndpoint::new(Vec::new()),
+    );
+    let config = ModelsManagerConfig::default();
+    let sol = manager.get_model_info("gpt-6.2-sol", &config).await;
+    assert_eq!(sol.origin, ModelOrigin::Bundled);
+    assert_eq!(sol.context_window, Some(500_000));
+    assert_eq!(sol.usable_context_window(), Some(475_000));
+    let old_catalog = static_manager_for_tests(ModelsResponse { models: vec![] });
+    let unknown = old_catalog.get_model_info("gpt-6.2-sol", &config).await;
+    assert_eq!(unknown.origin, ModelOrigin::Synthetic);
+    assert_eq!(unknown.context_window, Some(272_000));
+    assert_eq!(unknown.usable_context_window(), Some(258_400));
+}
+
+#[tokio::test]
 async fn get_model_info_applies_long_context_override_to_bundled_gpt_5_6_models() {
     let codex_home = tempdir().expect("temp dir");
     let manager = openai_manager_for_tests(

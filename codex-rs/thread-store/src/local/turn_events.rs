@@ -105,7 +105,6 @@ fn read(
 #[cfg(test)]
 mod tests {
     use super::super::rollout_lineage::RolloutLineage;
-    use super::super::rollout_lineage::RolloutLineageSegment;
     use super::*;
     use codex_protocol::protocol::HistoryPosition;
     use serde_json::json;
@@ -124,14 +123,7 @@ mod tests {
         let target = line("b", "exact");
         std::fs::write(&path, format!("{prior}{target}")).expect("write");
         let id = ThreadId::default();
-        let lineage = |end| RolloutLineage {
-            segments: vec![RolloutLineageSegment {
-                rollout_id: id,
-                rollout_path: path.clone(),
-                start_ordinal: 0,
-                end,
-            }],
-        };
+        let lineage = |end| RolloutLineage::single_for_test(id, path.clone(), end);
         let receipt = read(lineage(None), "exact").expect("exact receipt");
         assert_eq!(receipt.len(), 1);
         let prefix = Some(HistoryPosition {

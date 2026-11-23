@@ -105,6 +105,11 @@ pub(crate) fn validate_checkpoint_ownership(
     Ok(())
 }
 
+/// A non-empty summary prompt asks compaction to install portable plaintext.
+pub(crate) fn explicit_plaintext_compaction(prompt: Option<&str>) -> bool {
+    prompt.is_some_and(|prompt| !prompt.trim().is_empty())
+}
+
 /// Mixed and legacy model outputs need a portable summary. Homogeneous owned
 /// checkpoints retain native compaction; an explicit compact_prompt can recover them.
 pub(crate) fn requires_portable_compaction(

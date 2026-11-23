@@ -1633,9 +1633,22 @@ fn thread_resume_params_from_config(
 }
 
 fn thread_config_overrides_from_config(config: &Config) -> Option<HashMap<String, Value>> {
-    config
-        .bypass_hook_trust
-        .then(|| HashMap::from([("bypass_hook_trust".to_string(), Value::Bool(true))]))
+    let mut overrides = HashMap::new();
+    if config.bypass_hook_trust {
+        overrides.insert("bypass_hook_trust".to_string(), Value::Bool(true));
+    }
+    if let Some(prompt) = config
+        .compact_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+    {
+        overrides.insert(
+            "compact_prompt".to_string(),
+            Value::String(prompt.to_string()),
+        );
+    }
+    (!overrides.is_empty()).then_some(overrides)
 }
 
 fn permissions_selection_from_config(config: &Config) -> Option<String> {

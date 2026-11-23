@@ -2599,6 +2599,17 @@ fn config_request_overrides_from_config(
     if config.bypass_hook_trust {
         overrides.insert("bypass_hook_trust".to_string(), true.into());
     }
+    if let Some(prompt) = config
+        .compact_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+    {
+        overrides.insert(
+            "compact_prompt".to_string(),
+            serde_json::Value::String(prompt.to_string()),
+        );
+    }
     Some(overrides)
 }
 
@@ -2814,7 +2825,7 @@ fn thread_resume_params_from_config(
                 | ResumeModelSettings::PreserveSideConversation
         )
     {
-        return ThreadResumeParams {
+        let mut params = ThreadResumeParams {
             thread_id: thread_id.to_string(),
             developer_instructions: if model_settings
                 == ResumeModelSettings::PreserveSideConversation
@@ -2828,6 +2839,18 @@ fn thread_resume_params_from_config(
             },
             ..ThreadResumeParams::default()
         };
+        if let Some(prompt) = config
+            .compact_prompt
+            .as_deref()
+            .map(str::trim)
+            .filter(|prompt| !prompt.is_empty())
+        {
+            params.config = Some(HashMap::from([(
+                "compact_prompt".to_string(),
+                serde_json::Value::String(prompt.to_string()),
+            )]));
+        }
+        return params;
     }
     let permissions = permissions_selection_from_config(&config, thread_params_mode);
     let sandbox = permissions

@@ -15,6 +15,7 @@ mod mcp;
 mod model;
 mod payload;
 mod protocol_event;
+mod quota;
 mod raw_event;
 mod reducer;
 mod shard;

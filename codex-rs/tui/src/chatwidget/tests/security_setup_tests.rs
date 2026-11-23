@@ -129,10 +129,13 @@ async fn security_setup_after_cutoff_wraps_in_narrow_terminal() {
     notice.title = "Set up security for Daybreak mode".into();
     notice.description = "Set up Advanced Account Security with a hardware security key. Already Persona-verified? Add your key before October 15 to skip re-verification. You can keep using Codex while you finish setup.".into();
     chat.show_security_setup(setup_identity(), notice);
-    insta::assert_snapshot!(
-        "security_setup_after_cutoff",
-        normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 48))
-    );
+    let snapshot = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 48));
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        insta::assert_snapshot!("security_setup_after_cutoff", snapshot);
+    });
+    #[cfg(not(target_os = "windows"))]
+    insta::assert_snapshot!("security_setup_after_cutoff", snapshot);
 }
 
 #[tokio::test]
@@ -142,10 +145,13 @@ async fn security_setup_after_persona_grace_wraps_in_narrow_terminal() {
     notice.title = "Set up security for Daybreak mode".into();
     notice.description = "Set up Advanced Account Security with a hardware security key. Verify each new hardware security key with Persona. You can keep using Codex while you finish setup.".into();
     chat.show_security_setup(setup_identity(), notice);
-    insta::assert_snapshot!(
-        "security_setup_after_persona_grace",
-        normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 48))
-    );
+    let snapshot = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 48));
+    #[cfg(target_os = "windows")]
+    insta::with_settings!({ snapshot_suffix => "windows" }, {
+        insta::assert_snapshot!("security_setup_after_persona_grace", snapshot);
+    });
+    #[cfg(not(target_os = "windows"))]
+    insta::assert_snapshot!("security_setup_after_persona_grace", snapshot);
 }
 
 #[tokio::test]

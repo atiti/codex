@@ -201,7 +201,9 @@ async fn mcp_resource_messages(tool_mode: ToolMode) -> Result<()> {
             context_snapshot::format_request_history_snapshot(
                 "Broad discovery names the dormant server. Calling it by name returns its resources and templates through Code Mode.",
                 &requests,
-                &ContextSnapshotOptions::default().include_request_settings(),
+                &ContextSnapshotOptions::default()
+                    .rewrite_known_segments()
+                    .include_request_settings(),
             )
         );
     }

@@ -232,6 +232,7 @@ rules_rust.patch(
         # Spill wrapper arguments to a params file to avoid Windows command-line limits.
         "//patches:rules_rust_process_wrapper_param_file.patch",
         "//patches:rules_rust_windows_execroot_separators.patch",
+        "//patches:rules_rust_windows_static_crt.patch",
         "//patches:rules_rust_compiler_thp.patch",
     ],
     strip = 1,

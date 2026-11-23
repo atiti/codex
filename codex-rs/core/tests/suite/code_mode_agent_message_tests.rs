@@ -73,7 +73,7 @@ async fn yielded_code_mode_spawn_preserves_metadata_and_plaintext() -> Result<()
                 "exec",
                 &format!(r#"yield_control();
 {start_barrier}
-text(await tools.collaboration__spawn_agent({{task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}}));"#),
+text(await tools.agentroute_collaboration__spawn_agent({{task_name: "worker", message: "Summarize the three stories.", fork_turns: "all"}}));"#),
             ),
             ev_completed("spawn"),
         ]),

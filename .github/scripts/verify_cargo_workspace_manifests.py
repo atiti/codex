@@ -383,6 +383,7 @@ def cargo_manifests() -> list[Path]:
         path
         for path in CARGO_RS_ROOT.rglob("Cargo.toml")
         if path != CARGO_RS_ROOT / "Cargo.toml"
+        and "vendor" not in path.relative_to(CARGO_RS_ROOT).parts
     )
 
 

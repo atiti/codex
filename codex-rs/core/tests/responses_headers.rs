@@ -98,6 +98,8 @@ async fn responses_stream_includes_subagent_header_on_review() {
         location: None,
         credential_file: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let codex_home = TempDir::new().expect("failed to create TempDir");
@@ -248,6 +250,8 @@ async fn responses_stream_includes_subagent_header_on_other() {
         location: None,
         credential_file: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let codex_home = TempDir::new().expect("failed to create TempDir");
@@ -379,6 +383,8 @@ async fn responses_respects_model_info_overrides_from_config() {
         location: None,
         credential_file: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let codex_home = TempDir::new().expect("failed to create TempDir");

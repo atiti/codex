@@ -18,6 +18,7 @@ use serde::Serialize;
 use serde::Serializer;
 use serde::ser::Error;
 use serde::ser::SerializeSeq;
+use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
 use crate::model::AgentThreadId;
@@ -29,6 +30,8 @@ use crate::raw_event::RawTraceEventPayload;
 use crate::writer::TraceWriter;
 
 const INFERENCE_CALL_ID_HEADER: &str = "x-codex-inference-call-id";
+const PLAINTEXT_DELEGATED_MESSAGE_PLACEHOLDER: &str = "[plaintext delegated message]";
+const MULTI_AGENT_V2_TOOL_NAMESPACE: &str = "agentroute_collaboration";
 
 /// Turn-local inference tracing context.
 ///
@@ -216,14 +219,22 @@ impl InferenceTraceAttempt {
         let start = ctx.writer.defer_event(
             RawTraceEventContext::turn(&thread_id, &codex_turn_id),
             move |bundle| {
-                let request_payload =
-                    bundle.write_body(RawPayloadKind::InferenceRequest, outgoing.as_ref())?;
+                let request_payload = bundle.write_body(
+                    RawPayloadKind::InferenceRequest,
+                    sanitized_trace_request(outgoing.as_ref())?.as_ref(),
+                )?;
                 let prepared_prompt_payload = bundle.write_body(
                     RawPayloadKind::PreparedPrompt,
-                    &serde_json::to_vec(prepared_prompt.as_ref())?,
+                    sanitized_trace_request(&serde_json::to_vec(prepared_prompt.as_ref())?)?
+                        .as_ref(),
                 )?;
                 let warmup_context_payload = warmup_context()?
-                    .map(|bytes| bundle.write_body(RawPayloadKind::WarmupContext, &bytes))
+                    .map(|bytes| {
+                        bundle.write_body(
+                            RawPayloadKind::WarmupContext,
+                            sanitized_trace_request(&bytes)?.as_ref(),
+                        )
+                    })
                     .transpose()?;
                 Ok(RawTraceEventPayload::InferenceStarted {
                     inference_call_id,
@@ -347,6 +358,90 @@ impl InferenceTraceAttempt {
             .awaiting_terminal
             .swap(false, Ordering::AcqRel)
             .then_some(attempt)
+    }
+}
+
+// Preserve exact transport bytes unless downstream plaintext delegation requires redaction.
+fn sanitized_trace_request(bytes: &[u8]) -> serde_json::Result<std::borrow::Cow<'_, [u8]>> {
+    let mut request: JsonValue = serde_json::from_slice(bytes)?;
+    if sanitize_inference_request(&mut request) {
+        Ok(std::borrow::Cow::Owned(serde_json::to_vec(&request)?))
+    } else {
+        Ok(std::borrow::Cow::Borrowed(bytes))
+    }
+}
+
+fn sanitize_inference_request(request: &mut JsonValue) -> bool {
+    let Some(input) = request.get_mut("input").and_then(JsonValue::as_array_mut) else {
+        return false;
+    };
+
+    let mut plaintext_call_ids = Vec::new();
+    let mut redacted = false;
+    for item in input.iter_mut() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        if object.get("type").and_then(JsonValue::as_str) != Some("function_call")
+            || object.get("namespace").and_then(JsonValue::as_str)
+                != Some(MULTI_AGENT_V2_TOOL_NAMESPACE)
+            || !matches!(
+                object.get("name").and_then(JsonValue::as_str),
+                Some("spawn_agent" | "send_message" | "followup_task")
+            )
+            || !encrypted_function_args_are_empty(object.get("encrypted_function_args"))
+        {
+            continue;
+        }
+
+        if let Some(call_id) = object.get("call_id").and_then(JsonValue::as_str) {
+            plaintext_call_ids.push(call_id.to_string());
+        }
+        redacted = true;
+        object.insert("arguments".to_string(), JsonValue::String("{}".to_string()));
+    }
+
+    for item in input.iter_mut() {
+        let Some(object) = item.as_object_mut() else {
+            continue;
+        };
+        if object.get("type").and_then(JsonValue::as_str) != Some("agent_message") {
+            continue;
+        }
+        let Some(message_id) = object.get("id").and_then(JsonValue::as_str) else {
+            continue;
+        };
+        if !plaintext_call_ids
+            .iter()
+            .any(|call_id| message_id == format!("amsg_{call_id}"))
+        {
+            continue;
+        }
+        let Some(content) = object.get("content").and_then(JsonValue::as_array) else {
+            continue;
+        };
+        if !content
+            .iter()
+            .any(|part| part.get("type").and_then(JsonValue::as_str) == Some("input_text"))
+        {
+            continue;
+        }
+        object.insert(
+            "content".to_string(),
+            serde_json::json!([{
+                "type": "input_text",
+                "text": PLAINTEXT_DELEGATED_MESSAGE_PLACEHOLDER,
+            }]),
+        );
+    }
+    redacted
+}
+
+fn encrypted_function_args_are_empty(encrypted_function_args: Option<&JsonValue>) -> bool {
+    match encrypted_function_args {
+        None | Some(JsonValue::Null) => true,
+        Some(JsonValue::Array(items)) => items.is_empty(),
+        Some(_) => false,
     }
 }
 
@@ -515,6 +610,153 @@ mod tests {
         let prepared = &rollout.raw_payloads[&inference.prepared_prompt_payload_id];
         assert_eq!(prepared.parts.len(), 1);
         assert_eq!(rollout.raw_payloads.len(), 4);
+
+        Ok(())
+    }
+
+    #[test]
+    fn inference_trace_redacts_only_plaintext_collaboration_messages() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        let writer = Arc::new(TraceWriter::create(
+            temp.path(),
+            "trace-1".to_string(),
+            "rollout-1".to_string(),
+            "thread-root".to_string(),
+        )?);
+        writer.append(RawTraceEventPayload::ThreadStarted {
+            thread_id: "thread-root".to_string(),
+            agent_path: "/root".to_string(),
+            metadata_payload: None,
+        })?;
+        writer.append(RawTraceEventPayload::CodexTurnStarted {
+            codex_turn_id: "turn-1".to_string(),
+            thread_id: "thread-root".to_string(),
+        })?;
+        let context = InferenceTraceContext::enabled(
+            Arc::clone(&writer),
+            "thread-root".to_string(),
+            "turn-1".to_string(),
+            "gpt-test".to_string(),
+            "test-provider".to_string(),
+        );
+        let request = json!({
+            "model": "gpt-test",
+            "input": [
+                {
+                    "type": "function_call",
+                    "id": "fc-sensitive",
+                    "call_id": "call-sensitive",
+                    "name": "spawn_agent",
+                    "namespace": "agentroute_collaboration",
+                    "arguments": "{\"message\":\"trace secret\",\"task_name\":\"audit\"}"
+                },
+                {
+                    "type": "agent_message",
+                    "id": "amsg_call-sensitive",
+                    "author": "/root",
+                    "recipient": "/root/audit",
+                    "content": [{"type": "input_text", "text": "trace secret"}]
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc-encrypted",
+                    "call_id": "call-encrypted",
+                    "name": "send_message",
+                    "namespace": "agentroute_collaboration",
+                    "arguments": "{\"message\":\"encrypted secret\"}",
+                    "encrypted_function_args": ["ciphertext"]
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc-reserved",
+                    "call_id": "call-reserved",
+                    "name": "spawn_agent",
+                    "namespace": "collaboration",
+                    "arguments": "{\"message\":\"reserved secret\"}"
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc-unrelated",
+                    "call_id": "call-unrelated",
+                    "name": "wait_agent",
+                    "namespace": "agentroute_collaboration",
+                    "arguments": "{\"ids\":[\"worker\"]}"
+                },
+                {
+                    "type": "agent_message",
+                    "id": "amsg_call-encrypted",
+                    "author": "/root",
+                    "recipient": "/root/worker",
+                    "content": [{
+                        "type": "encrypted_content",
+                        "encrypted_content": "encrypted message"
+                    }]
+                },
+                {
+                    "type": "agent_message",
+                    "id": "amsg_call-unrelated",
+                    "author": "/root",
+                    "recipient": "/root/worker",
+                    "content": [{"type": "input_text", "text": "ordinary message"}]
+                }
+            ]
+        });
+
+        let attempt = context.start_attempt();
+        attempt.record_started(
+            serde_json::to_vec(&request)?,
+            Arc::new(request.clone()),
+            Vec::new(),
+            || Ok(None),
+        );
+        attempt.record_completed("resp-1", Some("req-1"), &None, &[]);
+
+        writer.flush()?;
+        let rollout = replay_bundle(temp.path())?;
+        let request_payload = rollout
+            .raw_payloads
+            .values()
+            .find(|payload| payload.kind == RawPayloadKind::InferenceRequest)
+            .expect("inference request payload");
+        let traced = crate::PayloadReader::new(temp.path()).read_json(request_payload)?;
+        let prepared = rollout
+            .raw_payloads
+            .values()
+            .find(|payload| payload.kind == RawPayloadKind::PreparedPrompt)
+            .expect("prepared prompt payload");
+        assert_eq!(
+            crate::PayloadReader::new(temp.path()).read_json(prepared)?,
+            traced
+        );
+        let input = traced["input"].as_array().expect("request input array");
+
+        assert!(!traced.to_string().contains("trace secret"));
+        assert_eq!(
+            input[0],
+            json!({
+                "type": "function_call",
+                "id": "fc-sensitive",
+                "call_id": "call-sensitive",
+                "name": "spawn_agent",
+                "namespace": "agentroute_collaboration",
+                "arguments": "{}",
+            })
+        );
+        assert_eq!(
+            input[1],
+            json!({
+                "type": "agent_message",
+                "id": "amsg_call-sensitive",
+                "author": "/root",
+                "recipient": "/root/audit",
+                "content": [{
+                    "type": "input_text",
+                    "text": PLAINTEXT_DELEGATED_MESSAGE_PLACEHOLDER,
+                }]
+            })
+        );
+        assert_eq!(&input[2..], &request["input"].as_array().unwrap()[2..]);
+        assert_eq!(rollout.inference_calls.len(), 1);
 
         Ok(())
     }

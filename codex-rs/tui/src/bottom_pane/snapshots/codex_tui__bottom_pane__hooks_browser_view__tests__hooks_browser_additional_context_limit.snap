@@ -14,7 +14,7 @@ expression: "render_lines(&view, 112)"
   Command   /tmp/pre-tool-use.sh                                                                                
   Mode      Sync                                                                                                
   Timeout   30s                                                                                                 
-  Context   unlimited                                                                                           
+  Context   limit: 10000 approximate tokens (hard cap)                                                          
   Trust     Trusted                                                                                             
                                                                                                                 
                                                                                                                 

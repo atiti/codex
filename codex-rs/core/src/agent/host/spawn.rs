@@ -44,6 +44,7 @@ async fn prepare_spawn_inputs(
         config,
         source,
         options,
+        requested_backend: _,
     } = request;
     let caller = parent.session.thread_id;
     let instructions = parent.session.inherited_instructions().await;

@@ -221,13 +221,15 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
             responses::ev_completed(id),
         ])
     };
-    // Old wire format, including an ordinary instruction recorded after the checkpoint.
+    // Preserve the legacy checkpoint shape with explicit original-provider attribution.
+    // Model-hash migration must not depend on inferring ownership of opaque history.
     let history: Vec<RolloutItem> = serde_json::from_value(json!([
         {"type": "compacted", "payload": {
             "message": "old checkpoint",
             "replacement_history": [{
                 "type": "compaction", "id": "old", "encrypted_content": "opaque checkpoint"
-            }]
+            }],
+            "replacement_history_metadata": [{"model_provider_id": test.config.model_provider_id}]
         }},
         {"type": "response_item", "payload": {
             "type": "message", "id": "restriction", "role": "user",
@@ -295,8 +297,12 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
         GuardianContextMode::Legacy
     );
     let mut all_requests = answer.requests();
+    // The original provider can consume its own legacy checkpoint before the model-hash change.
+    assert!(all_requests[0].input().iter().any(|item| {
+        item["type"] == "compaction" && item["encrypted_content"] == "opaque checkpoint"
+    }));
 
-    // Automatic compaction uses the previous model, whose checkpoint the new reviewer cannot read.
+    // Automatic compaction records the previous model hash; the backend validates cross-model reuse.
     let compaction = responses::mount_sse_sequence(
         &server,
         vec![
@@ -327,10 +333,12 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
                 .latest_compaction()
                 .and_then(|checkpoint| checkpoint.model_hash)
         ),
+        // The continuing turn's reviewer differs from the old producer.
+        // Retain legacy review until a compatible checkpoint is installed.
         (GuardianContextMode::Legacy, Some("previous-model")),
     );
 
-    // A real restart must preserve legacy review and the persisted answer for a mismatched hash.
+    // A restart preserves owned context and the answer even when advertised model hashes differ.
     let incompatible_history = saved_history(&test, &thread).await?;
     let thread = resume(&test, &thread, incompatible_history).await?;
     for (call_id, checkpoint) in [("resumed", None), ("after", Some("cmp_migrated"))] {
@@ -380,7 +388,16 @@ pub(super) async fn migration_scenario() -> Result<Vec<responses::ResponsesReque
             }]))
             .await?;
         finish_turn(&thread).await;
-        all_requests.extend(followup.requests());
+        let requests = followup.requests();
+        assert_eq!(requests[1].body_json()["model"], "gpt-5.6-luna");
+        let expected_checkpoint = checkpoint.unwrap_or("cmp_previous_model");
+        assert!(
+            requests[1]
+                .input()
+                .iter()
+                .any(|item| item["type"] == "compaction" && item["id"] == expected_checkpoint)
+        );
+        all_requests.extend(requests);
     }
     let after_compaction = saved_history(&test, &thread).await?;
     let expected_answer = VerifiedAnswer {

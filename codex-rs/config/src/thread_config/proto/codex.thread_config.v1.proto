@@ -54,6 +54,8 @@ message ModelProvider {
   optional string location = 21;
   optional string credential_file = 22;
   optional ModelProviderCapabilities capabilities = 23;
+  optional string tool_compatibility = 24;
+  optional string approval_review_model = 25;
 }
 
 message ModelProviderCapabilities {

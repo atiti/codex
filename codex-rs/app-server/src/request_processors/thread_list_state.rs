@@ -36,7 +36,7 @@ impl ThreadListState {
         clippy::await_holding_invalid_type,
         reason = "keep later probes behind the writer until its semaphore permit is acquired"
     )]
-    pub(super) async fn acquire_exclusive(&self) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
+    pub(crate) async fn acquire_exclusive(&self) -> Result<SemaphorePermit<'_>, JSONRPCErrorError> {
         let _admission = self.admission.write().await;
         self.acquire(PERMITS).await
     }

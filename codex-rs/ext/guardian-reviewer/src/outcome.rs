@@ -25,6 +25,10 @@ pub enum GuardianReviewError {
         error_info: Option<CodexErrorInfo>,
         retry_at: Option<Instant>,
     },
+    ReviewerFallbackReady {
+        from_profile: String,
+        to_profile: String,
+    },
     Parse {
         message: String,
     },
@@ -67,9 +71,9 @@ impl GuardianReviewError {
     pub fn failure_reason(&self) -> GuardianReviewFailureReason {
         match self {
             Self::PromptBuild { .. } => GuardianReviewFailureReason::PromptBuildError,
-            Self::Session { .. } | Self::InputBudgetExceeded => {
-                GuardianReviewFailureReason::SessionError
-            }
+            Self::Session { .. }
+            | Self::ReviewerFallbackReady { .. }
+            | Self::InputBudgetExceeded => GuardianReviewFailureReason::SessionError,
             Self::Parse { .. } => GuardianReviewFailureReason::ParseError,
             Self::Timeout => GuardianReviewFailureReason::Timeout,
             Self::Cancelled => GuardianReviewFailureReason::Cancelled,

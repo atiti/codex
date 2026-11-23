@@ -366,6 +366,25 @@ impl RolloutBounds {
 }
 
 impl RolloutLineage {
+    #[cfg(test)]
+    pub(super) fn single_for_test(
+        id: ThreadId,
+        path: PathBuf,
+        end: Option<HistoryPosition>,
+    ) -> Self {
+        Self {
+            segments: vec![RolloutLineageSegment {
+                rollout_id: id,
+                rollout_path: path,
+                start_ordinal: 0,
+                end,
+                hides_parent: false,
+            }],
+            reads: AncestorReads::default(),
+            requested_thread_id: id,
+            mode: LineageResolutionMode::Existing,
+        }
+    }
     /// Use the projected paths for named turn lookup, hiding history inherited by an attached child.
     pub(super) async fn for_history_page(&self) -> ThreadStoreResult<Cow<'_, Self>> {
         let Some(first) = self

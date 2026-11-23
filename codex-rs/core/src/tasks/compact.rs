@@ -62,7 +62,18 @@ impl SessionTask for CompactTask {
             return Ok(None);
         }
 
-        let result = match ctx.provider.capabilities().remote_compaction {
+        let history = session.clone_history().await;
+        // An explicit summary prompt requests ordinary Responses compaction so
+        // the provider can turn its owned opaque checkpoint into portable text.
+        let result = match if ctx.config.compact_prompt.is_some()
+            || crate::client_provider_history::requires_portable_compaction(
+                history.annotated_items(),
+                &ctx.model_provider_id(),
+            ) {
+            RemoteCompactionSupport::Unsupported
+        } else {
+            ctx.model_provider().capabilities().remote_compaction
+        } {
             RemoteCompactionSupport::V2 => {
                 emit_compact_metric(
                     &session.services.session_telemetry,

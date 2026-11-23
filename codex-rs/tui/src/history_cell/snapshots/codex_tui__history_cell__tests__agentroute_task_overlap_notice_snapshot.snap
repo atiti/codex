@@ -1,0 +1,8 @@
+---
+source: tui/src/history_cell/tests.rs
+expression: "render_lines(&notice.display_lines(80)).join(\"\\n\")"
+---
+  ◆ TASK OVERLAP
+  Other local tasks have active claims. Coordinate before a competing fix.
+  "Task 8b021" — Fix SendJump proxy
+  github:markster-io/sendjump#27

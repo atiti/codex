@@ -44,6 +44,8 @@ pub struct Prompt {
     pub(crate) prompt_cache_ttl: Option<crate::PromptCacheTtl>,
 
     pub(crate) cyber_access_program: Option<codex_protocol::turn_input::CyberAccessProgram>,
+    /// Actual destination identity; absent identity disables inferred subscription programs.
+    pub(crate) model_provider_id: Option<String>,
 }
 
 impl Default for Prompt {
@@ -57,6 +59,7 @@ impl Default for Prompt {
             output_schema_strict: true,
             prompt_cache_ttl: None,
             cyber_access_program: None,
+            model_provider_id: None,
         }
     }
 }

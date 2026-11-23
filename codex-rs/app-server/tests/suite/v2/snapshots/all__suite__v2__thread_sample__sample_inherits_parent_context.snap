@@ -27,7 +27,7 @@ Settings:
           - function/create_goal
           - function/update_goal
           - function/parent_tool
-        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=f051d5dc41e3fdcd
           - function/close_agent
           - function/resume_agent
           - function/send_input
@@ -88,7 +88,7 @@ Settings: same as window 1
           - function/create_goal
           - function/update_goal
           - function/parent_tool
-        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=f051d5dc41e3fdcd
           - function/close_agent
           - function/resume_agent
           - function/send_input
@@ -148,7 +148,7 @@ Settings: same as window 1
           - function/create_goal
           - function/update_goal
           - function/parent_tool
-        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=c826e5b07fd2820f
+        - namespace/multi_agent_v1: Tools for spawning and managing sub-agents.; hash=f051d5dc41e3fdcd
           - function/close_agent
           - function/resume_agent
           - function/send_input

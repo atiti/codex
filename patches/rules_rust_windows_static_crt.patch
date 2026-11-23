@@ -1,0 +1,11 @@
+--- a/cargo/private/cargo_build_script.bzl
++++ b/cargo/private/cargo_build_script.bzl
+@@ -666,7 +666,7 @@
+         "--sysroot=${{pwd}}/{}".format(toolchain.sysroot),
+         # Keep build scripts from baking the exec root into their output
+         "--remap-path-prefix=${pwd}=.",
+-    ] + ctx.attr.rustc_flags)
++    ] + toolchain.extra_rustc_flags + ctx.attr.rustc_flags)
+ 
+     for f in ctx.attr.crate_features:
+         env["CARGO_FEATURE_" + f.upper().replace("-", "_")] = "1"

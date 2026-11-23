@@ -1,12 +1,13 @@
 ---
 source: core/tests/suite/scenarios_budget_context.rs
+assertion_line: 300
 expression: snapshot
 ---
 Scenario: Core renders the host's roster with native World State cadence. Compaction rebuilds it from current membership, and the next sampling step refreshes the budget after compaction spending.
 
 ## Window 1
 -- request 1 (turn) --
-00:additional_tools/developer (3; hash=a7c46a0959d54866):
+00:additional_tools/developer (3; hash=3b8eca8c6b21988b):
         - namespace/functions; hash=81846de5bc4e7474
           - custom/exec
           - function/wait
@@ -14,7 +15,7 @@ Scenario: Core renders the host's roster with native World State cadence. Compac
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
+        - namespace/agentroute_collaboration: Tools for spawning and managing sub-agents.; hash=2e5f64b546508d78
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents
@@ -63,7 +64,7 @@ Scenario: Core renders the host's roster with native World State cadence. Compac
 
 ## Window 2 (after request 4: input diverged at item 02)
 -- request 5 (turn) --
-00:additional_tools/developer (3; hash=a7c46a0959d54866):
+00:additional_tools/developer (3; hash=3b8eca8c6b21988b):
         - namespace/functions; hash=81846de5bc4e7474
           - custom/exec
           - function/wait
@@ -71,7 +72,7 @@ Scenario: Core renders the host's roster with native World State cadence. Compac
           - function/request_user_input_async
         - namespace/clock: Tools for reading and waiting on time.; hash=f402e8c5e9b5e317
           - function/sleep
-        - namespace/collaboration: Tools for spawning and managing sub-agents.; hash=a097b9364047b8bb
+        - namespace/agentroute_collaboration: Tools for spawning and managing sub-agents.; hash=2e5f64b546508d78
           - function/followup_task
           - function/interrupt_agent
           - function/list_agents

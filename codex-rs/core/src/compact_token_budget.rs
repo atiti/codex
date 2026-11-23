@@ -60,7 +60,7 @@ async fn run_compact_task_inner(
         &turn_context.sub_id,
         compaction_item.id(),
         &turn_context.model_info().slug,
-        &turn_context.provider.info().name,
+        &turn_context.model_provider().info().name,
     );
     sess.start_new_context_window(step_context, world_state, &trace)
         .await;

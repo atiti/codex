@@ -472,6 +472,11 @@ v1
 Density objective (strict):
 
 - `memory_summary.md` is prompt-loaded context, so optimize for high signal per token.
+- Hard size cap: the harness injects at most about 2,500 tokens (roughly 10 KB) of this file
+  and cuts out the middle when it is longer, so anything beyond that is lost and the lost part
+  is the middle of the file. Keep `memory_summary.md` under 9,000 bytes. Put the most
+  important sections first (User Profile and User preferences), keep one-line routing pointers
+  to `MEMORY.md` for the rest, and prune before adding. Check the size after every rewrite.
 - Keep only high-level, cross-task signal and brief routing summaries. Put details, provenance,
   runbooks, and task-local nuance in `MEMORY.md`, skills, or rollout summaries.
 - Deduplicate aggressively. If two bullets would cause the same future behavior or route to the

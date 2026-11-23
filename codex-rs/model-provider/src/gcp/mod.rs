@@ -80,6 +80,7 @@ impl ModelProvider for GcpModelProvider {
 
     fn capabilities(&self) -> ProviderCapabilities {
         ProviderCapabilities {
+            namespace_tools: true,
             reasoning_summaries: false,
             image_generation: false,
             web_search: false,

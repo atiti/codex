@@ -13,7 +13,7 @@ pub const UPDATE_GOAL_TOOL_NAME: &str = "update_goal";
 pub fn create_get_goal_tool() -> ToolSpec {
     ToolSpec::Function(ResponsesApiTool {
         name: GET_GOAL_TOOL_NAME.to_string(),
-        description: "Get the current goal for this thread, including status, budgets, token and elapsed-time usage, and remaining token budget."
+        description: "Get the current goal for this thread, including status, budgets, usage, remaining token budget, and the last independent completion review when available."
             .to_string(),
         strict: false,
         defer_loading: None,

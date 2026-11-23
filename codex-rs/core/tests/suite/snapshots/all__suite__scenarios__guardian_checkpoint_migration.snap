@@ -1,8 +1,9 @@
 ---
 source: core/tests/suite/scenarios.rs
+assertion_line: 3665
 expression: snapshot
 ---
-Scenario: An old checkpoint retains a user restriction, assistant questions, and a verified answer. Incompatible automatic compaction keeps legacy review across restart with its saved answer; compatible manual compaction immediately activates thread-owned review.
+Scenario: An owned legacy checkpoint stays with its original provider. Restrictions and verified answers survive model-hash changes, compaction, and restart; incompatible reviewer hashes retain legacy review until a current-model checkpoint is installed. Mocked checkpoints verify transport, not backend decryption.
 
 ## Window 1
 Settings:

@@ -51,13 +51,13 @@ async fn agent_followup_preserves_native_boundaries(
                 gate: None,
                 body: responses::sse(vec![
                     responses::ev_response_created("first"),
-                    responses::ev_reasoning_item_added("reasoning", &["Checking the task"]),
+                    responses::ev_reasoning_item_added("rs_reasoning", &["Checking the task"]),
                 ]),
             },
             StreamingSseChunk {
                 gate: Some(reasoning_gate),
                 body: responses::sse(vec![
-                    responses::ev_reasoning_item("reasoning", &["Checking the task"], &[]),
+                    responses::ev_reasoning_item("rs_reasoning", &["Checking the task"], &[]),
                     responses::ev_function_call(
                         "must-not-run",
                         "update_plan",
@@ -175,7 +175,7 @@ async fn agent_followup_preserves_native_boundaries(
     );
     wait_for_event(
         &child,
-        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "reasoning"),
+        |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "rs_reasoning"),
     )
     .await;
     assert_eq!(
@@ -187,6 +187,11 @@ async fn agent_followup_preserves_native_boundaries(
                     Vec::new(),
                     "opaque-agent-message".to_owned(),
                     /*trigger_turn*/ false,
+                )
+                .with_routing_provider_context(
+                    Some(test.config.model_provider_id.clone()),
+                    /*requested_backend*/ None,
+                    /*model_explicit*/ false,
                 ),
             )))
             .await?,
@@ -293,6 +298,18 @@ async fn agent_followup_preserves_native_boundaries(
             json!([{"type": "input_text", "text": "Message Type: NEW_TASK\nTask name: /root/worker\nSender: /root\nPayload:\nNow check the fix"}]),
         ]
     );
+    let owned_mail = |request: &Value| {
+        request["input"]
+            .as_array()
+            .expect("input array")
+            .iter()
+            .find(|item| {
+                item["type"] == "agent_message" && item.to_string().contains("opaque-agent-message")
+            })
+            .cloned()
+            .expect("owned encrypted mail remains present")
+    };
+    assert_eq!(owned_mail(&requests[1]), owned_mail(&requests[2]));
     let entries = requests.iter().map(SnapshotEntry::body).collect::<Vec<_>>();
     insta::assert_snapshot!(
         format!("agent_followup_{arrival:?}"),
@@ -303,6 +320,141 @@ async fn agent_followup_preserves_native_boundaries(
         )
     );
     child.shutdown_and_wait().await?;
+    streaming.shutdown().await;
+    Ok(())
+}
+
+#[test_case(false, "current"; "initial owned mail")]
+#[test_case(false, "foreign"; "initial foreign mail")]
+#[test_case(false, "unknown"; "initial unknown mail")]
+#[test_case(true, "current"; "steered owned mail")]
+#[test_case(true, "foreign"; "steered foreign mail")]
+#[test_case(true, "unknown"; "steered unknown mail")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn first_delivery_respects_encrypted_mail_ownership(
+    steered: bool,
+    owner: &str,
+) -> anyhow::Result<()> {
+    core_test_support::skip_if_no_network!(Ok(()));
+    let (release_reasoning, reasoning_gate) = oneshot::channel();
+    let completed = || StreamingSseChunk {
+        gate: None,
+        body: responses::sse(vec![responses::ev_completed("delivered")]),
+    };
+    let scripts = if steered {
+        vec![
+            vec![
+                StreamingSseChunk {
+                    gate: None,
+                    body: responses::sse(vec![
+                        responses::ev_response_created("first"),
+                        responses::ev_reasoning_item_added("rs_mail_boundary", &["Planning"]),
+                    ]),
+                },
+                StreamingSseChunk {
+                    gate: Some(reasoning_gate),
+                    body: responses::sse(vec![
+                        responses::ev_reasoning_item("rs_mail_boundary", &["Planning"], &[]),
+                        responses::ev_completed("first"),
+                    ]),
+                },
+            ],
+            vec![completed()],
+        ]
+    } else {
+        vec![vec![completed()]]
+    };
+    let (streaming, _) = start_streaming_sse_server(scripts).await;
+    let config_server = responses::start_mock_server().await;
+    let base_url = format!("{}/v1", streaming.uri());
+    let test = test_codex()
+        .with_model("gpt-5.4")
+        .with_config(move |config| {
+            config.model_provider.base_url = Some(base_url);
+            config.model_provider.supports_websockets = false;
+            config
+                .features
+                .enable(Feature::MultiAgentV2)
+                .expect("enable mail");
+            config
+                .features
+                .disable(Feature::DeferMailboxPreemption)
+                .expect("preempt at boundary");
+            config
+                .features
+                .disable(Feature::WakeOnAgentMessages)
+                .expect("explicit host admission");
+            config
+                .features
+                .disable(Feature::EnableRequestCompression)
+                .expect("capture wire input");
+        })
+        .build_with_auto_env(&config_server)
+        .await?;
+    if steered {
+        test.codex
+            .start_or_steer_turn(TurnInputRequest::user_input(vec![super::text(
+                "Plan the next action.",
+            )]))
+            .await?;
+        wait_for_event(&test.codex, |event| matches!(event, EventMsg::ItemStarted(item) if item.item.id() == "rs_mail_boundary")).await;
+    }
+    let provider = match owner {
+        "current" => Some(test.config.model_provider_id.clone()),
+        "foreign" => Some("other-provider".to_owned()),
+        _ => None,
+    };
+    let mail = InterAgentCommunication::new_encrypted(
+        AgentPath::root().join("sender").expect("sender"),
+        AgentPath::root(),
+        Vec::new(),
+        "MAIL_OWNER_ONLY_CIPHERTEXT".to_owned(),
+        /*trigger_turn*/ false,
+    )
+    .with_routing_provider_context(
+        provider, /*requested_backend*/ None, /*model_explicit*/ false,
+    );
+    test.codex
+        .start_or_steer_turn(TurnInputRequest::new(TurnInput::InterAgentCommunication(
+            mail,
+        )))
+        .await?;
+    if steered {
+        release_reasoning.send(()).expect("release boundary");
+    }
+    wait_for_event(&test.codex, |event| {
+        assert!(!matches!(event, EventMsg::Error(_)), "{event:?}");
+        matches!(event, EventMsg::TurnComplete(_))
+    })
+    .await;
+    let requests = streaming
+        .requests()
+        .await
+        .iter()
+        .map(|body| serde_json::from_slice::<Value>(body))
+        .collect::<serde_json::Result<Vec<_>>>()?;
+    assert_eq!(requests.len(), if steered { 2 } else { 1 });
+    let delivered = requests.last().expect("delivery request");
+    assert!(
+        delivered["input"]
+            .as_array()
+            .expect("input")
+            .iter()
+            .any(|item| item["type"] == "agent_message"),
+        "mail delivery must occur"
+    );
+    assert_eq!(
+        delivered.to_string().contains("MAIL_OWNER_ONLY_CIPHERTEXT"),
+        owner == "current",
+        "only the attributed original provider may receive ciphertext"
+    );
+    let history = test.codex.conversation_history_snapshot().await;
+    assert!(
+        serde_json::to_string(&history.items().collect::<Vec<_>>())?
+            .contains("MAIL_OWNER_ONLY_CIPHERTEXT"),
+        "wire filtering must preserve stored evidence"
+    );
+    test.codex.shutdown_and_wait().await?;
     streaming.shutdown().await;
     Ok(())
 }

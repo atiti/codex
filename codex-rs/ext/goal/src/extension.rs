@@ -11,6 +11,7 @@ use codex_extension_api::ExtensionFuture;
 use codex_extension_api::ExtensionRegistryBuilder;
 use codex_extension_api::ThreadIdleInput;
 use codex_extension_api::ThreadLifecycleContributor;
+use codex_extension_api::ThreadReadyInput;
 use codex_extension_api::ThreadResumeInput;
 use codex_extension_api::ThreadStartInput;
 use codex_extension_api::ThreadStopInput;
@@ -109,6 +110,12 @@ where
             );
             let tools_available_for_thread =
                 input.persistent_thread_state_available && tools_visible_for_thread;
+            // Process-wide launch variables belong only to the root embedded worker,
+            // never to its delegated subagents or internal review threads.
+            let worker_binding_required = worker_binding_required(
+                input.session_source,
+                std::env::var_os("AGENTROUTE_REQUIRE_WORKER_BINDING").as_deref(),
+            );
             input.thread_store.insert(config);
             let accounting_state = input
                 .thread_store
@@ -153,12 +160,46 @@ where
                         enabled,
                         tools_available_for_thread,
                         tools_visible_for_thread,
+                        worker_binding_required,
                         root_accounting_state,
                     },
                 )
             });
             runtime.set_enabled(enabled);
             self.goal_service.register_runtime(&runtime);
+            if enabled
+                && tools_available_for_thread
+                && worker_binding_required
+                && let Some(attempt) = std::env::var_os("AGENTROUTE_WORKER_ATTEMPT")
+                && let Some(workspace) = std::env::var_os("HOME")
+            {
+                let result = crate::worker_completion::prepare_goal(
+                    self.state_dbs.sqlite().home(),
+                    &std::path::PathBuf::from(workspace).join("workspace"),
+                    &thread_id.to_string(),
+                    &attempt.to_string_lossy(),
+                );
+                match result {
+                    Ok(objective) => match self.state_dbs.thread_goals().insert_thread_goal(
+                        thread_id, &objective, codex_state::ThreadGoalStatus::Active, None).await {
+                        Ok(Some(goal)) => self.event_emitter.thread_goal_updated(
+                            format!("worker-goal-{thread_id}"), None, crate::tool::protocol_goal_from_state(goal)),
+                        Ok(None) => {}, // Preserve an existing unfinished goal.
+                        Err(error) => self.event_emitter.user_notice(format!("worker-goal-{thread_id}"),
+                            format!("Worker goal setup failed: {error}. Register and inspect before working.")),
+                    },
+                    Err(error) => self.event_emitter.user_notice(format!("worker-goal-{thread_id}"),
+                        format!("Worker goal setup held: {error}. Register and inspect before working.")),
+                }
+            }
+        })
+    }
+
+    fn on_thread_ready<'a>(&'a self, input: ThreadReadyInput<'a, C>) -> ExtensionFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(runtime) = goal_runtime_handle(input.thread_store) {
+                runtime.start_supervisor_poll().await;
+            }
         })
     }
 
@@ -193,6 +234,14 @@ where
                 }
                 accounting.finish_turn(&turn_id);
             }
+            if matches!(
+                input.cause,
+                codex_extension_api::ThreadIdleCause::Interrupted
+                    | codex_extension_api::ThreadIdleCause::Failed
+            ) && runtime.suspend_supervisor().await
+            {
+                return;
+            }
             if let Err(err) = runtime.continue_if_idle().await {
                 tracing::warn!(
                     "failed to continue active goal for idle thread {}: {err}",
@@ -205,6 +254,7 @@ where
     fn on_thread_stop<'a>(&'a self, input: ThreadStopInput<'a>) -> ExtensionFuture<'a, ()> {
         Box::pin(async move {
             if let Some(runtime) = goal_runtime_handle(input.thread_store) {
+                runtime.stop_supervisor_poll();
                 self.goal_service.unregister_runtime(&runtime);
             }
         })
@@ -240,6 +290,18 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            if input
+                .turn_store
+                .get::<Arc<dyn codex_analytics::TurnAnalyticsMetadata>>()
+                .is_some_and(|metadata| {
+                    matches!(
+                        metadata.turn_trigger().as_deref(),
+                        None | Some("user" | "user_input")
+                    )
+                })
+            {
+                runtime.supervisor_user_resumed().await;
+            }
             if !runtime.is_enabled() {
                 return;
             }
@@ -316,6 +378,9 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            runtime
+                .finish_supervisor_turn(input.turn_store.level_id())
+                .await;
             if !runtime.is_enabled() {
                 return;
             }
@@ -382,6 +447,9 @@ where
             let Some(runtime) = goal_runtime_handle(input.thread_store) else {
                 return;
             };
+            if input.reason == codex_protocol::protocol::TurnAbortReason::Interrupted {
+                runtime.suspend_supervisor().await;
+            }
             if !runtime.is_enabled() {
                 runtime.accounting_state().reset_empty_responses();
                 return;
@@ -426,6 +494,7 @@ where
                 return;
             };
 
+            runtime.suspend_supervisor().await;
             let reason = match input.error {
                 CodexErrorInfo::UsageLimitExceeded => ActiveGoalStopReason::UsageLimit,
                 // The turn has ended because the error was non-retryable or its
@@ -592,12 +661,13 @@ where
                 max_goal_token_budget,
             ),
             GoalToolExecutor::update(
-                runtime.thread_id(),
                 Arc::clone(&self.state_dbs),
                 runtime.accounting_state(),
                 self.analytics.clone(),
                 self.event_emitter.clone(),
                 self.metrics.clone(),
+                self.thread_manager.clone(),
+                runtime.clone(),
             ),
         ];
         tools
@@ -655,3 +725,11 @@ fn tool_attempt_counts_for_goal_progress(outcome: ToolCallOutcome) -> bool {
         | ToolCallOutcome::Aborted => false,
     }
 }
+
+fn worker_binding_required(source: &SessionSource, flag: Option<&std::ffi::OsStr>) -> bool {
+    !source.is_non_root_agent() && flag == Some(std::ffi::OsStr::new("1"))
+}
+
+#[cfg(test)]
+#[path = "worker_scope_tests.rs"]
+mod worker_scope_tests;

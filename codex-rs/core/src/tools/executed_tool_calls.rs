@@ -475,7 +475,8 @@ impl ExecutedToolCalls {
             return None;
         }
         let manager = turn.auth_manager.as_ref()?;
-        let info = turn.provider.info();
+        let provider = turn.model_provider();
+        let info = provider.info();
         // The built-in provider declares optional organization/project selectors. The
         // transport checks the resolved headers again and declines either active selector.
         if !info.include_internal_metadata
@@ -483,8 +484,7 @@ impl ExecutedToolCalls {
             || info.is_gcp()
             || !provider_uses_first_party_auth_path(info)
             || info.gateway_oauth.is_some()
-            || !turn
-                .provider
+            || !provider
                 .auth_manager()
                 .is_some_and(|provider| Arc::ptr_eq(manager, &provider))
             || info

@@ -1249,6 +1249,10 @@ impl CodexThread {
                         other_recipients: Vec::new(),
                         content: text.clone(),
                         encrypted_content: None,
+                        routing_prompt: None,
+                        routing_inherited_model_provider: None,
+                        routing_requested_backend: None,
+                        routing_model_explicit: false,
                         internal_chat_message_metadata_passthrough:
                             internal_chat_message_metadata_passthrough.clone(),
                         trigger_turn: false,

@@ -575,7 +575,9 @@ pub(crate) async fn run_turn(
         .await;
     }
 
-    if super::async_compaction::enabled(&turn_context) {
+    if !client_session.requires_portable_compaction()
+        && super::async_compaction::enabled(&turn_context)
+    {
         let token_status = super::context_window::context_window_token_status(
             sess.as_ref(),
             turn_context.as_ref(),
@@ -828,20 +830,22 @@ pub(crate) async fn run_turn(
                 let needs_follow_up = model_needs_follow_up || has_pending_input;
                 let token_limit_reached = token_status.token_limit_reached;
 
-                super::async_compaction::maybe_start(
-                    &sess,
-                    &step_context,
-                    &world_state,
-                    if needs_follow_up {
-                        CompactionPhase::MidTurn
-                    } else {
-                        CompactionPhase::PostTurn
-                    },
-                    &cancellation_token,
-                    &token_status,
-                    client_session.turn_state_with_auth_owner(),
-                )
-                .await;
+                if !client_session.requires_portable_compaction() {
+                    super::async_compaction::maybe_start(
+                        &sess,
+                        &step_context,
+                        &world_state,
+                        if needs_follow_up {
+                            CompactionPhase::MidTurn
+                        } else {
+                            CompactionPhase::PostTurn
+                        },
+                        &cancellation_token,
+                        &token_status,
+                        client_session.turn_state_with_auth_owner(),
+                    )
+                    .await;
+                }
 
                 trace!(
                     turn_id = %turn_context.sub_id,
@@ -1309,6 +1313,11 @@ async fn refresh_client_session_after_hooks(
                 .model_client
                 .new_session_for_provider(turn_context.model_provider())
         };
+    }
+    if explicit_strip_provider_state {
+        // Future routed turns can still reject provider-owned items even when
+        // the provider name matches. Keep new compaction checkpoints portable.
+        client_session.require_portable_compaction();
     }
     strip_provider_state
 }
@@ -2107,10 +2116,11 @@ async fn run_auto_compact(
         return Ok(true);
     }
 
-    match if crate::client_provider_history::requires_portable_compaction(
-        sess.clone_history().await.annotated_items(),
-        &turn_context.model_provider_id(),
-    ) {
+    match if client_session.requires_portable_compaction()
+        || crate::client_provider_history::requires_portable_compaction(
+            sess.clone_history().await.annotated_items(),
+            &turn_context.model_provider_id(),
+        ) {
         RemoteCompactionSupport::Unsupported
     } else {
         turn_context

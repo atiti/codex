@@ -407,6 +407,7 @@ pub struct ModelClientSession {
     turn_state: Arc<OnceLock<String>>,
     foreign_provider_state_ids: HashSet<ResponseItemId>,
     strip_unattributed_provider_state: bool,
+    requires_portable_compaction: bool,
 }
 
 /// Executes HTTP Responses requests without owning a turn's WebSocket state.
@@ -1076,6 +1077,7 @@ impl ModelClient {
             turn_state: Arc::new(OnceLock::new()),
             foreign_provider_state_ids: HashSet::new(),
             strip_unattributed_provider_state: false,
+            requires_portable_compaction: false,
         }
     }
 
@@ -2071,6 +2073,14 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn require_portable_compaction(&mut self) {
+        self.requires_portable_compaction = true;
+    }
+
+    pub(crate) fn requires_portable_compaction(&self) -> bool {
+        self.requires_portable_compaction
+    }
+
     /// Include newly admitted sender-owned state without losing prior explicit
     /// account/provider filters or treating a fresh owned checkpoint as foreign.
     pub(crate) fn include_newly_recorded_provider_history(

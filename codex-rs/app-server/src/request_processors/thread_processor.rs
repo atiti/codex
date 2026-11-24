@@ -266,7 +266,13 @@ fn collect_resume_override_mismatches(
         ));
     }
 
-    if request.config.is_some() {
+    // compact_prompt is applied to the loaded thread below. It must not by
+    // itself force a shutdown or be reported as an ignored override.
+    if request
+        .config
+        .as_ref()
+        .is_some_and(|config| config.keys().any(|key| key != "compact_prompt"))
+    {
         mismatch_details
             .push("config overrides were provided and ignored while running".to_string());
     }
@@ -4969,6 +4975,16 @@ impl ThreadRequestProcessor {
                     existing_thread_id,
                     mismatch_details.join("; ")
                 );
+            }
+            if let Some(prompt) = params
+                .config
+                .as_ref()
+                .and_then(|config| config.get("compact_prompt"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|prompt| !prompt.is_empty())
+            {
+                existing_thread.set_compact_prompt(prompt.to_string()).await;
             }
             permit.finish_probe();
             self.config_manager

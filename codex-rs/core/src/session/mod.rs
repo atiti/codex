@@ -2530,6 +2530,19 @@ impl Session {
             .clone()
     }
 
+    /// Install a plaintext compaction prompt on the live session config.
+    /// The next turn clones this config, so a running resume can recover an
+    /// opaque checkpoint without rebuilding the thread.
+    pub(crate) async fn set_compact_prompt(&self, prompt: String) {
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            return;
+        }
+        let mut state = self.state.lock().await;
+        let config = Arc::make_mut(&mut state.session_configuration.original_config_do_not_use);
+        config.compact_prompt = Some(prompt.to_string());
+    }
+
     pub(crate) async fn inherited_instructions(&self) -> SessionInstructions {
         self.services
             .agents_md_manager
@@ -5599,7 +5612,7 @@ impl Session {
             ),
         )
         .await;
-        self.recompute_token_usage(turn_context).await;
+        self.recompute_token_usage(step_context).await;
     }
 
     pub(crate) async fn reference_context_item(&self) -> Option<TurnContextItem> {
@@ -5898,7 +5911,8 @@ impl Session {
         budget_result
     }
 
-    pub(crate) async fn recompute_token_usage(&self, turn_context: &TurnContext) {
+    pub(crate) async fn recompute_token_usage(&self, step_context: &StepContext) {
+        let turn_context = &step_context.turn;
         let history = self.clone_history().await;
         let base_instructions = self.get_base_instructions().await;
         let Some(estimated_total_tokens) =
@@ -5925,7 +5939,9 @@ impl Session {
                 codex_rollout_budget_units: None,
             };
 
-            if let Some(model_context_window) = turn_context.model_context_window() {
+            if let Some(model_context_window) =
+                step_context.settings.model_info.usable_context_window()
+            {
                 info.model_context_window = Some(model_context_window);
             }
 

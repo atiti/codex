@@ -296,7 +296,10 @@ async fn model_switch_program_pair(
         );
         return Ok(());
     }
-    let summary = if local {
+    // A provider switch makes earlier output foreign, so the fork uses a
+    // portable plaintext summary even when this provider supports remote V2.
+    let portable = matches!(history, History::ApiKeyCustomProviderResume);
+    let summary = if local || portable {
         ev_assistant_message("summary", "summary of surviving history")
     } else {
         json!({"type": "response.output_item.done", "item": {
@@ -354,7 +357,10 @@ async fn model_switch_program_pair(
     following.push(json!([next_model, new_program]));
     assert_eq!(&actual[1..], following.as_slice());
     assert_eq!(actual[0], json!([previous_model, old_program]));
-    if !local {
+    if portable {
+        assert!(requests[0].inputs_of_type("compaction_trigger").is_empty());
+        assert!(requests[0].body_contains_text("surviving history"));
+    } else if !local {
         assert_eq!(requests[0].inputs_of_type("compaction_trigger").len(), 1);
     }
 

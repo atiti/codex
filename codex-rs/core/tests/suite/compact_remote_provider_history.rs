@@ -603,7 +603,7 @@ async fn staged_compaction_preserves_new_owned_checkpoints() -> Result<()> {
 
 #[inline(never)]
 fn pin_compact<'a, T, F>(
-    stage: &'static str,
+    _stage: &'static str,
     build: impl FnOnce() -> F,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>
 where

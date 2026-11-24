@@ -1,8 +1,8 @@
 use super::*;
+use crate::client::normalize_response_items_for_provider;
 use crate::realtime_history::RealtimeHistoryState;
 use crate::session::UserInputMetadata;
 use crate::session::tests::make_session_and_context;
-use crate::client::normalize_response_items_for_provider;
 use codex_extension_api::ExtensionData;
 use codex_extension_api::TurnItemContributor;
 use codex_model_provider_info::ModelProviderInfo;

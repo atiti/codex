@@ -401,12 +401,13 @@ impl ReviewHost for super::super::runtime::ReviewRuntime {
         };
         if prepared.attached.is_none()
             && matches!(
-            &outcome,
-            GuardianReviewOutcome::Error(GuardianReviewError::Session {
-                error_info: Some(CodexErrorInfo::UsageLimitExceeded),
-                ..
-            })
-        ) {
+                &outcome,
+                GuardianReviewOutcome::Error(GuardianReviewError::Session {
+                    error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+                    ..
+                })
+            )
+        {
             let mut reviewer_profiles = prepared.reviewer_profiles.lock().await;
             while let Some(fallback) = reviewer_profiles.fallbacks.pop_front() {
                 let auth_manager =

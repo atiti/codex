@@ -1,3 +1,4 @@
+use anyhow::Context;
 use anyhow::Result;
 use codex_core::RecoverTurnRequest;
 use codex_core::StartIfIdleSubmission;
@@ -37,6 +38,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use test_case::test_case;
 use tokio::sync::oneshot;
+use tokio::time::Duration;
 use wiremock::Mock;
 use wiremock::matchers::header;
 use wiremock::matchers::method;
@@ -1198,6 +1200,9 @@ async fn saved_daybreak_follows_the_child_model_and_automatic_compaction(
                 .features
                 .set_enabled(Feature::DaybreakProgramPropagation, propagation_enabled)
                 .expect("set propagation");
+            if is_v2 {
+                config.multi_agent_v2.tool_namespace = Some(namespace.to_owned());
+            }
             config.multi_agent_v2.expose_spawn_agent_model_overrides = true;
             config.model_auto_compact_token_limit = Some(200_000);
             if !provider_programs {
@@ -1256,11 +1261,13 @@ async fn saved_daybreak_follows_the_child_model_and_automatic_compaction(
             .await?;
     }
     let mut created_threads = test.thread_manager.subscribe_thread_created();
-    submit(&test, Some(parent_program)).await?;
-    let child = test
-        .thread_manager
-        .get_thread(created_threads.recv().await?)
-        .await?;
+    tokio::time::timeout(Duration::from_secs(30), submit(&test, Some(parent_program)))
+        .await
+        .context("parent spawn turn timed out")??;
+    let child_id = tokio::time::timeout(Duration::from_secs(30), created_threads.recv())
+        .await
+        .context("child creation event timed out")??;
+    let child = test.thread_manager.get_thread(child_id).await?;
     wait_for_successful_turn(&child).await;
 
     // No explicit program: both sampling and compaction must use the saved choice.

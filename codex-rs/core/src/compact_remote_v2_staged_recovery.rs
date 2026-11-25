@@ -22,6 +22,9 @@ pub(super) async fn recover_oversized_history(
     original_error: CodexErr,
 ) -> CodexResult<RemoteCompactionV2Output> {
     let mut remaining = prompt.input.clone();
+    if let CodexErrorDetails::ImageLimitExceeded { limit, .. } = original_error.details() {
+        client.observe_image_limit(*limit);
+    }
     client.sanitize_compaction_recovery_input(
         &mut remaining,
         step_context.turn.model_provider().info(),
@@ -32,6 +35,15 @@ pub(super) async fn recover_oversized_history(
     if !matches!(remaining.pop(), Some(ResponseItem::CompactionTrigger {})) {
         return Err(original_error);
     }
+    if matches!(
+        original_error.details(),
+        CodexErrorDetails::ImageLimitExceeded { .. }
+    ) {
+        crate::image_request_budget::validate_current_input(
+            &remaining,
+            client.input_image_limit(),
+        )?;
+    }
     // Initial tool declarations and instructions must remain available to each
     // staged request. Keep their original order instead of reconstructing them.
     let preamble_end = remaining
@@ -41,14 +53,7 @@ pub(super) async fn recover_oversized_history(
                 && !matches!(item, ResponseItem::Message { role, .. } if role == "developer" || role == "system")
         })
         .unwrap_or(remaining.len());
-    let preamble = if remaining[..preamble_end]
-        .iter()
-        .any(|item| matches!(item, ResponseItem::AdditionalTools { .. }))
-    {
-        remaining.drain(..preamble_end).collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
+    let preamble = remaining.drain(..preamble_end).collect::<Vec<_>>();
     let mut checkpoint: Option<ResponseItem> = None;
     let mut checkpoint_configuration: Option<ResponseItem> = None;
     let mut replayed_updates = Vec::new();
@@ -66,6 +71,31 @@ pub(super) async fn recover_oversized_history(
                     checkpoint_configuration = Some(item);
                 } else {
                     replayed_updates.push(item);
+                }
+            }
+            // Tool discovery is declarative history, not an effect to replay.
+            // Carry a complete discovery exchange verbatim and in order so an
+            // early search does not permanently block later image recovery.
+            if let Some(ResponseItem::ToolSearchCall {
+                call_id: Some(call_id),
+                ..
+            }) = remaining.first()
+            {
+                let call_id = call_id.clone();
+                let discovery_end = remaining.iter().position(|item| {
+                    matches!(item, ResponseItem::ToolSearchOutput { call_id: Some(output_id), .. } if output_id == &call_id)
+                });
+                if let Some(end) = discovery_end
+                    && remaining[1..end].iter().all(|item| {
+                        matches!(
+                            item,
+                            ResponseItem::AdditionalTools { .. }
+                                | ResponseItem::ConfigurationUpdate { .. }
+                        )
+                    })
+                {
+                    replayed_updates.extend(remaining.drain(..=end));
+                    continue;
                 }
             }
         }
@@ -139,8 +169,11 @@ pub(super) async fn recover_oversized_history(
                     break;
                 }
                 Err(error)
-                    if matches!(error.details(), CodexErrorDetails::ContextWindowExceeded)
-                        && candidate > 0 =>
+                    if matches!(
+                        error.details(),
+                        CodexErrorDetails::ContextWindowExceeded
+                            | CodexErrorDetails::ImageLimitExceeded { .. }
+                    ) && candidate > 0 =>
                 {
                     candidate /= 2
                 }
@@ -166,7 +199,12 @@ pub(super) async fn recover_oversized_history(
         )
         .await
         {
-            Err(error) if matches!(error.details(), CodexErrorDetails::ContextWindowExceeded) => {}
+            Err(error)
+                if matches!(
+                    error.details(),
+                    CodexErrorDetails::ContextWindowExceeded
+                        | CodexErrorDetails::ImageLimitExceeded { .. }
+                ) => {}
             result => return result,
         }
     }
@@ -174,7 +212,7 @@ pub(super) async fn recover_oversized_history(
 }
 
 /// Split at a message boundary only after all known tool calls have completed.
-fn safe_compaction_boundaries(input: &[ResponseItem]) -> Vec<usize> {
+pub(crate) fn safe_compaction_boundaries(input: &[ResponseItem]) -> Vec<usize> {
     let mut pending = HashSet::<String>::new();
     let mut boundaries = Vec::new();
     let mut unknown_call = false;

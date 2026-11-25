@@ -83,7 +83,8 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                 identity_error_code: None,
             })
         }
-        ApiError::InvalidRequest { message } => CodexErr::InvalidRequest(message),
+        ApiError::InvalidRequest { message } => crate::image_limit_error::provider_image_limit_error(&message)
+            .unwrap_or_else(|| CodexErr::InvalidRequest(message)),
         ApiError::InvalidAudioInput { message } => {
             CodexErr::new(CodexErrorDetails::InvalidAudioInput { message })
         }
@@ -163,7 +164,9 @@ fn map_api_error_details(err: ApiError) -> CodexErr {
                 }
 
                 if status == http::StatusCode::BAD_REQUEST {
-                    if let Some(error) = provider_error
+                    if let Some(error) = crate::image_limit_error::provider_image_limit_error(&body_text) {
+                        error
+                    } else if let Some(error) = provider_error
                         && let Some(
                             code @ (CYBER_POLICY_ERROR_CODE
                             | BIO_POLICY_ERROR_CODE

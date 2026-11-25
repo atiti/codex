@@ -154,7 +154,7 @@ async fn build_and_install_compaction(
                     &fallback_compaction_trace,
                     compaction_metadata,
                     analytics_details,
-                    RemoteCompactV2AttemptInput::Foreground(client_session),
+                    RemoteCompactV2AttemptInput::Foreground(client_session.as_deref_mut()),
                 )
                 .await;
                 record_model_fallback(
@@ -181,7 +181,7 @@ async fn build_and_install_compaction(
         compaction_output,
         compaction_response_id,
         token_usage,
-        owned_client_session: _owned_client_session,
+        owned_client_session,
     } = attempt;
     if prefix.is_none()
         && let Some(token_usage) = token_usage.as_ref()
@@ -189,7 +189,9 @@ async fn build_and_install_compaction(
         sess.record_rollout_budget_usage(token_usage).await?;
         analytics_details.active_context_tokens_before = Some(token_usage.input_tokens);
     }
-    let (compacted_history, retained_images) = build_v2_compacted_history(
+    let original_image_input = prompt_input.clone();
+    let original_image_metadata = prompt_input_metadata.clone();
+    let (mut compacted_history, _) = build_v2_compacted_history(
         prompt_input,
         prompt_input_metadata,
         compaction_output,
@@ -200,6 +202,29 @@ async fn build_and_install_compaction(
             RetainedImageBudget::Disabled
         },
     );
+    crate::image_request_budget::preserve_current_user_images(
+        &original_image_input,
+        &original_image_metadata,
+        &mut compacted_history,
+    )?;
+    let image_limit = client_session
+        .as_deref()
+        .and_then(ModelClientSession::input_image_limit)
+        .or_else(|| {
+            owned_client_session
+                .as_ref()
+                .and_then(ModelClientSession::input_image_limit)
+        })
+        .or_else(|| {
+            crate::image_request_budget::input_image_limit(
+                compaction_turn_context.model_provider().info(),
+            )
+        });
+    crate::image_request_budget::bound_checkpoint_images(&mut compacted_history, image_limit)?;
+    let retained_images = compacted_history
+        .iter()
+        .map(|envelope| crate::image_request_budget::image_count(&envelope.item))
+        .sum::<usize>();
     let reviewer_compaction_hash = reviewer_compaction_hash(sess, turn_context).await;
     let installed = if let Some((prefix, model_info, cutoff_world_state)) = prefix {
         let (initial_context, world_state_baseline) = sess
@@ -234,6 +259,13 @@ async fn build_and_install_compaction(
             compacted_history,
         )
         .await;
+        crate::image_request_budget::validate_input(
+            &new_history
+                .iter()
+                .map(|envelope| envelope.item.clone())
+                .collect::<Vec<_>>(),
+            image_limit,
+        )?;
         let (window_number, window_ids) = sess.advance_auto_compact_window().await;
         let installation = CompactedHistoryMetadata {
             input_goal_ids,

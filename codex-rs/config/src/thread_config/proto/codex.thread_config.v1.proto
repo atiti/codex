@@ -60,6 +60,7 @@ message ModelProvider {
 
 message ModelProviderCapabilities {
   optional bool cyber_access_programs = 1;
+  optional uint32 max_input_images = 2;
 }
 
 message StringMap {

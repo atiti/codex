@@ -36,6 +36,7 @@ pub(crate) fn is_terminal_sampling_outcome(error: &CodexErr) -> bool {
     matches!(
         error.details(),
         CodexErrorDetails::ResponseIncomplete(_)
+            | CodexErrorDetails::ImageLimitExceeded { .. }
             | CodexErrorDetails::UsageAccountingFailed(_)
             | CodexErrorDetails::SessionBudgetExceeded
             | CodexErrorDetails::APISpendLimitExceeded(_)

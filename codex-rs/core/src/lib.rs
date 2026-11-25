@@ -10,6 +10,7 @@ mod apps;
 mod client;
 mod client_common;
 mod client_provider_history;
+mod image_request_budget;
 mod model_request;
 mod realtime_context;
 mod realtime_conversation;

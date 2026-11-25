@@ -623,6 +623,7 @@ pub(crate) async fn run_turn(
 
     let mut next_step_context = Some(first_step_context);
     let mut guardian_budget_compacted = false;
+    let mut image_budget_compacted = false;
     let mut unfinished_plan_id = None;
     loop {
         // Note that pending_input would be something like a message the user
@@ -773,6 +774,7 @@ pub(crate) async fn run_turn(
         match sampling_request_result {
             Ok((sampling_request_output, notify_messages, next)) => {
                 guardian_budget_compacted = false;
+                image_budget_compacted = false;
 
                 let SamplingRequestResult {
                     needs_follow_up: model_needs_follow_up,
@@ -1059,6 +1061,31 @@ pub(crate) async fn run_turn(
                     }
                     break;
                 }
+                continue;
+            }
+            Err(err)
+                if auto_summarization_enabled
+                    && matches!(err.details(), CodexErrorDetails::ImageLimitExceeded { .. })
+                    && !image_budget_compacted =>
+            {
+                image_budget_compacted = true;
+                if let CodexErrorDetails::ImageLimitExceeded { limit, .. } = err.details() {
+                    client_session.observe_image_limit(*limit);
+                }
+                let installed = run_auto_compact(
+                    &sess,
+                    Arc::clone(&step_context),
+                    Arc::clone(&step_context),
+                    &mut client_session,
+                    CompactionReason::ContextLimit,
+                    CompactionPhase::MidTurn,
+                    /*candidate*/ None,
+                )
+                .await?;
+                if !installed {
+                    return Err(err);
+                }
+                can_drain_pending_input = false;
                 continue;
             }
             Err(err)
@@ -2446,6 +2473,7 @@ async fn run_sampling_request(
                     sess.set_total_tokens_full(&turn_context).await;
                     return Err(err);
                 }
+                CodexErrorDetails::ImageLimitExceeded { .. } => return Err(err),
                 CodexErrorDetails::UsageLimitReached(e) => {
                     let rate_limits = e.rate_limits.clone();
                     if let Some(rate_limits) = rate_limits {

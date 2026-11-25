@@ -25,6 +25,7 @@ pub use codex_client::ReqwestTransport;
 pub use codex_client::TransportError;
 
 pub use crate::api_bridge::map_api_error;
+mod image_limit_error;
 pub use crate::auth::AgentIdentityTelemetry;
 pub use crate::auth::AuthError;
 pub use crate::auth::AuthHeaderTelemetry;

@@ -202,7 +202,7 @@ async fn build_and_install_compaction(
         compaction_output,
         compaction_response_id,
         token_usage,
-        owned_client_session: _owned_client_session,
+        owned_client_session,
     } = attempt;
     if prefix.is_none()
         && let Some(usage) = &token_usage
@@ -231,6 +231,11 @@ async fn build_and_install_compaction(
     let image_limit = client_session
         .as_deref()
         .and_then(ModelClientSession::input_image_limit)
+        .or_else(|| {
+            owned_client_session
+                .as_ref()
+                .and_then(ModelClientSession::input_image_limit)
+        })
         .or_else(|| {
             crate::image_request_budget::input_image_limit(
                 compaction_turn_context.model_provider().info(),

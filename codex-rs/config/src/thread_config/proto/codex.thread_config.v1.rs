@@ -96,6 +96,8 @@ pub struct ModelProvider {
 pub struct ModelProviderCapabilities {
     #[prost(bool, optional, tag = "1")]
     pub cyber_access_programs: ::core::option::Option<bool>,
+    #[prost(uint32, optional, tag = "2")]
+    pub max_input_images: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StringMap {

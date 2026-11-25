@@ -3081,6 +3081,12 @@
           "description": "Whether hosted web search may access the live web.",
           "type": "boolean"
         },
+        "max_input_images": {
+          "description": "Maximum materialized image occurrences in one inference or compaction request. Omission preserves known provider defaults; zero disallows image inputs.",
+          "format": "uint32",
+          "minimum": 0.0,
+          "type": "integer"
+        },
         "remote_compaction": {
           "allOf": [
             {

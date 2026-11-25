@@ -2,6 +2,7 @@
 
 #[path = "compact_remote_v2_staged_recovery.rs"]
 mod staged_recovery;
+pub(crate) use staged_recovery::safe_compaction_boundaries;
 
 use crate::context::UserGoalUpdate;
 use codex_protocol::ResponseItemId;
@@ -236,8 +237,15 @@ pub(super) async fn run_remote_compact_v2_attempt(
             .await;
             match result {
                 Err(error)
-                    if matches!(error.details(), CodexErrorDetails::ContextWindowExceeded) =>
+                    if matches!(
+                        error.details(),
+                        CodexErrorDetails::ContextWindowExceeded
+                            | CodexErrorDetails::ImageLimitExceeded { .. }
+                    ) =>
                 {
+                    if let CodexErrorDetails::ImageLimitExceeded { limit, .. } = error.details() {
+                        client.observe_image_limit(*limit);
+                    }
                     staged_recovery::recover_oversized_history(
                         sess,
                         step_context,

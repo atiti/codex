@@ -415,6 +415,7 @@ async fn run_compact_task_inner_impl(
                 if matches!(
                     e.details(),
                     CodexErrorDetails::SessionBudgetExceeded
+                        | CodexErrorDetails::ImageLimitExceeded { .. }
                         | CodexErrorDetails::ResponseIncomplete(_)
                 ) =>
             {
@@ -469,6 +470,10 @@ async fn run_compact_task_inner_impl(
     let summary_text = format!("{SUMMARY_PREFIX}\n{summary_suffix}");
 
     let mut new_history = build_compacted_history(&history_snapshot, &summary_text);
+    crate::image_request_budget::bound_checkpoint_images(
+        &mut new_history,
+        crate::image_request_budget::input_image_limit(turn_context.model_provider().info()),
+    )?;
     if let Some(summary_item) = new_history.last_mut() {
         // This replacement history skips `record_conversation_items`; only the appended summary
         // belongs to this compaction turn.
@@ -513,6 +518,15 @@ async fn run_compact_task_inner_impl(
     let (prefix, context) = split_prefix_updates(updates);
     let new_history =
         assemble_compaction_history(new_history, prefix, merge_world_state_updates(context));
+    crate::image_request_budget::validate_input(
+        &new_history
+            .iter()
+            .map(|envelope| envelope.item.clone())
+            .collect::<Vec<_>>(),
+        crate::image_request_budget::input_image_limit(
+            replacement_step_context.turn.model_provider().info(),
+        ),
+    )?;
     if defer_start {
         sess.emit_turn_item_started(&turn_context, &compaction_item)
             .await;

@@ -81,6 +81,7 @@ use attempt::RemoteCompactV2AttemptInput;
 pub(crate) use attempt::capture_background_input;
 pub(crate) use attempt::run_background_compaction;
 use attempt::run_remote_compact_v2_attempt;
+pub(crate) use attempt::safe_compaction_boundaries;
 
 #[path = "compact_remote_v2_installation.rs"]
 mod installation;

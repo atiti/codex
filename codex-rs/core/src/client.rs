@@ -408,6 +408,8 @@ pub struct ModelClientSession {
     foreign_provider_state_ids: HashSet<ResponseItemId>,
     strip_unattributed_provider_state: bool,
     requires_portable_compaction: bool,
+    /// A cap reported by this exact routed turn, never global provider state.
+    observed_image_limit: Option<usize>,
 }
 
 /// Executes HTTP Responses requests without owning a turn's WebSocket state.
@@ -1078,6 +1080,7 @@ impl ModelClient {
             foreign_provider_state_ids: HashSet::new(),
             strip_unattributed_provider_state: false,
             requires_portable_compaction: false,
+            observed_image_limit: None,
         }
     }
 
@@ -1717,6 +1720,10 @@ impl ModelClient {
             access_programs: None,
             request_country: Default::default(),
         };
+        crate::image_request_budget::validate_input(
+            &request.input,
+            crate::image_request_budget::input_image_limit(self.state.provider.info()),
+        )?;
         Ok(request)
     }
 
@@ -2073,6 +2080,21 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn input_image_limit(&self) -> Option<usize> {
+        let configured =
+            crate::image_request_budget::input_image_limit(self.client.state.provider.info());
+        match (configured, self.observed_image_limit) {
+            (Some(configured), Some(observed)) => Some(configured.min(observed)),
+            (configured, observed) => configured.or(observed),
+        }
+    }
+
+    pub(crate) fn observe_image_limit(&mut self, limit: usize) {
+        self.observed_image_limit = Some(
+            self.input_image_limit()
+                .map_or(limit, |known| known.min(limit)),
+        );
+    }
     pub(crate) fn require_portable_compaction(&mut self) {
         self.requires_portable_compaction = true;
     }
@@ -2124,6 +2146,7 @@ impl ModelClientSession {
             .client
             .new_session_for_provider(Arc::clone(&self.client.state.provider));
         session.turn_state = Arc::clone(&self.turn_state);
+        session.observed_image_limit = self.observed_image_limit;
         session
     }
 
@@ -3296,6 +3319,10 @@ impl ModelClientSession {
         responses_metadata: &CodexResponsesMetadata,
         inference_trace: &InferenceTraceContext,
     ) -> Result<OpenedModelResponse> {
+        crate::image_request_budget::validate_input(
+            &prompt.get_formatted_input_for_request(model_info),
+            self.input_image_limit(),
+        )?;
         let wire_api = self.client.state.provider.info().wire_api;
         match wire_api {
             WireApi::Responses => {

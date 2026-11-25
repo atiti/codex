@@ -20,6 +20,9 @@ pub struct ModelProviderCapabilities {
     /// Missing models and nonpositive values retain their catalog metadata.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub context_windows: BTreeMap<String, i64>,
+    /// Maximum materialized image occurrences in one inference or compaction request.
+    /// Omission preserves known provider defaults; zero disallows image inputs.
+    pub max_input_images: Option<u32>,
     /// Whether hosted web search may access the live web.
     pub external_web_access: Option<bool>,
     /// Remote context-compaction protocol; omission preserves provider defaults.

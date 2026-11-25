@@ -147,6 +147,11 @@ pub enum CodexErrorDetails {
         "Codex ran out of room in the model's context window. Start a new thread or clear earlier history before retrying."
     )]
     ContextWindowExceeded,
+    /// Image occurrence limits are independent of the token context window.
+    #[error(
+        "This request contains {count} image inputs, exceeding the selected provider's limit of {limit}. Earlier images need a bounded checkpoint; if the current input alone exceeds the limit, send a smaller image batch. Saved history and attachments are preserved."
+    )]
+    ImageLimitExceeded { count: usize, limit: usize },
     #[error("no thread with id: {0}")]
     ThreadNotFound(ThreadId),
     #[error("agent thread limit reached")]
@@ -510,6 +515,7 @@ impl CodexErr {
             | CodexErrorDetails::QuotaExceeded
             | CodexErrorDetails::APISpendLimitExceeded(_)
             | CodexErrorDetails::InvalidImageRequest()
+            | CodexErrorDetails::ImageLimitExceeded { .. }
             | CodexErrorDetails::InvalidRequest(_)
             | CodexErrorDetails::InvalidAudioInput { .. }
             | CodexErrorDetails::ResponseIncomplete(_)
@@ -634,6 +640,7 @@ impl CodexErr {
             | CodexErrorDetails::InternalServerError
             | CodexErrorDetails::InternalAgentDied => CodexErrorInfo::InternalServerError,
             CodexErrorDetails::InvalidAudioInput { .. }
+            | CodexErrorDetails::ImageLimitExceeded { .. }
             | CodexErrorDetails::UnsupportedOperation(_)
             | CodexErrorDetails::ThreadNotFound(_)
             | CodexErrorDetails::AgentLimitReached { .. } => CodexErrorInfo::BadRequest,

@@ -825,7 +825,7 @@ impl LocalAgentControl {
                         && turn.config.model_provider_id
                             == codex_model_provider_info::OPENAI_PROVIDER_ID
                         && codex_model_provider::provider_uses_first_party_auth_path(
-                            turn.provider.info(),
+                            turn.model_provider().info(),
                         )
                         && config.model_provider_id
                             == codex_model_provider_info::OPENAI_PROVIDER_ID

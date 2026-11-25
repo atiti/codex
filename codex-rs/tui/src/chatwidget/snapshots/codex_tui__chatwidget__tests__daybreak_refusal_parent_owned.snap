@@ -1,7 +1,6 @@
 ---
 source: tui/src/chatwidget/tests/status_and_layout.rs
-assertion_line: 195
-expression: "format!(\"{}\\n{}\", lines_to_single_string(cells.last().unwrap()),\nrender_bottom_popup(&chat, 80))"
+expression: "normalize_snapshot_paths(format!(\"{}\\n{}\",\nlines_to_single_string(cells.last().unwrap()),\nrender_bottom_popup(&chat, 80)))"
 ---
 ⓘ This content can’t be shown
   Daybreak is currently off. If you’re doing authorized security work, turn it

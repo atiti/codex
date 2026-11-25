@@ -702,6 +702,8 @@ mod thread_processor_behavior_tests {
             location: None,
             credential_file: None,
             include_internal_metadata: false,
+            tool_compatibility: None,
+            approval_review_model: None,
         };
         let config_manager = ConfigManager::new(
             temp_dir.path().to_path_buf(),
@@ -1325,6 +1327,7 @@ mod thread_processor_behavior_tests {
         let thread_status = thread_watch_manager.subscribe(thread_id).await;
         ensure_conversation_listener(
             ListenerTaskContext {
+                task_title_permit: Arc::new(ThreadListState::default()),
                 thread_manager: test.thread_manager.clone(),
                 thread_state_manager,
                 outgoing: outgoing.clone(),

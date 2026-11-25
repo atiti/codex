@@ -76,19 +76,17 @@ Settings:
     first parent turn
 05:configuration_update:reasoning={"effort":"high"}
 -- request 2 (turn) --
-06:reasoning:summary=Keep the existing context.:encrypted=true
-07:message/assistant:
+06:message/assistant:
     Ready to continue.
-08:message/user:
+07:message/user:
     second parent turn
-09:configuration_update:reasoning={"effort":"low"}
+08:configuration_update:reasoning={"effort":"low"}
 -- request 3 (turn) --
-10:reasoning:summary=Keep the existing context.:encrypted=true
-11:message/assistant:
+09:message/assistant:
     Ready to continue.
-12:message/user:
+10:message/user:
     continue identically
-13:configuration_update:reasoning={"effort":"medium"}
+11:configuration_update:reasoning={"effort":"medium"}
 
 ## Window 2 (after request 3: input repeated)
 Settings: same as window 1
@@ -152,15 +150,13 @@ Settings: same as window 1
 04:message/user:
     first parent turn
 05:configuration_update:reasoning={"effort":"high"}
-06:reasoning:summary=Keep the existing context.:encrypted=true
-07:message/assistant:
+06:message/assistant:
     Ready to continue.
-08:message/user:
+07:message/user:
     second parent turn
-09:configuration_update:reasoning={"effort":"low"}
-10:reasoning:summary=Keep the existing context.:encrypted=true
-11:message/assistant:
+08:configuration_update:reasoning={"effort":"low"}
+09:message/assistant:
     Ready to continue.
-12:message/user:
+10:message/user:
     continue identically
-13:configuration_update:reasoning={"effort":"medium"}
+11:configuration_update:reasoning={"effort":"medium"}

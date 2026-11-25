@@ -480,7 +480,9 @@ fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()>
     )?;
     start_thread(&writer, child_thread_id, "/root/child")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
-    let delivered = inter_agent_message("/root", "/root/child", "hello again");
+    let mut delivered =
+        inter_agent_message("/root", "/root/child", "[plaintext delegated message]");
+    delivered["id"] = json!("amsg_call-send-v2");
     append_inference_request(
         &writer,
         child_thread_id,
@@ -497,6 +499,17 @@ fn send_message_activity_targets_delivered_child_message() -> anyhow::Result<()>
     assert_eq!(
         replayed.conversation_items[target_item_id].thread_id,
         child_thread_id
+    );
+    assert_eq!(
+        replayed.conversation_items[target_item_id]
+            .agent_message
+            .as_ref()
+            .and_then(|message| message.id.as_deref()),
+        Some("amsg_call-send-v2")
+    );
+    assert_eq!(
+        text_body(&replayed.conversation_items[target_item_id]),
+        "[plaintext delegated message]"
     );
     assert_eq!(
         edge.carried_raw_payload_ids,
@@ -561,7 +574,9 @@ fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
     )?;
     start_thread(&writer, child_thread_id, "/root/child")?;
     start_turn_for_thread(&writer, child_thread_id, "turn-child-1")?;
-    let delivered = inter_agent_message("/root", "/root/child", "continue");
+    let mut delivered =
+        inter_agent_message("/root", "/root/child", "[plaintext delegated message]");
+    delivered["id"] = json!("amsg_call-followup-v2");
     append_inference_request(
         &writer,
         child_thread_id,
@@ -578,6 +593,17 @@ fn followup_activity_targets_delivered_child_message() -> anyhow::Result<()> {
     assert_eq!(
         replayed.conversation_items[target_item_id].thread_id,
         child_thread_id
+    );
+    assert_eq!(
+        replayed.conversation_items[target_item_id]
+            .agent_message
+            .as_ref()
+            .and_then(|message| message.id.as_deref()),
+        Some("amsg_call-followup-v2")
+    );
+    assert_eq!(
+        text_body(&replayed.conversation_items[target_item_id]),
+        "[plaintext delegated message]"
     );
     assert_eq!(
         edge.carried_raw_payload_ids,

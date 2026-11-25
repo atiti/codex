@@ -730,6 +730,36 @@ async fn thread_lifecycle_params_preserve_hook_trust_bypass() {
     assert_eq!(resume_params.config, expected_config);
 }
 
+#[tokio::test]
+async fn thread_lifecycle_params_forward_compact_prompt() {
+    let codex_home = tempdir().expect("create temp codex home");
+    let cwd = tempdir().expect("create temp cwd");
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.path().to_path_buf())
+        .harness_overrides(ConfigOverrides {
+            compact_prompt: Some("  Summarize the conversation in plaintext.  ".to_string()),
+            ..Default::default()
+        })
+        .fallback_cwd(Some(cwd.path().to_path_buf()))
+        .build()
+        .await
+        .expect("build config with compact prompt");
+    let expected_config = Some(HashMap::from([(
+        "compact_prompt".to_string(),
+        serde_json::Value::String("Summarize the conversation in plaintext.".to_string()),
+    )]));
+
+    let start_params = thread_start_params_from_config(&config, &ThreadSource::User);
+    let resume_params = thread_resume_params_from_config(
+        &config,
+        "thread-id".to_string(),
+        /*approvals_reviewer_override*/ None,
+    );
+
+    assert_eq!(start_params.config, expected_config);
+    assert_eq!(resume_params.config, expected_config);
+}
+
 #[test]
 fn active_profile_selection_uses_profile_id_only() {
     let selection = permission_profile_id_from_active_profile(ActivePermissionProfile::new(

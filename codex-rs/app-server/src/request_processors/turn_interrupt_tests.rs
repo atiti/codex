@@ -98,6 +98,7 @@ async fn interrupt_reply_waits_for_the_requested_turn(queued: bool) -> anyhow::R
         outgoing.clone(),
     );
     let processor = TurnRequestProcessor::new(
+        Arc::new(ThreadListState::default()),
         test.thread_manager.clone(),
         outgoing.clone(),
         analytics,

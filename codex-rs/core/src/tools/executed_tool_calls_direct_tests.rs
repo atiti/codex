@@ -111,7 +111,7 @@ pub(super) async fn connector_result_turn() -> TurnContext {
     let (_, mut turn) = crate::session::tests::make_session_and_context().await;
     let manager =
         AuthManager::from_auth_for_testing(CodexAuth::create_dummy_chatgpt_auth_for_testing());
-    turn.provider = codex_model_provider::create_model_provider(
+    *turn.provider.write().unwrap() = codex_model_provider::create_model_provider(
         codex_model_provider_info::ModelProviderInfo::create_openai_provider(
             /*base_url*/ None,
         ),
@@ -212,7 +212,7 @@ async fn direct_result_bodies_require_the_originating_output_turn_and_owner(
         .unwrap();
     let recorder = ExecutedToolCalls::new(&turn.config.features, &InitialHistory::New);
     let manager = Arc::clone(turn.auth_manager.as_ref().unwrap());
-    let provider = turn.provider.info().clone();
+    let provider = turn.model_provider().info().clone();
     for config in [
         json!({"auth": {"command": "get-token"}}),
         json!({"requires_openai_auth": true, "base_url": "https://example.com/backend-api/codex"}),
@@ -220,13 +220,13 @@ async fn direct_result_bodies_require_the_originating_output_turn_and_owner(
         json!({"requires_openai_auth": true, "env_http_headers": {"Authorization": "TEST_MODEL_TOKEN"}}),
         json!({"requires_openai_auth": true, "query_params": {"api-key": "alternate"}}),
     ] {
-        turn.provider = codex_model_provider::create_model_provider(
+        *turn.provider.write().unwrap() = codex_model_provider::create_model_provider(
             serde_json::from_value(config)?,
             Some(Arc::clone(&manager)),
         );
         assert!(recorder.begin_turn(&turn).is_none());
     }
-    turn.provider =
+    *turn.provider.write().unwrap() =
         codex_model_provider::create_model_provider(provider, Some(Arc::clone(&manager)));
     let capture = recorder.begin_turn(&turn).unwrap();
     let generation = manager

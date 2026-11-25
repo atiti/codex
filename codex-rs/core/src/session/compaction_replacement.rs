@@ -97,6 +97,7 @@ impl<'a> PrefixCompactionInstallation<'a> {
                 compaction_response_id: Some(self.compaction_response_id),
                 compaction_model_hash: self.model_info.comp_hash.clone(),
                 reviewer_compaction_hash: self.reviewer_compaction_hash,
+                model_provider_id: self.turn_context.model_provider_id(),
             },
             started_item: self.started_item.map(|item| (self.turn_context, item)),
         })

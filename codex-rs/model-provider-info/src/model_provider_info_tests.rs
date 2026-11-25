@@ -101,6 +101,8 @@ base_url = "http://localhost:11434/v1"
         location: None,
         credential_file: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -143,6 +145,8 @@ query_params = { api-version = "2025-04-01-preview" }
         location: None,
         credential_file: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -189,6 +193,8 @@ supports_standalone_web_search = true
         location: None,
         credential_file: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
@@ -384,6 +390,8 @@ fn test_create_amazon_bedrock_provider() {
             location: None,
             credential_file: None,
             include_internal_metadata: false,
+            tool_compatibility: None,
+            approval_review_model: None,
         }
     );
 }

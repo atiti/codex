@@ -494,8 +494,9 @@ trust_level = "trusted"
         }).await;
         if auth_failure {
             assert!(observed.is_ok_and(|result| result.is_err()), "{output}");
-            let exit =
-                tokio::time::timeout(Duration::from_secs(/*secs*/ 10), spawned.exit_rx).await??;
+            let exit = tokio::time::timeout(Duration::from_secs(/*secs*/ 10), spawned.exit_rx)
+                .await
+                .with_context(|| format!("auth rejection exit timed out: {output}"))??;
             assert_ne!(exit, 0);
             assert!(output.contains("API key login is required"), "{output}");
             assert!(!home.join("auth.json").exists());

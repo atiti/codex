@@ -27,6 +27,7 @@
 
 use codex_login::AuthOwner;
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::OnceLock;
@@ -91,8 +92,10 @@ use codex_protocol::auth::AuthMode;
 use codex_protocol::ThreadId;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::config_types::Verbosity as VerbosityConfig;
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ToolResultBody;
+use codex_protocol::models::plaintext_agent_message_content;
 use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::protocol::AuthRecoveryEvent;
@@ -105,6 +108,7 @@ use codex_protocol::protocol::W3cTraceContext;
 use codex_rollout_trace::InferenceTraceAttempt;
 use codex_rollout_trace::InferenceTraceContext;
 use codex_tools::ToolSpec;
+use codex_tools::create_tools_json_for_responses_api;
 use codex_tools::create_tools_json_for_responses_lite;
 use codex_tools::create_tools_raw_json_for_responses_api;
 use eventsource_stream::Event;
@@ -157,6 +161,7 @@ use codex_model_provider::WorkspaceRoutingContext;
 use codex_model_provider_info::DEFAULT_WEBSOCKET_CONNECT_TIMEOUT_MS;
 use codex_model_provider_info::ModelProviderInfo;
 use codex_model_provider_info::OPENAI_PROVIDER_NAME;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::WireApi;
 use codex_protocol::error::CodexErr;
 use codex_protocol::error::CodexErrorDetails;
@@ -211,7 +216,7 @@ struct ModelClientState {
     thread_id: ThreadId,
     item_id_generator: ItemIdGenerator,
     provider: SharedModelProvider,
-    workspace_routing: WorkspaceRoutingContext,
+    workspace_routing: Arc<WorkspaceRoutingContext>,
     auth_env_telemetry: AuthEnvTelemetry,
     session_source: SessionSource,
     originator: String,
@@ -400,6 +405,9 @@ pub struct ModelClientSession {
     /// appends, or continuation requests), and must not send it between different turns.
     /// An auth ownership change clears it so the new owner gets fresh routing state.
     turn_state: Arc<OnceLock<String>>,
+    foreign_provider_state_ids: HashSet<ResponseItemId>,
+    strip_unattributed_provider_state: bool,
+    requires_portable_compaction: bool,
 }
 
 /// Executes HTTP Responses requests without owning a turn's WebSocket state.
@@ -436,6 +444,181 @@ struct WebsocketSession {
     last_response_from_untraced_warmup: bool,
     connection_reused: StdMutex<bool>,
     continuation_reset_reason: Option<&'static str>,
+}
+
+/// Remove provider-owned state at the final shared request boundary.
+///
+/// Every Responses caller passes through this path, including ordinary turns,
+/// reviews, compaction, and retries. Keeping this normalization here prevents
+/// secondary model paths from replaying ciphertext owned by another provider.
+pub(crate) fn normalize_response_items_for_provider(
+    input: &mut Vec<ResponseItem>,
+    provider: &ModelProviderInfo,
+    foreign_provider_state_ids: &HashSet<ResponseItemId>,
+    strip_unattributed_provider_state: bool,
+) {
+    if !foreign_provider_state_ids.is_empty() || strip_unattributed_provider_state {
+        input.retain(|item| {
+            let foreign = item
+                .id()
+                .is_some_and(|id| foreign_provider_state_ids.contains(id));
+            let unattributed = item.id().is_none() && strip_unattributed_provider_state;
+            if (foreign || unattributed) && let ResponseItem::AgentMessage { content, .. } = item {
+                return content.iter().any(|part| matches!(part, codex_protocol::models::AgentMessageInputContent::InputText { text } if !text.is_empty()));
+            }
+            !(foreign || unattributed)
+                || !matches!(
+                    item,
+                    ResponseItem::Reasoning { .. }
+                        | ResponseItem::Compaction { .. }
+                        | ResponseItem::ContextCompaction { .. }
+                )
+        });
+        for item in input.iter_mut() {
+            let foreign = item
+                .id()
+                .is_some_and(|id| foreign_provider_state_ids.contains(id));
+            let unattributed = item.id().is_none() && strip_unattributed_provider_state;
+            if foreign || unattributed {
+                item.clear_encrypted_content();
+                match item {
+                    ResponseItem::FunctionCall {
+                        encrypted_function_args,
+                        ..
+                    } => *encrypted_function_args = None,
+                    ResponseItem::AgentMessage { content, .. } => content.retain(|part| {
+                        matches!(
+                            part,
+                            codex_protocol::models::AgentMessageInputContent::InputText { .. }
+                        )
+                    }),
+                    ResponseItem::FunctionCallOutput { output, .. }
+                    | ResponseItem::CustomToolCallOutput { output, .. } => {
+                        if let Some(parts) = output.content_items_mut() {
+                            for part in parts {
+                                if matches!(part, codex_protocol::models::FunctionCallOutputContentItem::EncryptedContent { .. }) {
+                                    *part = codex_protocol::models::FunctionCallOutputContentItem::InputText { text: "[Encrypted result from a different provider or account omitted.]".into() };
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Native mail identity belongs to the harness. Keep it after stripping
+            // encrypted parts so delivery/compaction can still recognize the message.
+            if foreign && !matches!(item, ResponseItem::AgentMessage { .. }) {
+                item.set_id(/*new_id*/ None);
+            }
+        }
+    }
+    let preserve_reasoning = provider.tool_compatibility
+        == Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning);
+    match provider.tool_compatibility {
+        Some(ToolCompatibility::FunctionsAndApplyPatch)
+        | Some(ToolCompatibility::FunctionsAndApplyPatchPreserveReasoning) => {
+            for item in input.iter_mut() {
+                let ResponseItem::AgentMessage { content, .. } = item else {
+                    continue;
+                };
+                let Some(text) = plaintext_agent_message_content(content) else {
+                    continue;
+                };
+                *item = ResponseItem::Message {
+                    id: None,
+                    role: "user".to_string(),
+                    content: vec![codex_protocol::models::ContentItem::InputText { text }],
+                    phase: None,
+                    internal_chat_message_metadata_passthrough: None,
+                    encrypted_content: None,
+                    status: None,
+                };
+            }
+            let unsupported_custom_calls = input
+                .iter()
+                .filter_map(|item| match item {
+                    ResponseItem::CustomToolCall { call_id, name, .. } if name != "apply_patch" => {
+                        Some(call_id.clone())
+                    }
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+            input.retain(|item| match item {
+                ResponseItem::Reasoning { .. } if preserve_reasoning => true,
+                ResponseItem::Reasoning { .. }
+                | ResponseItem::AdditionalTools { .. }
+                | ResponseItem::LocalShellCall { .. }
+                | ResponseItem::ToolSearchCall { .. }
+                | ResponseItem::ToolSearchOutput { .. }
+                | ResponseItem::WebSearchCall { .. }
+                | ResponseItem::ImageGenerationCall { .. }
+                | ResponseItem::AgentMessage { .. } => false,
+                ResponseItem::CustomToolCall { name, .. } => name == "apply_patch",
+                ResponseItem::CustomToolCallOutput { call_id, .. } => {
+                    !unsupported_custom_calls.contains(call_id)
+                }
+                _ => true,
+            });
+            for item in input.iter_mut() {
+                if !(matches!(
+                    item,
+                    ResponseItem::Compaction { .. } | ResponseItem::ContextCompaction { .. }
+                ) || preserve_reasoning && matches!(item, ResponseItem::Reasoning { .. }))
+                {
+                    item.set_id(/*new_id*/ None);
+                }
+            }
+        }
+        None if provider.is_openai() => {
+            input.retain(|item| match item {
+                ResponseItem::Reasoning { id, content, .. } => {
+                    id.as_ref()
+                        .is_some_and(|id| id.starts_with("rs_") || id.starts_with("encitem_"))
+                        && content.as_ref().is_none_or(Vec::is_empty)
+                }
+                _ => true,
+            });
+            for item in input.iter_mut() {
+                if item.id().is_some_and(|id| !id.is_prefixed()) {
+                    item.set_id(/*new_id*/ None);
+                }
+            }
+        }
+        None => {
+            input.retain(|item| match item {
+                ResponseItem::Reasoning { id, content, .. } => {
+                    id.as_ref().is_some_and(|id| id.starts_with("encitem_"))
+                        && content.as_ref().is_none_or(Vec::is_empty)
+                }
+                // Same-provider compaction is the surviving conversation memory.
+                // Foreign/unattributed ciphertext was filtered above, before IDs
+                // are normalized. Tool compatibility is not an ownership boundary.
+                _ => true,
+            });
+            for item in input.iter_mut() {
+                if let ResponseItem::FunctionCall {
+                    encrypted_function_args,
+                    ..
+                } = item
+                {
+                    *encrypted_function_args = None;
+                }
+                let preserve_affinity_id = matches!(
+                    item,
+                    ResponseItem::Reasoning { id: Some(id), .. }
+                        if id.starts_with("encitem_")
+                ) || matches!(
+                    item,
+                    ResponseItem::Compaction { .. }
+                        | ResponseItem::ContextCompaction { .. }
+                        | ResponseItem::AgentMessage { .. }
+                );
+                if !preserve_affinity_id {
+                    item.set_id(/*new_id*/ None);
+                }
+            }
+        }
+    }
 }
 
 // Continuation diagnostics use bounded labels, never request contents or identifiers.
@@ -580,6 +763,63 @@ fn response_items_equal_ignoring_internal_metadata(
     previous == current
 }
 
+/// Keep the harness guidance without asserting the harness's identity to a model.
+/// Only request copies are changed; saved history is untouched.
+fn neutralize_harness_identity(text: &str) -> String {
+    let mut neutral = text
+        .lines()
+        .map(|line| {
+            let line = if let Some(rest) = line.strip_prefix("You are Codex, an agent based on ") {
+                rest.split_once(". ").map_or(line, |(model, guidance)| {
+                    if model.starts_with("GPT-")
+                        && model
+                            .chars()
+                            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '.' | '_'))
+                    {
+                        guidance
+                    } else {
+                        line
+                    }
+                })
+            } else if let Some(rest) = line.strip_prefix("You are ChatGPT, a large language model.")
+            {
+                rest.strip_prefix(' ').unwrap_or(rest)
+            } else {
+                line
+            };
+            if let Some(guidance) = line.strip_prefix("As Codex, you ") {
+                format!("You {guidance}")
+            } else if let Some(guidance) = line.strip_prefix("As Codex, You ") {
+                format!("You {guidance}")
+            } else if let Some(guidance) = line.strip_prefix("As ChatGPT, you ") {
+                format!("You {guidance}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if text.ends_with('\n') {
+        neutral.push('\n');
+    }
+    neutral
+}
+
+fn neutralize_harness_identity_in_input(input: &mut [ResponseItem]) {
+    for item in input {
+        if let ResponseItem::Message { role, content, .. } = item
+            && matches!(role.as_str(), "system" | "developer")
+        {
+            for part in content {
+                if let ContentItem::InputText { text } | ContentItem::OutputText { text, .. } = part
+                {
+                    *text = neutralize_harness_identity(text);
+                }
+            }
+        }
+    }
+}
+
 impl WebsocketSession {
     fn reset(&mut self, reason: Option<&'static str>) {
         // Per-socket backend metrics call a resend after reconnect "initial".
@@ -686,7 +926,7 @@ impl ModelClient {
                 thread_id,
                 item_id_generator,
                 provider: model_provider,
-                workspace_routing,
+                workspace_routing: Arc::new(workspace_routing),
                 auth_env_telemetry,
                 session_source,
                 originator,
@@ -835,7 +1075,83 @@ impl ModelClient {
             client: self.clone(),
             websocket_session,
             turn_state: Arc::new(OnceLock::new()),
+            foreign_provider_state_ids: HashSet::new(),
+            strip_unattributed_provider_state: false,
+            requires_portable_compaction: false,
         }
+    }
+
+    /// Reuses this client's streaming state when the exact provider is retained,
+    /// or isolates state for a provider selected after the Codex thread started.
+    pub fn new_session_for_provider(&self, provider: SharedModelProvider) -> ModelClientSession {
+        if Arc::ptr_eq(&provider, &self.state.provider) {
+            return self.new_session();
+        }
+        self.new_isolated_session_for_provider(provider)
+    }
+
+    fn new_isolated_session_for_provider(
+        &self,
+        provider: SharedModelProvider,
+    ) -> ModelClientSession {
+        let codex_api_key_env_enabled = provider
+            .auth_manager()
+            .as_ref()
+            .is_some_and(|manager| manager.codex_api_key_env_enabled());
+        let auth_env_telemetry =
+            collect_auth_env_telemetry(provider.info(), codex_api_key_env_enabled);
+        let include_attestation = provider.supports_attestation();
+        let client = Self {
+            state: Arc::new(ModelClientState {
+                thread_id: self.state.thread_id,
+                item_id_generator: Arc::clone(&self.state.item_id_generator),
+                provider,
+                workspace_routing: self.state.workspace_routing.clone(),
+                auth_env_telemetry,
+                session_source: self.state.session_source.clone(),
+                originator: self.state.originator.clone(),
+                model_verbosity: self.state.model_verbosity,
+                content_item_kinds_enabled: self.state.content_item_kinds_enabled,
+                reasoning_effort_override_enabled: self.state.reasoning_effort_override_enabled,
+                enable_request_compression: self.state.enable_request_compression,
+                include_timing_metrics: self.state.include_timing_metrics,
+                beta_features_header: self.state.beta_features_header.clone(),
+                concurrent_reasoning_summaries_enabled: self
+                    .state
+                    .concurrent_reasoning_summaries_enabled,
+                output_token_replay_enabled: self.state.output_token_replay_enabled,
+                include_attestation,
+                attestation_provider: self.state.attestation_provider.clone(),
+                disable_websockets: AtomicBool::new(false),
+                agent_identity_session_fallback: AgentIdentitySessionFallback::default(),
+                cached_websocket_session: StdMutex::new(WebsocketSession::default()),
+                last_inference_tools: StdMutex::new(None),
+            }),
+            agent_identity_policy: self.agent_identity_policy,
+            api_key_cyber_access_programs: self.api_key_cyber_access_programs,
+            required_cyber_access_programs: self.required_cyber_access_programs.clone(),
+            budget_policy: self.budget_policy.clone(),
+            prompt_cache_key_policy: self.prompt_cache_key_policy.clone(),
+            session_id_override: self.session_id_override.clone(),
+            codex_responses_headers: self.codex_responses_headers.clone(),
+            event_sender: self.event_sender.clone(),
+            http_client_factory: self.http_client_factory.clone(),
+            restored_history: self.restored_history,
+            request_contributors: self.request_contributors.clone(),
+            executed_tool_calls: self.executed_tool_calls.clone(),
+        };
+        client.new_session()
+    }
+
+    pub fn new_session_for_mixed_provider_history(
+        &self,
+        provider: SharedModelProvider,
+        foreign_provider_state_ids: HashSet<ResponseItemId>,
+    ) -> ModelClientSession {
+        let mut session = self.new_isolated_session_for_provider(provider);
+        session.foreign_provider_state_ids = foreign_provider_state_ids;
+        session.strip_unattributed_provider_state = true;
+        session
     }
 
     pub(crate) fn auth_manager(&self) -> Option<Arc<AuthManager>> {
@@ -1275,7 +1591,11 @@ impl ModelClient {
         let mut prefix = Vec::new();
         let tools = if model_info.use_responses_lite {
             if !prompt.tools.is_empty() {
-                let tools = create_tools_json_for_responses_lite(&prompt.tools)?;
+                let tools = if self.state.provider.capabilities().namespace_tools {
+                    create_tools_json_for_responses_lite(&prompt.tools)?
+                } else {
+                    create_tools_json_for_responses_api(&prompt.tools)?
+                };
                 prefix.push(ResponseItem::AdditionalTools {
                     id: Some(ResponseItemId::with_suffix(
                         "at",
@@ -1290,12 +1610,13 @@ impl ModelClient {
             Some(create_tools_raw_json_for_responses_api(&prompt.tools)?.into())
         };
         if !prompt.base_instructions.text.is_empty() {
+            let neutral_instructions = neutralize_harness_identity(&prompt.base_instructions.text);
             let mut instructions = ContextualUserFragment::into(BaseInstructionsFragment(
-                prompt.base_instructions.text.clone(),
+                neutral_instructions.clone(),
             ));
             instructions.set_id(Some(ResponseItemId::with_suffix(
                 "msg",
-                Uuid::new_v5(&prefix_namespace, prompt.base_instructions.text.as_bytes()),
+                Uuid::new_v5(&prefix_namespace, neutral_instructions.as_bytes()),
             )));
             prefix.push(instructions);
         }
@@ -1306,6 +1627,7 @@ impl ModelClient {
                 item.clear_content_item_metadata();
             }
         }
+        neutralize_harness_identity_in_input(&mut input);
         if !is_openai {
             for item in &mut input {
                 item.clear_internal_chat_message_metadata_passthrough();
@@ -1406,7 +1728,18 @@ impl ModelClient {
         Ok(())
     }
 
-    fn prepare_response_items_for_request(&self, input: &mut [ResponseItem]) {
+    fn prepare_response_items_for_request(
+        &self,
+        input: &mut Vec<ResponseItem>,
+        foreign_provider_state_ids: &HashSet<ResponseItemId>,
+        strip_unattributed_provider_state: bool,
+    ) {
+        normalize_response_items_for_provider(
+            input,
+            self.state.provider.info(),
+            foreign_provider_state_ids,
+            strip_unattributed_provider_state,
+        );
         for item in input {
             // A provider can echo a bare reserved prefix or return an opaque ID.
             if item
@@ -1449,7 +1782,7 @@ impl ModelClient {
         provider: &SharedModelProvider,
     ) -> Result<CurrentClientSetup> {
         let routing = match routing {
-            ClientRouting::Workspace => Some(&self.state.workspace_routing),
+            ClientRouting::Workspace => Some(self.state.workspace_routing.as_ref()),
             ClientRouting::ConfiguredProvider => None,
         };
         codex_model_provider::resolve_request(
@@ -1740,6 +2073,60 @@ impl Drop for ModelClientSession {
 }
 
 impl ModelClientSession {
+    pub(crate) fn require_portable_compaction(&mut self) {
+        self.requires_portable_compaction = true;
+    }
+
+    pub(crate) fn requires_portable_compaction(&self) -> bool {
+        self.requires_portable_compaction
+    }
+
+    /// Include newly admitted sender-owned state without losing prior explicit
+    /// account/provider filters or treating a fresh owned checkpoint as foreign.
+    pub(crate) fn include_newly_recorded_provider_history(
+        &mut self,
+        history: &[codex_history::ResponseItemEnvelope],
+        provider_id: &str,
+    ) {
+        let foreign = history.iter().filter(|envelope| {
+            envelope
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.model_provider_id.as_deref())
+                != Some(provider_id)
+        });
+        if foreign.clone().any(|envelope| {
+            crate::client_provider_history::has_provider_owned_state(&envelope.item)
+        }) {
+            self.foreign_provider_state_ids
+                .extend(foreign.filter_map(|envelope| envelope.item.id().cloned()));
+            self.strip_unattributed_provider_state = true;
+        }
+    }
+
+    /// Sanitize a recovery snapshot using the same provider boundary as the failed request.
+    pub(crate) fn sanitize_compaction_recovery_input(
+        &self,
+        input: &mut Vec<ResponseItem>,
+        provider: &ModelProviderInfo,
+    ) {
+        normalize_response_items_for_provider(
+            input,
+            provider,
+            &self.foreign_provider_state_ids,
+            self.strip_unattributed_provider_state,
+        );
+    }
+
+    /// Preserve turn affinity and account identity after the caller sanitizes the snapshot.
+    pub(crate) fn sanitized_compaction_recovery_session(&self) -> ModelClientSession {
+        let mut session = self
+            .client
+            .new_session_for_provider(Arc::clone(&self.client.state.provider));
+        session.turn_state = Arc::clone(&self.turn_state);
+        session
+    }
+
     pub(crate) fn inference_tools_changed(&self, tools: &Arc<[ToolSpec]>) -> bool {
         let previous = self
             .client
@@ -1825,8 +2212,14 @@ impl ModelClientSession {
             return Err(NonIncrementalReason::RequestPropertyChanged { reason });
         }
 
-        let response_items = &last_response.items_added;
-        let previous_items = previous_request.input.iter().chain(response_items);
+        let mut response_items = last_response.items_added.clone();
+        self.client.prepare_response_items_for_request(
+            &mut response_items,
+            &self.foreign_provider_state_ids,
+            self.strip_unattributed_provider_state,
+        );
+
+        let previous_items = previous_request.input.iter().chain(&response_items);
         let mut current_items = request.input.iter();
         for previous in previous_items {
             let Some(current) = current_items.next() else {
@@ -2104,6 +2497,8 @@ impl ResponsesHttpExecutor<'_> {
     pub(crate) async fn stream_responses_http(
         &self,
         turn_state: &Arc<OnceLock<String>>,
+        foreign_provider_state_ids: &HashSet<ResponseItemId>,
+        strip_unattributed_provider_state: bool,
         expected_auth_owner: Option<AuthOwner>,
         event_sender: Option<&Sender<ProtocolEvent>>,
         prompt: &Arc<Prompt>,
@@ -2200,14 +2595,25 @@ impl ResponsesHttpExecutor<'_> {
             }
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
+                self.client.state.provider.info(),
+                &request.model,
+                prompt.model_provider_id.as_deref(),
                 prompt.cyber_access_program,
                 self.client.api_key_cyber_access_programs,
             )?;
             self.client
                 .validate_required_cyber_access_program(request.access_programs)?;
+            crate::client_provider_history::validate_checkpoint_ownership(
+                &request.input,
+                foreign_provider_state_ids,
+                strip_unattributed_provider_state,
+            )?;
+            self.client.prepare_response_items_for_request(
+                &mut request.input,
+                foreign_provider_state_ids,
+                strip_unattributed_provider_state,
+            );
             let history_ids = inference_trace.stripped_output_ids(&request.input);
-            self.client
-                .prepare_response_items_for_request(&mut request.input);
             if let Some(recorder) = &self.client.executed_tool_calls {
                 let _ = recorder.scope_request_metadata(&mut request.input);
             }
@@ -2407,6 +2813,9 @@ impl ModelClientSession {
             }
             request.access_programs = cyber_access_program::for_auth(
                 client_setup.auth.as_ref(),
+                self.client.state.provider.info(),
+                &request.model,
+                prompt.model_provider_id.as_deref(),
                 prompt.cyber_access_program,
                 self.client.api_key_cyber_access_programs,
             )?;
@@ -2494,6 +2903,16 @@ impl ModelClientSession {
             if let Some(turn_state) = self.turn_state.get() {
                 client_metadata.insert(X_CODEX_TURN_STATE_HEADER.to_string(), turn_state.clone());
             }
+            crate::client_provider_history::validate_checkpoint_ownership(
+                &request.input,
+                &self.foreign_provider_state_ids,
+                self.strip_unattributed_provider_state,
+            )?;
+            self.client.prepare_response_items_for_request(
+                &mut request.input,
+                &self.foreign_provider_state_ids,
+                self.strip_unattributed_provider_state,
+            );
             let (continuation, mode, reason, previous_item_type, current_item_type) =
                 match self.prepare_websocket_request(&request) {
                     Ok(continuation) => (
@@ -2545,8 +2964,11 @@ impl ModelClientSession {
                     .stripped_output_ids(incremental_items.as_deref().unwrap_or(&request.input))
             };
             let original_item_ids = if let Some(incremental_items) = &mut incremental_items {
-                self.client
-                    .prepare_response_items_for_request(incremental_items);
+                self.client.prepare_response_items_for_request(
+                    incremental_items,
+                    &self.foreign_provider_state_ids,
+                    self.strip_unattributed_provider_state,
+                );
                 None
             } else {
                 let original_item_ids = request
@@ -2554,8 +2976,11 @@ impl ModelClientSession {
                     .iter()
                     .map(|item| item.id().cloned())
                     .collect::<Vec<_>>();
-                self.client
-                    .prepare_response_items_for_request(&mut request.input);
+                self.client.prepare_response_items_for_request(
+                    &mut request.input,
+                    &self.foreign_provider_state_ids,
+                    self.strip_unattributed_provider_state,
+                );
                 Some(original_item_ids)
             };
             let mut original_metadata = Vec::new();
@@ -2899,6 +3324,8 @@ impl ModelClientSession {
                 ResponsesHttpExecutor::new(&self.client)
                     .stream_responses_http(
                         &self.turn_state,
+                        &self.foreign_provider_state_ids,
+                        self.strip_unattributed_provider_state,
                         /*expected_auth_owner*/ None,
                         self.client.event_sender.as_ref(),
                         prompt,

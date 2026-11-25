@@ -89,6 +89,8 @@ async fn continue_after_stream_error() {
         location: None,
         credential_file: None,
         include_internal_metadata: false,
+        tool_compatibility: None,
+        approval_review_model: None,
     };
 
     let TestCodex { codex, .. } = test_codex()

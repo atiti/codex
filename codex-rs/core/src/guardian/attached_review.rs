@@ -65,6 +65,8 @@ impl AttachedApproval {
             parent.clone(),
             context.clone(),
             config.spawn_config.clone(),
+            /*reviewer_profile_name*/ None,
+            /*reviewer_auth_manager*/ None,
             &parent.clone_history().await,
             &config.node_repl_policy,
         )

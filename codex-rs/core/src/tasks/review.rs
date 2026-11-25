@@ -111,6 +111,9 @@ async fn start_review_conversation(
     {
         panic!("by construction Constrained<WebSearchMode> must always support Disabled: {err}");
     }
+    let _ = sub_agent_config
+        .features
+        .disable(Feature::ReviewGithubEvidence);
     let _ = sub_agent_config.features.disable(Feature::Collab);
     let _ = sub_agent_config.features.disable(Feature::MultiAgentV2);
 
@@ -135,6 +138,7 @@ async fn start_review_conversation(
         SubAgentSource::Review,
         /*final_output_json_schema*/ None,
         /*initial_history*/ None,
+        codex_extension_api::SessionIsolation::Inherit,
     )
     .await)
         .ok()

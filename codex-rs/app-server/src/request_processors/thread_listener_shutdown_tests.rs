@@ -689,6 +689,7 @@ async fn revert_settles_interrupts_before_replacing_a_runtime() -> Result<()> {
         .try_attach_thread_listener(thread_id, test.codex.clone(), vec![connection_id])
         .await;
     let turn_processor = TurnRequestProcessor::new(
+        Arc::new(ThreadListState::default()),
         test.thread_manager.clone(),
         processor.outgoing.clone(),
         AnalyticsEventsClient::disabled(),

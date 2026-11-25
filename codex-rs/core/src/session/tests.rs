@@ -80,6 +80,7 @@ use codex_login::CodexAuth;
 use codex_login::auth::AgentIdentityAuthPolicy;
 use codex_model_provider::create_model_provider;
 use codex_model_provider_info::ModelProviderInfo;
+use codex_model_provider_info::ToolCompatibility;
 use codex_model_provider_info::built_in_model_providers;
 use codex_models_manager::model_info;
 use codex_models_manager::test_support::construct_model_info_offline_for_tests;
@@ -102,6 +103,7 @@ use codex_protocol::models::ImageDetail;
 use codex_protocol::models::ImageReference;
 use codex_protocol::models::PermissionProfile;
 use codex_protocol::models::SandboxEnforcement;
+use codex_protocol::openai_models::ApplyPatchToolType;
 use codex_protocol::openai_models::ModelServiceTier;
 use codex_protocol::openai_models::ToolMode;
 use codex_protocol::permissions::FileSystemAccessMode;
@@ -1438,6 +1440,50 @@ async fn danger_full_access_turns_do_not_expose_managed_network_proxy() -> anyho
 
     let turn_context = session.new_default_turn().await;
     assert!(turn_context.network.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn new_turn_reapplies_provider_tool_compatibility_after_model_resolution()
+-> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config.features.enable(Feature::CodeMode).unwrap();
+        config.model_provider.tool_compatibility = Some(ToolCompatibility::FunctionsAndApplyPatch);
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+    let model_info = turn_context.model_info();
+
+    assert_eq!(model_info.tool_mode, Some(ToolMode::Direct));
+    assert_eq!(
+        model_info.apply_patch_tool_type,
+        Some(ApplyPatchToolType::Freeform)
+    );
+    assert_eq!(
+        crate::tools::effective_tool_mode(&turn_context, model_info),
+        ToolMode::Direct
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn new_turn_without_provider_tool_compatibility_preserves_fallback_metadata()
+-> anyhow::Result<()> {
+    let session = make_session_with_config(|config| {
+        config.model = Some("unknown-provider-model".to_string());
+        config.model_provider.tool_compatibility = None;
+    })
+    .await?;
+
+    let turn_context = session.new_default_turn().await;
+
+    assert_eq!(
+        turn_context.model_info().origin,
+        codex_protocol::openai_models::ModelOrigin::Synthetic
+    );
+
     Ok(())
 }
 
@@ -3316,7 +3362,9 @@ async fn recompute_token_usage_uses_session_base_instructions() {
         .expect("estimate with model instructions");
     assert_ne!(expected_tokens, model_estimated_tokens);
 
-    session.recompute_token_usage(&turn_context).await;
+    session
+        .recompute_token_usage(&StepContext::for_test(Arc::new(turn_context)))
+        .await;
 
     let actual_tokens = session
         .state
@@ -3348,10 +3396,54 @@ async fn recompute_token_usage_updates_model_context_window() {
         Arc::make_mut(&mut settings.model_info).effective_context_window_percent = 100;
     });
 
-    session.recompute_token_usage(&turn_context).await;
+    session
+        .recompute_token_usage(&StepContext::for_test(Arc::new(turn_context)))
+        .await;
 
     let actual = session.state.lock().await.token_info().expect("token info");
     assert_eq!(actual.model_context_window, Some(128_000));
+}
+
+#[tokio::test]
+async fn recompute_after_compaction_uses_routed_replacement_model_window() {
+    let (session, mut turn_context) = make_session_and_context().await;
+    update_turn_settings_for_test(&mut turn_context, |settings| {
+        let model = Arc::make_mut(&mut settings.model_info);
+        model.context_window = Some(272_000);
+        model.auto_compact_token_limit = None;
+        model.effective_context_window_percent = 95;
+    });
+    let mut step = StepContext::for_test(Arc::new(turn_context));
+    let settings = Arc::make_mut(&mut Arc::make_mut(&mut step).settings);
+    let model = Arc::make_mut(&mut settings.model_info);
+    model.context_window = Some(500_000);
+    model.effective_context_window_percent = 95;
+    session.recompute_token_usage(&step).await;
+    let actual = session.state.lock().await.token_info().expect("token info");
+    assert_eq!(actual.model_context_window, Some(475_000));
+
+    // An opaque server checkpoint can expand beyond the local estimate. This
+    // usage exceeds the unknown-model fallback budget, but fits routed Sol.
+    let mut actual = actual;
+    actual.last_token_usage.total_tokens = 302_000;
+    actual.last_usage_includes_reasoning = Some(true);
+    session.state.lock().await.set_token_info(Some(actual));
+    let fallback = super::context_window::context_window_token_status_for_model(
+        &session,
+        &step.turn.config,
+        &step.turn,
+        &step.turn.initial_settings.model_info,
+    )
+    .await;
+    let routed = super::context_window::context_window_token_status_for_model(
+        &session,
+        &step.turn.config,
+        &step.turn,
+        &step.settings.model_info,
+    )
+    .await;
+    assert!(fallback.token_limit_reached);
+    assert!(!routed.token_limit_reached);
 }
 
 #[test_case(crate::session::TokenUsageContext::Sampling { includes_reasoning: false, input_item_count: 0 }; "sampling")]
@@ -5964,6 +6056,7 @@ async fn settings_checkpoint_waits_for_accepted_settings_persistence() {
                 compaction_response_id: None,
                 compaction_model_hash: None,
                 reviewer_compaction_hash: None,
+                model_provider_id: turn_context.model_provider_id(),
             },
         ),
     ));
@@ -6094,6 +6187,7 @@ async fn mcp_attribution_checkpoints_cover_batch_prefixes_compaction_and_restore
             CompactedHistoryMetadata {
                 input_goal_ids: Default::default(),
                 message: "summary".to_string(),
+                model_provider_id: turn_context.model_provider_id(),
                 window_number,
                 window_ids,
                 compaction_response_id: None,
@@ -6315,6 +6409,7 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
                     compaction_response_id: None,
                     compaction_model_hash: None,
                     reviewer_compaction_hash: None,
+                    model_provider_id: turn_context.model_provider_id(),
                 },
                 Some((&trace, &input)),
             ),
@@ -6374,6 +6469,15 @@ async fn compaction_persists_resume_metadata_and_companion_records() {
     assert_ne!(
         session.clone_history().await.annotated_items(),
         live_history
+    );
+    assert_eq!(
+        compacted
+            .replacement_history
+            .as_ref()
+            .and_then(|items| items.first())
+            .and_then(|item| item.metadata.as_ref())
+            .and_then(|metadata| metadata.model_provider_id.as_deref()),
+        Some(turn_context.model_provider_id().as_str())
     );
     assert_eq!(compacted.replacement_history, Some(live_history));
     assert_eq!(compacted.resume_metadata.as_ref(), Some(&expected));

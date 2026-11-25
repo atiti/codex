@@ -46,7 +46,10 @@ pub(super) fn enabled(turn_context: &TurnContext) -> bool {
             && turn_context.session_source.is_non_root_agent())
         && !features.enabled(Feature::TokenBudget)
         && matches!(
-            turn_context.provider.capabilities().remote_compaction,
+            turn_context
+                .model_provider()
+                .capabilities()
+                .remote_compaction,
             RemoteCompactionSupport::V2
         )
 }
@@ -80,6 +83,13 @@ pub(super) async fn maybe_start(
                         * i128::from(turn_context.config.async_compaction_threshold_percent)
             })
     {
+        return;
+    }
+
+    if crate::client_provider_history::requires_portable_compaction(
+        sess.clone_history().await.annotated_items(),
+        &turn_context.model_provider_id(),
+    ) {
         return;
     }
 

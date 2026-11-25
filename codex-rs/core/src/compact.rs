@@ -31,6 +31,7 @@ use crate::session::step_context::StepContext;
 use crate::session::turn::get_last_assistant_message_from_turn;
 use crate::session::turn_context::TurnContext;
 use crate::state::AutoCompactWindowIds;
+use crate::state::TaskKind;
 use codex_analytics::CodexCompactionEvent;
 use codex_analytics::CompactionImplementation;
 use codex_analytics::CompactionPhase;
@@ -84,6 +85,7 @@ pub(crate) struct CompactedHistoryMetadata {
     pub(crate) compaction_response_id: Option<String>,
     pub(crate) compaction_model_hash: Option<String>,
     pub(crate) reviewer_compaction_hash: Option<String>,
+    pub(crate) model_provider_id: String,
 }
 
 /// Renders the window prefix and ordinary context with their comparison baseline.
@@ -124,6 +126,7 @@ pub(crate) async fn run_inline_auto_compact_task(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
+    client_session: &mut ModelClientSession,
     world_state: Arc<WorldState>,
     reason: CompactionReason,
     phase: CompactionPhase,
@@ -141,6 +144,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         sess,
         step_context,
         replacement_step_context,
+        client_session,
         input,
         world_state,
         CompactionTurnMetadata::new(
@@ -159,10 +163,27 @@ pub(crate) async fn run_compact_task(
     world_state: Arc<WorldState>,
     input: Vec<ResolvedUserInput>,
 ) -> CodexResult<()> {
+    sess.emit_turn_started(&step_context.turn, TaskKind::Compact)
+        .await;
+    let history = sess.clone_history().await;
+    let mut client_session = sess
+        .services
+        .model_client
+        .new_session_for_foreign_provider_history(
+            &step_context.turn.model_provider_id(),
+            step_context.turn.model_provider(),
+            history.annotated_items(),
+        )
+        .unwrap_or_else(|| {
+            sess.services
+                .model_client
+                .new_session_for_provider(step_context.turn.model_provider())
+        });
     run_compact_task_inner(
         sess.clone(),
         Arc::clone(&step_context),
         step_context,
+        &mut client_session,
         input,
         world_state,
         CompactionTurnMetadata::new(
@@ -176,10 +197,12 @@ pub(crate) async fn run_compact_task(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_compact_task_inner(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
+    client_session: &mut ModelClientSession,
     input: Vec<ResolvedUserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
@@ -217,6 +240,7 @@ async fn run_compact_task_inner(
         Arc::clone(&sess),
         step_context,
         replacement_step_context,
+        client_session,
         input,
         world_state,
         compaction_metadata,
@@ -268,6 +292,7 @@ async fn run_compact_task_inner_impl(
     sess: Arc<Session>,
     step_context: Arc<StepContext>,
     replacement_step_context: Arc<StepContext>,
+    client_session: &mut ModelClientSession,
     input: Vec<ResolvedUserInput>,
     world_state: Arc<WorldState>,
     compaction_metadata: CompactionTurnMetadata,
@@ -287,9 +312,11 @@ async fn run_compact_task_inner_impl(
 
     let mut history = sess.clone_history().await;
     let input_goal_ids = UserGoalUpdate::message_ids(history.raw_items());
+    let model_info = &step_context.settings.model_info;
+
     history.record_items(
         &[initial_input_for_turn.into()],
-        turn_context.model_info().truncation_policy.into(),
+        model_info.truncation_policy.into(),
     );
     let mut fallback_instructions = sess.get_prompt_base_instructions().await;
     if let Some(text) = history
@@ -302,17 +329,15 @@ async fn run_compact_task_inner_impl(
         fallback_instructions.text.clear();
     }
 
-    let max_retries = turn_context.provider.info().stream_max_retries();
+    let max_retries = turn_context.model_provider().info().stream_max_retries();
     let mut retries = 0;
-    // Reuse one client session so turn-scoped state (sticky routing and websocket incremental
-    // request tracking) survives retries within this compact turn.
-    let mut client_session = sess.services.model_client.new_session();
+    let mut grok_incomplete_retried = false;
     let compaction_response = loop {
         // Clone is required because of the loop
         let mut turn_input = history
             .clone()
             .for_prompt(
-                &turn_context.model_info().input_modalities,
+                &model_info.input_modalities,
                 sess.services.image_store.as_ref(),
             )
             .await;
@@ -336,6 +361,7 @@ async fn run_compact_task_inner_impl(
             base_instructions,
             prompt_cache_ttl: turn_context.prompt_cache_ttl,
             cyber_access_program: turn_context.cyber_access_program,
+            model_provider_id: Some(turn_context.model_provider_id()),
             ..Default::default()
         };
         let responses_metadata = sess
@@ -345,7 +371,7 @@ async fn run_compact_task_inner_impl(
             &mut request,
             &sess,
             &step_context,
-            &mut client_session,
+            client_session,
             &responses_metadata,
             &Arc::new(prompt),
             compaction_metadata.phase(),
@@ -355,6 +381,44 @@ async fn run_compact_task_inner_impl(
         match attempt_result {
             Ok(response) => {
                 break response;
+            }
+            Err(err)
+                if matches!(
+                    err.details(),
+                    CodexErrorDetails::Interrupted | CodexErrorDetails::TurnAborted
+                ) =>
+            {
+                return Err(err);
+            }
+            // Retry a Grok output-limit failure once with a stricter summary instruction.
+            // The original history stays intact, and drain_to_completed has already
+            // recorded the incomplete attempt's usage. Never accept partial output.
+            Err(e)
+                if should_retry_grok_compaction(
+                    &turn_context.model_provider_id(),
+                    grok_incomplete_retried,
+                    e.details(),
+                ) =>
+            {
+                grok_incomplete_retried = true;
+                let (retry_instruction, _) = ResolvedUserInput::into_message(
+                    &[ResolvedUserInput::text("The previous checkpoint exceeded its output limit. Summarize the full conversation concisely in at most 2,000 words. Preserve the user objective, decisions, constraints, progress, and next steps. Do not repeat tool output.".to_string())],
+                    LocalImagePreparation::Process,
+                );
+                history.record_items(
+                    &[retry_instruction.into()],
+                    model_info.truncation_policy.into(),
+                );
+                continue;
+            }
+            Err(e)
+                if matches!(
+                    e.details(),
+                    CodexErrorDetails::SessionBudgetExceeded
+                        | CodexErrorDetails::ResponseIncomplete(_)
+                ) =>
+            {
+                return Err(e);
             }
             Err(e) if matches!(e.details(), CodexErrorDetails::ContextWindowExceeded) => {
                 if turn_input_len > 1 {
@@ -458,19 +522,22 @@ async fn run_compact_task_inner_impl(
         replacement_step_context.to_turn_context_item(),
         world_state_baseline,
         /*rejected_audio_file_ids*/ Default::default(),
-        CompactedHistoryMetadata {
-            input_goal_ids,
-            message: summary_text,
-            window_number,
-            window_ids,
-            compaction_response_id: Some(compaction_response.response_id),
-            compaction_model_hash: turn_context.model_info().comp_hash.clone(),
-            reviewer_compaction_hash: None,
-        },
+        crate::session::CompactedHistoryInstallation::Complete(
+            CompactedHistoryMetadata {
+                input_goal_ids,
+                message: summary_text,
+                window_number,
+                window_ids,
+                compaction_response_id: Some(compaction_response.response_id),
+                compaction_model_hash: model_info.comp_hash.clone(),
+                reviewer_compaction_hash: None,
+                model_provider_id: turn_context.model_provider_id(),
+            },
+            None,
+        ),
     )
     .await;
-    sess.recompute_token_usage(&replacement_step_context.turn)
-        .await;
+    sess.recompute_token_usage(&replacement_step_context).await;
 
     sess.emit_turn_item_completed(&turn_context, compaction_item)
         .await;
@@ -872,27 +939,25 @@ async fn drain_to_completed(
     phase: CompactionPhase,
 ) -> CodexResult<CompactionResponse> {
     let turn_context = step_context.turn.as_ref();
-    let mut includes_reasoning = turn_context.model_info().use_responses_lite;
+    let settings = &step_context.settings;
+    let mut includes_reasoning = settings.model_info.use_responses_lite;
     let cancellation = &step_context.turn_cancellation;
     let mut stream = request
         .open(
             sess,
             step_context,
-            &turn_context.model_info().slug,
+            &settings.model_info.slug,
             cancellation,
             client_session.open_model_response(
                 prompt,
-                turn_context.model_info(),
-                &turn_context.session_telemetry,
+                &settings.model_info,
+                &step_context.session_telemetry,
                 SamplingOptions {
                     reasoning_effort: sess
-                        .reasoning_effort_for_request(
-                            &turn_context.initial_settings,
-                            RequestEffortUsage::Compaction,
-                        )
+                        .reasoning_effort_for_request(settings, RequestEffortUsage::Compaction)
                         .await,
-                    reasoning_summary: turn_context.reasoning_summary(),
-                    service_tier: turn_context.config.service_tier.clone(),
+                    reasoning_summary: settings.reasoning_summary,
+                    service_tier: settings.service_tier.clone(),
                 },
                 responses_metadata,
                 // Rollout tracing currently models remote compaction only; local compaction streams
@@ -929,7 +994,7 @@ async fn drain_to_completed(
                     for item in std::mem::take(&mut output) {
                         sess.record_annotated_conversation_items(
                             turn_context,
-                            turn_context.model_info(),
+                            &settings.model_info,
                             vec![ResponseItemEnvelope {
                                 item,
                                 metadata: Some(CodexHarnessMetadata {
@@ -983,3 +1048,13 @@ async fn drain_to_completed(
 #[cfg(test)]
 #[path = "compact_tests.rs"]
 mod tests;
+
+fn should_retry_grok_compaction(
+    provider: &str,
+    already_retried: bool,
+    error: &CodexErrorDetails,
+) -> bool {
+    provider == "agentroute-grok"
+        && !already_retried
+        && matches!(error, CodexErrorDetails::ResponseIncomplete(incomplete) if incomplete.reason == "max_output_tokens")
+}

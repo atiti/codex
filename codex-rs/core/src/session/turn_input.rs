@@ -147,6 +147,7 @@ impl PreparedTurnInputSettings {
     ) -> CodexResult<Option<Arc<TurnContext>>> {
         let TurnStartOptions {
             turn_trigger,
+            goal_routing,
             final_output_json_schema,
             direct_only_tool_namespaces,
             service_tier,
@@ -205,6 +206,9 @@ impl PreparedTurnInputSettings {
                 replacement: Some(inherited_client_metadata),
                 ..Default::default()
             });
+        if let Some(goal_routing) = goal_routing {
+            turn_context.extension_data.insert(goal_routing);
+        }
         if let Some(turn_trigger) = turn_trigger {
             turn_context
                 .turn_metadata_state

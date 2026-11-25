@@ -13013,6 +13013,10 @@ enabled = true
         resolve_multi_agent_v2_config(&ConfigToml::default())
     );
     assert_eq!(
+        config.multi_agent_v2.tool_namespace.as_deref(),
+        Some("agentroute_collaboration")
+    );
+    assert_eq!(
         (
             config.agent_max_threads,
             config.effective_agent_max_threads(MultiAgentVersion::V2)
@@ -13041,7 +13045,10 @@ max_concurrent_threads_per_session = 17
         let mut config = config.clone();
         config.wait_agent_enabled = wait_agent_enabled;
         let usage_hints = resolve_usage_hints(
-            &config, messages, /*omit_update_plan_instructions*/ false,
+            &config,
+            messages,
+            /*omit_update_plan_instructions*/ false,
+            ProviderCapabilities::default(),
         );
         for hint in [usage_hints.root, usage_hints.subagent] {
             let hint = hint
@@ -13063,6 +13070,7 @@ max_concurrent_threads_per_session = 17
         &config,
         empty_messages,
         /*omit_update_plan_instructions*/ false,
+        ProviderCapabilities::default(),
     );
     assert!(usage_hints.root.is_none() && usage_hints.subagent.is_none());
 }
@@ -13097,7 +13105,10 @@ expose_spawn_agent_model_overrides = true
     messages.root = ResolvedMessage::Catalog("Catalog root base.");
     messages.subagent = ResolvedMessage::Catalog("Catalog subagent base.");
     let usage_hints = resolve_usage_hints(
-        &config, messages, /*omit_update_plan_instructions*/ true,
+        &config,
+        messages,
+        /*omit_update_plan_instructions*/ true,
+        ProviderCapabilities::default(),
     );
     assert_eq!(
         (
@@ -13122,7 +13133,10 @@ fn multi_agent_v2_disabled_native_tools_omit_default_roles() {
             messages.subagent = ResolvedMessage::Catalog("Catalog subagent base.");
         }
         let usage_hints = resolve_usage_hints(
-            &config, messages, /*omit_update_plan_instructions*/ false,
+            &config,
+            messages,
+            /*omit_update_plan_instructions*/ false,
+            ProviderCapabilities::default(),
         );
         assert_eq!((usage_hints.root, usage_hints.subagent), (None, None));
     }
@@ -13137,11 +13151,17 @@ fn multi_agent_v2_exposes_model_overrides_by_default() {
     assert!(config.expose_spawn_agent_model_overrides);
     let messages = ResolvedModelMessages::bundled().multi_agent();
     let usage_hints = resolve_usage_hints(
-        &config, messages, /*omit_update_plan_instructions*/ false,
+        &config,
+        messages,
+        /*omit_update_plan_instructions*/ false,
+        ProviderCapabilities::default(),
     );
     config.expose_spawn_agent_model_overrides = false;
     let usage_hints_without_model_overrides = resolve_usage_hints(
-        &config, messages, /*omit_update_plan_instructions*/ false,
+        &config,
+        messages,
+        /*omit_update_plan_instructions*/ false,
+        ProviderCapabilities::default(),
     );
 
     for (hint, hint_without_model_overrides) in [
@@ -13262,6 +13282,7 @@ subagent_usage_hint_text = ""
         &config.multi_agent_v2,
         messages,
         /*omit_update_plan_instructions*/ false,
+        ProviderCapabilities::default(),
     );
     assert_eq!(
         (

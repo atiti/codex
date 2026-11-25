@@ -41,6 +41,7 @@ fn spawn_agent_tool_v2_requires_task_name() {
     assert!(description.contains(SPAWN_AGENT_INHERITED_MODEL_GUIDANCE));
     assert!(properties.contains_key("task_name"));
     assert!(properties.contains_key("message"));
+    assert!(!properties.contains_key("routing_prompt"));
     assert_eq!(
         properties
             .get("message")
@@ -48,6 +49,17 @@ fn spawn_agent_tool_v2_requires_task_name() {
         Some(true)
     );
     assert!(properties.contains_key("fork_turns"));
+    assert_eq!(
+        properties.keys().map(String::as_str).collect::<Vec<_>>(),
+        vec![
+            "agent_type",
+            "fork_turns",
+            "message",
+            "model",
+            "reasoning_effort",
+            "task_name",
+        ]
+    );
     assert!(!properties.contains_key("items"));
     assert!(!properties.contains_key("fork_context"));
     assert_eq!(
@@ -142,6 +154,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
 
     assert!(properties.contains_key("fork_context"));
     assert!(!properties.contains_key("fork_turns"));
+    assert!(!properties.contains_key("backend"));
     assert_eq!(
         properties.get("agent_type"),
         Some(&JsonSchema::string(Some(format!(
@@ -307,6 +320,7 @@ fn followup_task_tool_requires_message_and_has_no_output_schema() {
         .expect("followup_task should use object params");
     assert!(properties.contains_key("target"));
     assert!(properties.contains_key("message"));
+    assert!(!properties.contains_key("routing_prompt"));
     assert_eq!(
         properties
             .get("message")

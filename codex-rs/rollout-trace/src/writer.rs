@@ -34,6 +34,7 @@ use crate::bundle::TraceBundleManifest;
 use crate::model::AgentThreadId;
 use crate::payload::RawPayloadKind;
 use crate::payload::RawPayloadRef;
+use crate::quota::TraceQuota;
 use crate::raw_event::RAW_TRACE_EVENT_SCHEMA_VERSION;
 use crate::raw_event::RawTraceEvent;
 use crate::raw_event::RawTraceEventContext;
@@ -72,6 +73,7 @@ pub struct TraceWriter {
 
 /// Owns the bundle files until shutdown. Each body is flushed before its event is published.
 pub(crate) struct BundleWriter {
+    quota: Option<TraceQuota>,
     rollout_id: String,
     events: BufWriter<File>,
     shards: ShardWriter,
@@ -246,6 +248,17 @@ impl BundleWriter {
             .max_bytes
             .saturating_sub(event_reserve)
             .saturating_sub(self.metadata_bytes + reserve + if content { reserve } else { 0 });
+        // Charge a conservative compressed-frame bound while holding the same lock
+        // used by trace pruning. The reservation remains held until bytes are flushed.
+        let _reservation = self
+            .quota
+            .as_ref()
+            .map(|quota| {
+                quota.reserve(
+                    zstd::zstd_safe::compress_bound(retained + raw_payload_id.len() + 10) + 128,
+                )
+            })
+            .transpose()?;
         let shard =
             self.shards
                 .append_with_limit(kind, &raw_payload_id, &body[..retained], shard_limit)?;
@@ -289,6 +302,11 @@ impl BundleWriter {
             self.event_log_full = true;
             bail!("trace event log reached its byte limit");
         }
+        let _reservation = self
+            .quota
+            .as_ref()
+            .map(|quota| quota.reserve(bytes.len()))
+            .transpose()?;
         self.events.write_all(&bytes)?;
         self.metadata_bytes += bytes.len() as u64;
         self.events.flush()?;
@@ -345,7 +363,12 @@ impl TraceWriter {
         let started_at_unix_ms = unix_time_ms();
         let manifest =
             TraceBundleManifest::new(trace_id, rollout_id, root_thread_id, started_at_unix_ms);
+        let quota = TraceQuota::from_environment(bundle_dir);
         let manifest_bytes = serde_json::to_vec_pretty(&manifest)?;
+        let reservation = quota
+            .as_ref()
+            .map(|quota| quota.reserve(manifest_bytes.len()))
+            .transpose()?;
         let metadata_bytes = manifest_bytes.len() as u64;
         anyhow::ensure!(
             metadata_bytes <= limits.max_bytes,
@@ -358,8 +381,10 @@ impl TraceWriter {
         std::fs::write(&manifest_path, &manifest_bytes)
             .with_context(|| format!("write trace manifest {}", manifest_path.display()))?;
 
+        drop(reservation);
         let failure = Arc::new(OnceLock::new());
         let mut bundle = BundleWriter {
+            quota,
             rollout_id: manifest.rollout_id,
             events: BufWriter::new(event_log),
             shards: ShardWriter::new(payloads_dir),

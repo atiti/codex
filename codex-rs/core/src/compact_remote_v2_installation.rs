@@ -108,7 +108,7 @@ async fn build_and_install_compaction(
             .map_or(turn_context.model_info().slug.as_str(), |candidate| {
                 candidate.model_info.slug.as_str()
             }),
-        turn_context.provider.info().name.as_str(),
+        turn_context.model_provider().info().name.as_str(),
     );
     let defer_start = sess.defer_compaction_start(turn_context, compaction_metadata.phase());
     if needs_start && candidate.is_none() && !defer_start {
@@ -158,7 +158,7 @@ async fn build_and_install_compaction(
                         fallback_turn_context.sub_id.as_str(),
                         compaction_id.as_str(),
                         fallback_turn_context.model_info().slug.as_str(),
-                        fallback_turn_context.provider.info().name.as_str(),
+                        fallback_turn_context.model_provider().info().name.as_str(),
                     );
                 let fallback_result = run_remote_compact_v2_attempt(
                     &mut request,
@@ -269,6 +269,7 @@ async fn build_and_install_compaction(
             compaction_response_id: Some(compaction_response_id),
             compaction_model_hash: compaction_turn_context.model_info().comp_hash.clone(),
             reviewer_compaction_hash,
+            model_provider_id: compaction_turn_context.model_provider_id(),
         };
         if needs_start && defer_start {
             sess.emit_turn_item_started(turn_context, &compaction_item)
@@ -305,8 +306,7 @@ async fn build_and_install_compaction(
             replacement_history: &replacement_history,
         });
     }
-    sess.recompute_token_usage(&replacement_step_context.turn)
-        .await;
+    sess.recompute_token_usage(replacement_step_context).await;
     sess.emit_turn_item_completed(compaction_turn_context, compaction_item)
         .await;
     Ok(true)

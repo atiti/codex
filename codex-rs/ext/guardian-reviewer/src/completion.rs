@@ -142,6 +142,7 @@ pub fn complete_review(
                 GuardianReviewError::StaleAuthorization
                 | GuardianReviewError::InputBudgetExceeded
                 | GuardianReviewError::PromptBuild { .. }
+                | GuardianReviewError::ReviewerFallbackReady { .. }
                 | GuardianReviewError::Session { .. }
                 | GuardianReviewError::Parse { .. } => {
                     let message = match &error {
@@ -152,6 +153,22 @@ pub fn complete_review(
                         GuardianReviewError::PromptBuild { message }
                         | GuardianReviewError::Session { message, .. }
                         | GuardianReviewError::Parse { message } => message,
+                        GuardianReviewError::ReviewerFallbackReady {
+                            from_profile,
+                            to_profile,
+                        } => {
+                            return ReviewCompletion {
+                                decision: Some(ReviewDecision::denied(format!(
+                                    "Automatic approval review failed while switching reviewer subscriptions from {from_profile} to {to_profile}.\n{REVIEW_FAILURE_INSTRUCTIONS}"
+                                ))),
+                                event,
+                                warning: Some(format!(
+                                    "Automatic approval review failed while switching reviewer subscriptions from {from_profile} to {to_profile}."
+                                )),
+                                analytics,
+                                assessment_outcome: None,
+                            };
+                        }
                         GuardianReviewError::Timeout | GuardianReviewError::Cancelled => {
                             "guardian review failed"
                         }

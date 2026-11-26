@@ -5,7 +5,9 @@ use std::path::Path;
 use serde::Deserialize;
 use serde_json::Value;
 
-const MAX_BYTES: u64 = 2_000_000;
+const MAX_BINDING_BYTES: u64 = 2_000_000;
+// Canonical packets retain checkpoint history across all of their workers.
+const MAX_PACKET_BYTES: u64 = 8 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct Binding {
@@ -25,9 +27,9 @@ fn slug(value: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
-fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
+fn read_bounded(path: &Path, max_bytes: u64) -> Result<Vec<u8>, String> {
     let metadata = std::fs::symlink_metadata(path).map_err(|e| e.to_string())?;
-    if !metadata.is_file() || metadata.len() > MAX_BYTES {
+    if !metadata.is_file() || metadata.len() > max_bytes {
         return Err("worker completion data must be a bounded regular file".into());
     }
     #[cfg(unix)]
@@ -47,10 +49,10 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, String> {
         }
     }
     let mut bytes = Vec::new();
-    file.take(MAX_BYTES + 1)
+    file.take(max_bytes + 1)
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_BYTES {
+    if bytes.len() as u64 > max_bytes {
         return Err("worker completion data too large".into());
     }
     Ok(bytes)
@@ -100,8 +102,8 @@ fn validate_with_requirement(
             return Err("worker goal binding must be owner-private".into());
         }
     }
-    let binding: Binding =
-        serde_json::from_slice(&read_bounded(&path)?).map_err(|e| e.to_string())?;
+    let binding: Binding = serde_json::from_slice(&read_bounded(&path, MAX_BINDING_BYTES)?)
+        .map_err(|e| e.to_string())?;
     if binding.version != 1
         || binding.thread_id != thread
         || !slug(&binding.namespace)
@@ -127,7 +129,8 @@ fn validate_with_requirement(
         .join("tasks/packets")
         .join(&binding.namespace)
         .join(format!("{}.json", binding.packet));
-    let data: Value = serde_json::from_slice(&read_bounded(&packet)?).map_err(|e| e.to_string())?;
+    let data: Value = serde_json::from_slice(&read_bounded(&packet, MAX_PACKET_BYTES)?)
+        .map_err(|e| e.to_string())?;
     if data["schema_version"] != 1
         || data["namespace"] != binding.namespace
         || data["id"] != binding.packet
@@ -248,7 +251,7 @@ pub(crate) fn prepare_goal(
     let source = home
         .join("worker-goal-attempts")
         .join(format!("{attempt}.json"));
-    let raw = read_bounded(&source)?;
+    let raw = read_bounded(&source, MAX_BINDING_BYTES)?;
     let mut binding: Value = serde_json::from_slice(&raw).map_err(|e| e.to_string())?;
     if binding["version"] != 1 || binding["attempt"] != attempt {
         return Err("worker attempt mismatch".into());
@@ -267,8 +270,8 @@ pub(crate) fn prepare_goal(
         .join("tasks/packets")
         .join(namespace)
         .join(format!("{packet_id}.json"));
-    let packet: Value =
-        serde_json::from_slice(&read_bounded(&packet_path)?).map_err(|e| e.to_string())?;
+    let packet: Value = serde_json::from_slice(&read_bounded(&packet_path, MAX_PACKET_BYTES)?)
+        .map_err(|e| e.to_string())?;
     if packet["schema_version"] != 1
         || packet["namespace"] != namespace
         || packet["id"] != packet_id
@@ -312,8 +315,8 @@ pub(crate) fn prepare_goal(
     }
     let target = directory.join(format!("{thread}.json"));
     if target.exists() {
-        let previous: Value =
-            serde_json::from_slice(&read_bounded(&target)?).map_err(|e| e.to_string())?;
+        let previous: Value = serde_json::from_slice(&read_bounded(&target, MAX_BINDING_BYTES)?)
+            .map_err(|e| e.to_string())?;
         for key in [
             "version",
             "thread_id",

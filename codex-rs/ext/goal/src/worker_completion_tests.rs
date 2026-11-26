@@ -2,6 +2,18 @@ use super::*;
 use serde_json::json;
 use tempfile::tempdir;
 
+fn large_history() -> Vec<Value> {
+    (0..8_000)
+        .map(|revision| {
+            json!({
+                "type": "checkpoint", "item": "another-worker", "session": "another-owner",
+                "item_revision": revision, "request_digest": "a".repeat(64),
+                "summary": "Verified source observation with a stable receipt. ".repeat(3),
+            })
+        })
+        .collect()
+}
+
 #[test]
 fn bound_worker_cannot_complete_until_packet_has_all_evidence() {
     let root = tempdir().unwrap();
@@ -28,6 +40,10 @@ fn bound_worker_cannot_complete_until_packet_has_all_evidence() {
     }
     let path = packets.join("sample.json");
     let mut packet = json!({"schema_version":1,"namespace":"private","id":"sample","history":[{"type":"complete","item":"worker","session":"owner","item_revision":2}],"items":[{"id":"worker","revision":2,"status":"active","assignment":{"session":"owner"},"next_step":{"state":"active"},"outcome_wait":null,"criteria":[{"evidence":[]}],"operations":{},"gates":{},"repositories":[{"path":"repo","initial_status":"clean","commit":"c","pr":"p","merge":"m","checks":"passed","clean":true,"evidence":["receipt"]}]}]});
+    packet["history"]
+        .as_array_mut()
+        .unwrap()
+        .extend(large_history());
     std::fs::write(&path, packet.to_string()).unwrap();
     assert!(validate(&home, &workspace, "thread", true).is_err());
     packet["items"][0]["status"] = json!("done");
@@ -50,14 +66,27 @@ fn bound_worker_cannot_complete_until_packet_has_all_evidence() {
     assert!(validate(&home, &workspace, "thread", true).is_err());
     packet["items"][0]["operations"] = json!({"action":{"state":"verified"}});
     std::fs::write(&path, packet.to_string()).unwrap();
-    assert!(validate(&home, &workspace, "thread", true).is_ok());
+    assert_eq!(validate(&home, &workspace, "thread", true), Ok(()));
     // A later completion belongs to a different owner; old evidence must not transfer.
     packet["history"]
         .as_array_mut()
         .unwrap()
         .push(json!({"type":"complete","item":"worker","session":"other"}));
     std::fs::write(&path, packet.to_string()).unwrap();
-    assert!(validate(&home, &workspace, "thread", true).is_err());
+    assert_eq!(
+        validate(&home, &workspace, "thread", true),
+        Err("worker packet completion owner does not match binding".into()),
+    );
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(MAX_PACKET_BYTES + 1)
+        .unwrap();
+    assert_eq!(
+        validate(&home, &workspace, "thread", true),
+        Err("worker completion data must be a bounded regular file".into()),
+    );
 }
 
 #[test]
@@ -91,9 +120,15 @@ fn claimed_worker_assignment_creates_exact_bound_goal() {
     }
     let path = packets.join("sample.json");
     let mut packet = json!({"schema_version":1,"namespace":"private","id":"sample","items":[{"id":"worker","status":"active","assignment":{"session":"owner"},"objective":"Build the feature","criteria":[{"text":"Verified acceptance"}]}]});
-    std::fs::write(&path, packet.to_string()).unwrap();
+    packet["history"] = json!(large_history());
+    let bytes = packet.to_string();
+    assert!(bytes.len() as u64 > MAX_BINDING_BYTES);
+    std::fs::write(&path, bytes).unwrap();
     let goal = prepare_goal(&home, &workspace, "thread", attempt).unwrap();
-    assert!(goal.contains("Build the feature") && goal.contains("Verified acceptance"));
+    assert_eq!(
+        goal,
+        "Complete work packet private/sample/worker: Build the feature. Acceptance: Verified acceptance. Complete only after canonical criteria, gates and effects are verified; stop and ask on genuine blockers.",
+    );
     assert!(home.join("worker-goal-bindings/thread.json").exists());
     packet["items"][0]["assignment"]["session"] = json!("other");
     std::fs::write(&path, packet.to_string()).unwrap();
@@ -110,4 +145,24 @@ fn claimed_worker_assignment_creates_exact_bound_goal() {
     }
     assert!(prepare_goal(&home, &workspace, "thread", "dcba-5678").is_ok());
     assert!(prepare_goal(&home, &workspace, "wrong-thread", "dcba-5678").is_err());
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(resumed)
+        .unwrap()
+        .set_len(MAX_BINDING_BYTES + 1)
+        .unwrap();
+    assert_eq!(
+        prepare_goal(&home, &workspace, "thread", "dcba-5678"),
+        Err("worker completion data must be a bounded regular file".into()),
+    );
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_len(MAX_PACKET_BYTES + 1)
+        .unwrap();
+    assert_eq!(
+        prepare_goal(&home, &workspace, "thread", attempt),
+        Err("worker completion data must be a bounded regular file".into()),
+    );
 }
